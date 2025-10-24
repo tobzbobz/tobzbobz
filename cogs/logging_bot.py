@@ -512,7 +512,7 @@ class LoggingCog(commands.Cog):
         )
 
         # List roles (excluding @everyone)
-        roles = [role.mention for role in member.roles if role.name != "@everyone"]
+        roles = [f"{role.name} ({role.id})" for role in member.roles if role.name != "@everyone"]
         if roles:
             embed.add_field(
                 name="Roles",
@@ -581,14 +581,14 @@ class LoggingCog(commands.Cog):
                 if added_roles:
                     embed.add_field(
                         name="✅ Roles Added",
-                        value=", ".join([role.mention for role in added_roles]),
+                        value=", ".join([f"{role.name} ({role.id})" for role in added_roles]),
                         inline=False
                     )
 
                 if removed_roles:
                     embed.add_field(
                         name="Roles Removed <:Denied:1426930694633816248>",
-                        value=", ".join([role.mention for role in removed_roles]),
+                        value=", ".join([f"{role.name} ({role.id})" for role in removed_roles]),
                         inline=False
                     )
 
