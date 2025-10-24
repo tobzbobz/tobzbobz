@@ -1,0 +1,46 @@
+{
+    "20": {
+        "discord_user_id": 888626905262215189,
+        "discord_username": "RFF-1 | FR | hhettryr655555",
+        "roblox_user_id": "1461069667",
+        "roblox_username": "hhettryr655555",
+        "fenz_prefix": "RFF",
+        "hhstj_prefix": "FR",
+        "approved_at": 1761190420,
+        "approved_by_id": 888626905262215189,
+        "approved_by_name": "RFF-1 | FR | hhettryr655555",
+        "callsign_history": [
+            {
+                "callsign": "1",
+                "fenz_prefix": "RFF",
+                "hhstj_prefix": "FR",
+                "approved_at": 1761190274,
+                "approved_by_id": 888626905262215189,
+                "approved_by_name": "RFF-2 | FR | hhettryr655555",
+                "replaced_at": 1761190420
+            }
+        ]
+    },
+    "74": {
+        "discord_user_id": 678475709257089057,
+        "discord_username": "NOM-OSC1 | RFF-20 | 123eye_sonme",
+        "roblox_user_id": "559284406",
+        "roblox_username": "123eye_sonme",
+        "fenz_prefix": "QFF",
+        "hhstj_prefix": "CCP",
+        "approved_at": 1761210121,
+        "approved_by_id": 1292053130556604481,
+        "approved_by_name": "DNC | WOM-MKE30 | stn95boi",
+        "callsign_history": [
+            {
+                "callsign": "43",
+                "fenz_prefix": "QFF",
+                "hhstj_prefix": "CCP",
+                "approved_at": 1761187480,
+                "approved_by_id": 678475709257089057,
+                "approved_by_name": "NOM-OSC1 | RFF-20 | 123eye_sonme",
+                "replaced_at": 1761210121
+            }
+        ]
+    }
+}

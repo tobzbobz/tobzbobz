@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# Environment Variables (CRITICAL - NEVER COMMIT THIS!)
+.env
+*.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+discord.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Bot-specific
+*.db
+*.sqlite
+*.sqlite3
+
+# But DO include your JSON database
+!callsign_approvals.json
