@@ -7,6 +7,8 @@ import os
 import json
 import traceback
 import sys
+from aiohttp import web
+import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -40,6 +42,23 @@ DEVELOPMENT_MODE = True   # Set to True for 🟠 Development status
 
 # Aggressive command sync - Set to True to clear all commands before syncing (useful for updates)
 AGGRESSIVE_SYNC = False  # Set to True when adding/removing commands, then back to False
+
+
+async def health_check(request):
+    """Health check endpoint"""
+    return web.Response(text="Bot is alive!")
+
+
+async def start_web_server():
+    """Start web server for health checks"""
+    app = web.Application()
+    app.router.add_get('/', health_check)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', 8080)
+    await site.start()
+    print('🌐 Health server started on port 8080')
 
 
 class Client(commands.Bot):
@@ -147,6 +166,8 @@ class Client(commands.Bot):
         # Build guild-specific command mapping
         guild_commands = {}  # {guild_id: [list of cog names]}
 
+        asyncio.create_task(start_web_server())
+
         for guild_id, cog_list in GUILD_COGS.items():
             if cog_list:  # Skip empty lists or None
                 # Filter out None values from cog list
@@ -227,6 +248,7 @@ class Client(commands.Bot):
         except Exception as e:
             print(f'❌ Error syncing commands: {e}')
             traceback.print_exc()
+
 
     async def update_status_channel(self, status: str):
         """Update the status channel name with error handling"""
