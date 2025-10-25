@@ -140,7 +140,7 @@ class VoteButton(discord.ui.View):
                 guild_config = get_guild_config(interaction.guild.id)
                 watch_role_id = guild_config.get('watch_role_id')
 
-                await interaction.response.edit_message(content=f'||<@&{watch_role_id}> <@{interaction.user.mention}> <@&1309021002675654700> <@&1365536209681514636>||' if watch_role_id else '',
+                await interaction.response.edit_message(content=f'-# ||<@&{watch_role_id}> {interaction.user.mention} <@&1309021002675654700> <@&1365536209681514636>||' if watch_role_id else '',
                                                         embeds=[start_embed, voters_embed], view=watch_view)
 
                 # Store watch data
@@ -366,7 +366,7 @@ class MissedVoteConfirmationView(discord.ui.View):
 
             # Update the message
             embed = interaction.message.embeds[0]
-            embed.colour = discord.Colour.green()
+            embed.colour = discord.Colour(0x2ecc71)
             embed.title = '✅ Missed Vote - SENT'
 
             # Disable buttons
@@ -398,7 +398,7 @@ class MissedVoteConfirmationView(discord.ui.View):
 
             # Update the message
             embed = interaction.message.embeds[0]
-            embed.colour = discord.Colour.red()
+            embed.colour = discord.Colour(0xf24d4d)
             embed.title = '❌ Missed Vote - CANCELLED'
 
             # Disable buttons
@@ -532,7 +532,7 @@ class WatchCog(commands.Cog):
 
             # Create button view
             view = WatchRoleButton(0)
-            msg = await watch_channel.send(content=f'||<@&{watch_role_id}> <@{interaction.user.mention}> <@&1309021002675654700> <@&1365536209681514636>||' if watch_role_id else '', embed=embed, view=view)
+            msg = await watch_channel.send(content=f'-# ||<@&{watch_role_id}> {interaction.user.mention} <@&1309021002675654700> <@&1365536209681514636>||' if watch_role_id else '', embed=embed, view=view)
 
             # Update view with actual message ID
             view.message_id = msg.id
@@ -1108,7 +1108,31 @@ class WatchCog(commands.Cog):
             # Get watch data
             watch_data = active_watches[watch]
             channel = interaction.guild.get_channel(watch_data['channel_id'])
-            message = await channel.fetch_message(int(watch))
+
+            if channel is None:
+                error_embed = discord.Embed(
+                    description='❌ Watch channel not found! The channel may have been deleted.',
+                    colour=discord.Colour(0xf24d4d)
+                )
+                await interaction.followup.send(embed=error_embed, ephemeral=True)
+
+                # Clean up the orphaned watch data
+                del active_watches[watch]
+                save_watches(active_watches)
+                return
+
+            try:
+                message = await channel.fetch_message(int(watch))
+            except discord.NotFound:
+                error_embed = discord.Embed(
+                    description='❌ Watch message not found! It may have been deleted.',
+                    colour=discord.Colour(0xf24d4d)
+                )
+
+                await interaction.followup.send(embed=error_embed, ephemeral=True)
+                del active_watches[watch]
+                save_watches(active_watches)
+                return
 
             # Get the original embed
             if not message.embeds:
@@ -1155,7 +1179,7 @@ class WatchCog(commands.Cog):
             guild_config = get_guild_config(interaction.guild.id)
             watch_role_id = guild_config.get('watch_role_id')
 
-            await message.edit(content=f'||<@&{watch_role_id}> <@{interaction.user.mention}> <@&1309021002675654700> <@&1365536209681514636>||' if watch_role_id else '', embed=embed,
+            await message.edit(content=f'-# ||<@&{watch_role_id}> {interaction.user.mention} <@&1309021002675654700> <@&1365536209681514636>||' if watch_role_id else '', embed=embed,
                                view=WatchRoleButton(int(watch)))
 
             # Store attendee data before removing from active watches
@@ -1594,7 +1618,7 @@ class WatchCog(commands.Cog):
             failed_embed = discord.Embed(
                 title=f"❌ {vote_data['colour']} Watch Vote - TERMINATED ❌",
                 description="Insufficient votes received. Watch has been cancelled.",
-                colour=discord.Colour.red()
+                colour=discord.Colour(0xf24d4d)
             )
             failed_embed.add_field(name='Station', value=f"`{vote_data['station']}`", inline=True)
             failed_embed.add_field(name='Votes Received', value=f"`{view.vote_count}/{view.required_votes}`",

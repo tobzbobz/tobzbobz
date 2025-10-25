@@ -1,0 +1,63 @@
+SETUP
+
+Directory
+cd c:\Users\Owner\PycharmProjects\DiscordBot
+
+1. Check if git is already initialized
+git status
+
+2. If you see "fatal: not a git repository", initialize it:
+git init
+
+
+LINKS
+
+- Uptime Robot
+https://dashboard.uptimerobot.com/monitors
+
+- Render
+https://dashboard.render.com/web/srv-d3tee10dl3ps73eburqg/deploys/dep-d3tee20dl3ps73ebush0
+
+
+
+PUSH
+
+1. Check what changed
+git status
+
+2. Add changes
+git add .
+
+3. Commit with a message
+git commit -m "[message]"
+
+4. Push to GitHub
+git push
+
+
+
+QUICK REFERENCE COMMANDS
+
+- Check status
+git status
+
+- Add all changes
+git add .
+
+- Commit with message
+git commit -m "Your message here"
+
+- Push to GitHub
+git push
+
+- View commit history
+git log --oneline
+
+- Undo last commit (keep changes)
+git reset --soft HEAD~1
+
+- Discard local changes
+git checkout -- filename.py
+
+- Pull latest from GitHub
+git pull

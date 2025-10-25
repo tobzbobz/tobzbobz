@@ -44,7 +44,7 @@ class NumberInputModal(discord.ui.Modal):
                 embed = discord.Embed(
                     title="Invalid Number <:Denied:1426930694633816248>",
                     description="Please enter a number greater than 0.",
-                    color=discord.Color.red()
+                    color=discord.Colour(0xf24d4d)
                 )
                 await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
@@ -53,7 +53,7 @@ class NumberInputModal(discord.ui.Modal):
                 embed = discord.Embed(
                     title="Number Too Large <:Denied:1426930694633816248>",
                     description="Please enter a number between 1 and 50.",
-                    color=discord.Color.red()
+                    color=discord.Colour(0xf24d4d)
                 )
                 await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
@@ -62,7 +62,7 @@ class NumberInputModal(discord.ui.Modal):
             embed = discord.Embed(
                 title="✅ Processing...",
                 description=f"Sending {number} ghost ping(s)...",
-                color=discord.Color.green()
+                color=discord.Color(0x2ecc71)
             )
 
             await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -85,7 +85,7 @@ class NumberInputModal(discord.ui.Modal):
             completion_embed = discord.Embed(
                 title="✅ Complete",
                 description=f"Successfully sent {number} ghost ping(s) with {self.emoji}!",
-                color=discord.Color.green()
+                color=discord.Color(0x2ecc71)
             )
 
             # Try to edit the original response
@@ -99,7 +99,7 @@ class NumberInputModal(discord.ui.Modal):
             embed = discord.Embed(
                 title="Invalid Input <:Denied:1426930694633816248>",
                 description="Please enter a valid number.",
-                color=discord.Color.red()
+                color=discord.Colour(0xf24d4d)
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
         except Exception as e:
@@ -107,7 +107,7 @@ class NumberInputModal(discord.ui.Modal):
             error_embed = discord.Embed(
                 title="Error <:Denied:1426930694633816248>",
                 description=f"An error occurred: {str(e)}",
-                color=discord.Color.red()
+                color=discord.Colour(0xf24d4d)
             )
             try:
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
