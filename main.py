@@ -38,7 +38,7 @@ STATUS_CHANNEL_ID = 1429492069289693184  # Replace with your channel ID to enabl
 # Enable before server use. Channel ID: 1429492069289693184
 
 # Development mode - Set to True to use development status instead of online
-DEVELOPMENT_MODE = True   # Set to True for 🟠 Development status
+DEVELOPMENT_MODE = False   # Set to True for 🟠 Development status
 
 # Aggressive command sync - Set to True to clear all commands before syncing (useful for updates)
 AGGRESSIVE_SYNC = False  # Set to True when adding/removing commands, then back to False
