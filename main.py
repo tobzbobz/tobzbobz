@@ -22,7 +22,7 @@ GUILD_IDS = [1282916959062851634, 1425867713183744023, 1430002479239532747, 1420
 # Guild-specific cog configuration
 # Format: {guild_id: [list of cog names to load]}
 GUILD_COGS = {
-    1282916959062851634: ['!mod', 'disclaimer', 'ghost', 'inactive_ticket', 'react', 'say', 'status', 'watches', 'wentwrong', 'role','ping', 'callsign', 'database'],  # Server 1 gets these cogs
+    1282916959062851634: ['!mod', 'disclaimer', 'ghost', 'inactive_ticket', 'react', 'say', 'status', 'watches', 'wentwrong', 'role','ping', 'callsign'],  # Server 1 gets these cogs
     1425867713183744023: ['!mod', 'disclaimer', 'ghost', 'inactive_ticket', 'react', 'say', 'status', 'watches', 'wentwrong', 'role','ping', 'callsign'],  # Server 2 gets these cogs
     1430002479239532747: ['autorole', 'other'], # Server 3 gets all
     1420770769562243083: []
