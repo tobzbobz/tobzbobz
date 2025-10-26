@@ -11,6 +11,7 @@ from aiohttp import web
 import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from database import ensure_json_files
 
 load_dotenv()
 token = os.getenv('DISCORD_TOKEN')
@@ -42,7 +43,6 @@ DEVELOPMENT_MODE = False   # Set to True for 🟠 Development status
 
 # Aggressive command sync - Set to True to clear all commands before syncing (useful for updates)
 AGGRESSIVE_SYNC = False  # Set to True when adding/removing commands, then back to False
-
 
 async def health_check(request):
     """Health check endpoint"""

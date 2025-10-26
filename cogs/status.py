@@ -7,6 +7,7 @@ import json
 from datetime import datetime, time, timedelta
 import pytz
 from pathlib import Path
+from database import load_status_submissions, save_status_submissions
 
 # Your Discord User ID for approval permissions
 OWNER_ID = 678475709257089057
@@ -53,29 +54,20 @@ class StatusCog(commands.Cog):
 
     def load_submissions(self):
         """Load pending submissions from file"""
-        if self.submissions_file.exists():
-            try:
-                with open(self.submissions_file, 'r') as f:
-                    data = json.load(f)
-                    self.pending_statuses = data.get('pending', [])
-                    # Load approved statuses if they exist
-                    approved = data.get('approved', [])
-                    for status in approved:
-                        if status not in self.status_list:
-                            self.status_list.append(status)
-            except Exception as e:
-                print(f'Error loading submissions: {e}')
+        data = load_status_submissions()
+        self.pending_statuses = data.get('pending', [])
+        # Load approved statuses if they exist
+        approved = data.get('approved', [])
+        for status in approved:
+            if status not in self.status_list:
+                self.status_list.append(status)
 
     def save_submissions(self):
         """Save pending submissions to file"""
-        try:
-            with open(self.submissions_file, 'w') as f:
-                json.dump({
-                    'pending': self.pending_statuses,
-                    'approved': [s for s in self.status_list if s not in self.__class__(self.bot).status_list]
-                }, f, indent=4)
-        except Exception as e:
-            print(f'Error saving submissions: {e}')
+        save_status_submissions({
+            'pending': self.pending_statuses,
+            'approved': [s for s in self.status_list if s not in self.__class__(self.bot).status_list]
+        })
 
     def is_duplicate_status(self, status_text: str) -> bool:
         """Check if a status is a duplicate (case-insensitive and ignoring extra spaces)"""

@@ -1,0 +1,74 @@
+# Automated backup script for Discord bot data (Windows)
+# Run this daily via Task Scheduler
+
+# Configuration
+$APP_NAME = "FENZ & HHStJ Utilities"  # CHANGE THIS
+$BACKUP_DIR = ".\backups"
+$DATE = Get-Date -Format "yyyyMMdd_HHmmss"
+$BACKUP_FILE = "backup_$DATE.tar.gz"
+$RETENTION_DAYS = 30  # Keep backups for 30 days
+
+# Colors for output
+function Write-ColorOutput($ForegroundColor) {
+    $fc = $host.UI.RawUI.ForegroundColor
+    $host.UI.RawUI.ForegroundColor = $ForegroundColor
+    if ($args) {
+        Write-Output $args
+    }
+    $host.UI.RawUI.ForegroundColor = $fc
+}
+
+Write-ColorOutput Green "Starting backup for $APP_NAME..."
+
+# Create backup directory if it doesn't exist
+if (-not (Test-Path -Path $BACKUP_DIR)) {
+    New-Item -ItemType Directory -Path $BACKUP_DIR | Out-Null
+}
+
+# Step 1: Create tarball on the remote machine
+Write-ColorOutput Yellow "Creating tarball on Fly.io machine..."
+fly ssh console -a $APP_NAME -C "tar -czf /tmp/$BACKUP_FILE -C /data ."
+
+if ($LASTEXITCODE -ne 0) {
+    Write-ColorOutput Red "Failed to create tarball on remote machine"
+    exit 1
+}
+
+# Step 2: Download the backup
+Write-ColorOutput Yellow "Downloading backup..."
+fly ssh sftp get -a $APP_NAME "/tmp/$BACKUP_FILE" "$BACKUP_DIR\$BACKUP_FILE"
+
+if ($LASTEXITCODE -ne 0) {
+    Write-ColorOutput Red "Failed to download backup"
+    exit 1
+}
+
+# Step 3: Clean up remote tarball
+Write-ColorOutput Yellow "Cleaning up remote files..."
+fly ssh console -a $APP_NAME -C "rm /tmp/$BACKUP_FILE"
+
+# Step 4: Verify backup
+if (Test-Path "$BACKUP_DIR\$BACKUP_FILE") {
+    $size = (Get-Item "$BACKUP_DIR\$BACKUP_FILE").Length / 1MB
+    $sizeFormatted = [math]::Round($size, 2)
+    Write-ColorOutput Green "✅ Backup completed: $BACKUP_FILE ($sizeFormatted MB)"
+} else {
+    Write-ColorOutput Red "❌ Backup failed!"
+    exit 1
+}
+
+# Step 5: Delete old backups (optional)
+Write-ColorOutput Yellow "Cleaning up old backups (older than $RETENTION_DAYS days)..."
+$cutoffDate = (Get-Date).AddDays(-$RETENTION_DAYS)
+Get-ChildItem -Path $BACKUP_DIR -Filter "backup_*.tar.gz" | 
+    Where-Object { $_.LastWriteTime -lt $cutoffDate } | 
+    Remove-Item -Force
+
+# Step 6: List recent backups
+Write-ColorOutput Green "Recent backups:"
+Get-ChildItem -Path $BACKUP_DIR -Filter "backup_*.tar.gz" | 
+    Sort-Object LastWriteTime -Descending | 
+    Select-Object -First 5 | 
+    Format-Table Name, @{Label="Size(MB)"; Expression={[math]::Round($_.Length / 1MB, 2)}}, LastWriteTime
+
+Write-ColorOutput Green "✅ Backup process complete!"

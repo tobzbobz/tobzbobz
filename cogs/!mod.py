@@ -10,28 +10,28 @@ LOGS_FILE = "mod_logs.json"
 # In-memory storage for moderation actions
 mod_logs = []
 
+# REPLACE THIS SECTION:
+# def load_logs():
+#     """Load moderation logs from JSON file"""
+#     global mod_logs
+#     if os.path.exists(LOGS_FILE):
+# ... etc
+
+# WITH THIS:
+from database import load_mod_logs, save_mod_logs, ensure_json_files, get_file_path
+
+# Update the global mod_logs initialization
+mod_logs = []
+
 def load_logs():
     """Load moderation logs from JSON file"""
     global mod_logs
-    if os.path.exists(LOGS_FILE):
-        try:
-            with open(LOGS_FILE, 'r', encoding='utf-8') as f:
-                mod_logs = json.load(f)
-            print(f"Loaded {len(mod_logs)} moderation logs from {LOGS_FILE}")
-        except Exception as e:
-            print(f"Error loading logs: {e}")
-            mod_logs = []
-    else:
-        mod_logs = []
-        print("No existing log file found, starting fresh")
+    mod_logs = load_mod_logs()
+    print(f"Loaded {len(mod_logs)} moderation logs")
 
 def save_logs():
     """Save moderation logs to JSON file"""
-    try:
-        with open(LOGS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(mod_logs, f, indent=2, ensure_ascii=False)
-    except Exception as e:
-        print(f"Error saving logs: {e}")
+    save_mod_logs(mod_logs)
 
 MODERATOR_ROLES = {
     1282916959062851634: 1389550689113473024,  # guild_id: role_id (replace with actual IDs)

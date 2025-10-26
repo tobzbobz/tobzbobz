@@ -1,9 +1,10 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-from datetime import datetime
 from collections import deque
 import json
+from database import load_ping_history as load_ping_history_db, save_ping_history as save_ping_history_db
+from datetime import datetime
 import os
 
 # Your Discord User ID
@@ -15,25 +16,17 @@ PING_LOG_FILE = "ping_history.json"
 
 def load_ping_history():
     """Load ping history from JSON file"""
-    try:
-        with open(PING_LOG_FILE, 'r') as f:
-            data = json.load(f)
-            # Convert timestamp strings back to datetime objects
-            for ping in data:
-                ping['timestamp'] = datetime.fromisoformat(ping['timestamp'])
-                if ping.get('deleted_at'):
-                    ping['deleted_at'] = datetime.fromisoformat(ping['deleted_at'])
-            return deque(data, maxlen=100)
-    except FileNotFoundError:
-        return deque(maxlen=100)
-    except json.JSONDecodeError:
-        print(f"Warning: {PING_LOG_FILE} is corrupted. Starting fresh.")
-        return deque(maxlen=100)
-
+    data = load_ping_history_db()
+    # Convert timestamp strings back to datetime objects
+    for ping in data:
+        ping['timestamp'] = datetime.fromisoformat(ping['timestamp'])
+        if ping.get('deleted_at'):
+            ping['deleted_at'] = datetime.fromisoformat(ping['deleted_at'])
+    from collections import deque
+    return deque(data, maxlen=100)
 
 def save_ping_history(ping_history):
     """Save ping history to JSON file"""
-    # Convert deque to list and datetime objects to ISO format strings
     data = []
     for ping in ping_history:
         ping_copy = ping.copy()
@@ -41,10 +34,7 @@ def save_ping_history(ping_history):
         if ping_copy.get('deleted_at'):
             ping_copy['deleted_at'] = ping_copy['deleted_at'].isoformat()
         data.append(ping_copy)
-
-    with open(PING_LOG_FILE, 'w') as f:
-        json.dump(data, f, indent=4)
-
+    save_ping_history_db(data)
 
 class PingLoggerCog(commands.Cog):
     def __init__(self, bot):

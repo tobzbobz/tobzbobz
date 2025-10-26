@@ -26,30 +26,13 @@ def get_guild_config(guild_id: int):
     return GUILD_CONFIGS.get(guild_id, {})
 
 # Load/save watch data
-def load_watches():
-    try:
-        with open('watch_data.json', 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {}
-
-
-def save_watches(data):
-    with open('watch_data.json', 'w') as f:
-        json.dump(data, f, indent=4)
-
-def load_scheduled_votes():
-    try:
-        with open('scheduled_votes.json', 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {}
-
-def save_scheduled_votes(data):
-    with open('scheduled_votes.json', 'w') as f:
-        json.dump(data, f, indent=4)
-
-
+from database import (
+    load_watches,
+    save_watches,
+    load_scheduled_votes,
+    save_scheduled_votes,
+    ensure_json_files
+)
 active_watches = load_watches()
 
 
@@ -755,8 +738,8 @@ class WatchCog(commands.Cog):
 
             # Load completed watches
             try:
-                with open('completed_watches.json', 'r') as f:
-                    completed_watches = json.load(f)
+                from database import load_completed_watches, save_completed_watches
+                completed_watches = load_completed_watches()
             except FileNotFoundError:
                 no_logs_embed = discord.Embed(
                     description='❌ No watch logs found!',
@@ -941,8 +924,7 @@ class WatchCog(commands.Cog):
             del completed_watches[log]
 
             # Save updated logs
-            with open('completed_watches.json', 'w') as f:
-                json.dump(completed_watches, f, indent=4)
+            save_completed_watches(completed_watches)
 
             success_embed = discord.Embed(
                 description=f'✅ Deleted watch log:\n**{colour} Watch at {station}**\nEnded: {formatted_time}',
