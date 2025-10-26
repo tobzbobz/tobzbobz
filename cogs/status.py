@@ -1,11 +1,8 @@
 import discord
-import asyncio
 from discord.ext import commands, tasks
 from discord import app_commands
 import random
-import json
-from datetime import datetime, time, timedelta
-import pytz
+from datetime import timedelta
 from pathlib import Path
 from database import load_status_submissions, save_status_submissions
 

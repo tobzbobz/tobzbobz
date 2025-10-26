@@ -1,11 +1,7 @@
 import discord
 from discord.ext import commands
-from discord import app_commands
-from collections import deque
-import json
 from database import load_ping_history as load_ping_history_db, save_ping_history as save_ping_history_db
 from datetime import datetime
-import os
 
 # Your Discord User ID
 YOUR_USER_ID = 678475709257089057

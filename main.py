@@ -22,7 +22,7 @@ GUILD_IDS = [1282916959062851634, 1425867713183744023, 1430002479239532747, 1420
 # Guild-specific cog configuration
 # Format: {guild_id: [list of cog names to load]}
 GUILD_COGS = {
-    1282916959062851634: ['!mod', 'disclaimer', 'ghost', 'inactive_ticket', 'react', 'say', 'status', 'watches', 'wentwrong', 'role','ping', 'callsign'],  # Server 1 gets these cogs
+    1282916959062851634: ['!mod', 'disclaimer', 'ghost', 'inactive_ticket', 'react', 'say', 'status', 'watches', 'wentwrong', 'role','ping', 'callsign', 'database'],  # Server 1 gets these cogs
     1425867713183744023: ['!mod', 'disclaimer', 'ghost', 'inactive_ticket', 'react', 'say', 'status', 'watches', 'wentwrong', 'role','ping', 'callsign'],  # Server 2 gets these cogs
     1430002479239532747: ['autorole', 'other'], # Server 3 gets all
     1420770769562243083: []
@@ -46,7 +46,9 @@ AGGRESSIVE_SYNC = False  # Set to True when adding/removing commands, then back 
 
 async def health_check(request):
     """Health check endpoint"""
-    return web.Response(text="Bot is alive!")
+    # Check database connection
+    db_status = "connected" if db.pool else "disconnected"
+    return web.Response(text=f"Bot is alive! Database: {db_status}")
 
 
 async def start_web_server():
