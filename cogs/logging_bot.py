@@ -199,7 +199,7 @@ class LoggingCog(commands.Cog):
             channel_id = NETWORK_ERROR_CHANNEL_ID
             error_category = "Network/API Error"
 
-        elif isinstance(error, (app_commands.CommandNotFound, app_commands.MissingRequiredArgument,
+        elif isinstance(error, (app_commands.CommandNotFound,
                                 app_commands.BadArgument, app_commands.CommandOnCooldown)):
             channel_id = COMMAND_ERROR_CHANNEL_ID
             error_category = "Command Input Error"

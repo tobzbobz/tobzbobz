@@ -1712,7 +1712,6 @@ class CallsignCog(commands.Cog):
             return
 
         roblox_user_id = bloxlink_data['id']
-        roblox_username = roblox_data['username']
         roblox_data = await self.get_roblox_user_from_id(roblox_user_id)
 
         if not roblox_data:
@@ -1723,6 +1722,8 @@ class CallsignCog(commands.Cog):
             )
             await interaction.followup.send(embed=error_embed, ephemeral=True)
             return
+
+        roblox_username = roblox_data['username']
 
         # Validate callsign is numeric
         if not callsign.isdigit():
