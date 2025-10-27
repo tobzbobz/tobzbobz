@@ -187,7 +187,8 @@ class Database:
                     '''INSERT INTO active_watches
                        (message_id, guild_id, channel_id, user_id, user_name, colour, station, started_at,
                         has_voters_embed)
-                       VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8), $9) ON CONFLICT (message_id) DOUPDATE SET
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8), $9)
+                       ON CONFLICT (message_id) DO UPDATE SET
                        guild_id = $2, channel_id = $3, user_id = $4, user_name = $5,
                        colour = $6, station = $7, started_at = to_timestamp($8), has_voters_embed = $9''',
                     message_id, guild_id, channel_id, user_id, user_name, colour, station, started_at, has_voters_embed
