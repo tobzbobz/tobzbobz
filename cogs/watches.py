@@ -521,17 +521,19 @@ class WatchCog(commands.Cog):
             view.message_id = msg.id
 
             # Store watch data by message ID (allows multiple simultaneous watches)
-            active_watches[str(msg.id)] = {
-                'user_id': interaction.user.id,
-                'user_name': interaction.user.display_name,
-                'channel_id': watch_channel.id,
-                'colour': colour,
-                'station': station,
-                'started_at': int(interaction.created_at.timestamp())
-            }
-            save_watches(active_watches)
+            await db.add_active_watch(
+                message_id=msg.id,
+                guild_id=interaction.guild.id,
+                channel_id=watch_channel.id,
+                user_id=interaction.user.id,
+                user_name=interaction.user.display_name,
+                colour=colour,
+                station=station,
+                started_at=int(interaction.created_at.timestamp()),
+                has_voters_embed=False
+            )
+            active_watches[str(msg.id)] = {...}
 
-            # Send confirmation to user
             success_embed = discord.Embed(
                 description=f'✅ Watch started in {watch_channel.mention}!',
                 colour=discord.Colour(0x2ecc71)

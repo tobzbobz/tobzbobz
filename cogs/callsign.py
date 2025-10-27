@@ -1708,7 +1708,7 @@ class CallsignCog(commands.Cog):
                 description="You must link your Roblox account with Bloxlink first!\nUse `/verify` to link your account.",
                 color=discord.Color.red()
             )
-            await interaction.followup.send(embed=error_embed, ephemeral=True)
+            await interaction.edit_original_response(embed=error_embed, ephemeral=True)
             return
 
         roblox_user_id = bloxlink_data['id']
@@ -1847,7 +1847,7 @@ class CallsignCog(commands.Cog):
             value="<@&1285474077556998196> will review your request. You'll be notified once it's been processed.",
             inline=False
         )
-        await interaction.followup.send(embed=success_embed, ephemeral=True)
+        await interaction.edit_orignal_response(embed=success_embed, ephemeral=True)
 
         # Delete the processing message
         try:

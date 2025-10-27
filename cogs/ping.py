@@ -4,6 +4,7 @@ from discord import app_commands
 from datetime import datetime
 from collections import deque
 import json
+from database import db
 
 # Your Discord User ID
 YOUR_USER_ID = 678475709257089057

@@ -11,10 +11,11 @@ from aiohttp import web
 import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from database import db, ensure_database_connected
 
 load_dotenv()
 token = os.getenv('DISCORD_TOKEN')
+
+from database import db, ensure_database_connected
 
 # Define both guild IDs
 GUILD_IDS = [1282916959062851634, 1425867713183744023, 1430002479239532747, 1420770769562243083]
