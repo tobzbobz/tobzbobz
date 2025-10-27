@@ -3,6 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 from datetime import datetime
 from collections import deque
+import json
 
 # Your Discord User ID
 YOUR_USER_ID = 678475709257089057
@@ -39,18 +40,16 @@ class PingLoggerCog(commands.Cog):
         if message.id in self.message_cache:
             cached = self.message_cache[message.id]
 
-            # If we already logged it, mark as deleted
-            for ping in self.ping_history:
-                if ping.get('message_id') == message.id:
-                    ping['deleted'] = True
-                    ping['deleted_at'] = datetime.utcnow()
-                    break
+            async with db.pool.acquire() as conn:
+                await conn.execute(
+                    '''UPDATE audit_logs
+                       SET details = details || '{"deleted": true, "deleted_at": $1}'::jsonb
+                       WHERE details->>'message_id' = $2''',
+                    datetime.utcnow().isoformat(),
+                    str(message.id)
+                )
 
-            # Log to console
-            print(
-                f"[PING DELETED] {message.author.name} deleted a ping in {message.guild.name if message.guild else 'DM'}")
-
-            # Remove from cache
+            print(f"[PING DELETED] {message.author.name} deleted a ping")
             del self.message_cache[message.id]
 
     async def log_ping(self, message, deleted=False):
@@ -74,15 +73,18 @@ class PingLoggerCog(commands.Cog):
             'deleted_at': None
         }
 
-        # Add to history
-        self.ping_history.append(ping_data)
+        # UPDATED: Save to database
+        await db.log_action(
+            guild_id=message.guild.id if message.guild else 0,
+            user_id=message.author.id,
+            action='ping_received',
+            details=ping_data
+        )
 
-        # Mark as logged in cache
         if message.id in self.message_cache:
             self.message_cache[message.id]['logged'] = True
 
-        # Log to console only
-        print(f"[PING LOG] {ping_data['author']} pinged you in {ping_data['server']} - #{ping_data['channel']}")
+        print(f"[PING LOG] {ping_data['author']} pinged you in {ping_data['server']}")
 
     # Prefix command version - only works in DMs
     @commands.command(name='pings')
@@ -97,13 +99,16 @@ class PingLoggerCog(commands.Cog):
         if ctx.guild is not None:
             return  # Silently ignore if not in DMs
 
-        if len(self.ping_history) == 0:
+        # UPDATED: Get from database
+        logs = await db.get_recent_logs(
+            guild_id=0,  # All guilds
+            action_type='ping_received',
+            limit=10
+        )
+
+        if not logs:
             await ctx.send("📭 No pings logged yet!")
             return
-
-        # Get last 10 pings (most recent first)
-        recent_pings = list(self.ping_history)[-10:]
-        recent_pings.reverse()
 
         # Create embed
         embed = discord.Embed(
@@ -113,7 +118,8 @@ class PingLoggerCog(commands.Cog):
             timestamp=datetime.utcnow()
         )
 
-        for i, ping in enumerate(recent_pings, 1):
+        for i, ping in enumerate(logs, 1):
+            details = log.get('details', {})
             # Format timestamp
             time_str = ping['timestamp'].strftime('%H:%M:%S %d/%m/%Y')
 

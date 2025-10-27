@@ -1,35 +1,7 @@
 import discord
 from discord.ext import commands
 from datetime import datetime
-
-# File path for persistent storage
-LOGS_FILE = "mod_logs.json"
-
-# In-memory storage for moderation actions
-mod_logs = []
-
-# REPLACE THIS SECTION:
-# def load_logs():
-#     """Load moderation logs from JSON file"""
-#     global mod_logs
-#     if os.path.exists(LOGS_FILE):
-# ... etc
-
-# WITH THIS:
-from database import load_mod_logs, save_mod_logs, ensure_json_files, get_file_path
-
-# Update the global mod_logs initialization
-mod_logs = []
-
-def load_logs():
-    """Load moderation logs from JSON file"""
-    global mod_logs
-    mod_logs = load_mod_logs()
-    print(f"Loaded {len(mod_logs)} moderation logs")
-
-def save_logs():
-    """Save moderation logs to JSON file"""
-    save_mod_logs(mod_logs)
+from database import db  # Import database instance
 
 MODERATOR_ROLES = {
     1282916959062851634: 1389550689113473024,  # guild_id: role_id (replace with actual IDs)
@@ -167,7 +139,6 @@ class BanDetailsModal(discord.ui.Modal):
             required=False,
             max_length=500
         )
-
         self.add_item(self.additional_info)
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -195,21 +166,22 @@ class BanDetailsModal(discord.ui.Modal):
         except Exception as e:
             dm_status = "❌ Ban failed"
 
-        ban_data = {
-            'type': 'ban',
-            'user': str(self.user),
-            'user_id': self.user.id,
-            'reason': self.offence,
-            'duration': 'Permanent',
-            'additional_info': self.additional_info.value or 'None',
-            'moderator': str(self.moderator),
-            'moderator_id': self.moderator.id,
-            'timestamp': datetime.now().isoformat(),
-            'dm_status': dm_status
-        }
-        mod_logs.append(ban_data)
-        self.parent_view.cog.reset_user_infractions(self.user.id)  # ADD THIS LINE
-        save_logs()
+        await db.log_action(
+            guild_id=interaction.guild.id,
+            user_id=self.user.id,
+            action='ban',
+            details={
+                'user': str(self.user),
+                'reason': self.offence,
+                'duration': 'Permanent',
+                'additional_info': self.additional_info.value or 'None',
+                'moderator': str(self.moderator),
+                'moderator_id': self.moderator.id,
+                'dm_status': dm_status
+            }
+        )
+
+        await self.cog.reset_user_infractions(interaction.guild.id, self.user.id)
 
         embed = discord.Embed(
             title="Ban Action Summary",
@@ -227,7 +199,6 @@ class BanDetailsModal(discord.ui.Modal):
         )
 
         embed.set_footer(text=f"Logged at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 class KickOffenceSelect(discord.ui.Select):
@@ -297,6 +268,7 @@ class KickUserSelectView(discord.ui.View):
         self.cog = cog  # ADD THIS LINE
         self.add_item(KickUserSelect(action_type, offence, moderator, cog))  # ADD cog here
 
+
 class KickTimeModal(discord.ui.Modal):
     def __init__(self, action_type, offence, user, moderator, parent_view, cog):
         super().__init__(title="Kick Time")
@@ -314,26 +286,47 @@ class KickTimeModal(discord.ui.Modal):
             required=True,
             max_length=100
         )
-
         self.add_item(self.kick_time)
 
     async def on_submit(self, interaction: discord.Interaction):
-        now = datetime.now()
+        # ✅ Get recent kicks from database (last 24 hours)
+        recent_kicks = await db.get_recent_logs(
+            guild_id=interaction.guild.id,
+            action_type='kick',
+            user_id=self.user.id,
+            hours=24
+        )
+
+        # Filter by specific reason
         recent_kicks = [
-            log for log in mod_logs
-            if log.get('type') == 'kick'
-               and log.get('user_id') == self.user.id
-               and log.get('reason') == self.offence
-               and (now - datetime.fromisoformat(log['timestamp'])).total_seconds() < 86400
+            log for log in recent_kicks
+            if log.get('details', {}).get('reason') == self.offence
+        ]
+
+        # Get all recent warnings
+        all_recent_warnings = await db.get_recent_logs(
+            guild_id=interaction.guild.id,
+            action_type='educational_note',
+            user_id=self.user.id,
+            hours=24
+        )
+
+        # Filter to only warnings (not notes)
+        all_recent_warnings = [
+            log for log in all_recent_warnings
+            if log.get('details', {}).get('infraction_type') == 'warning'
         ]
 
         kick_count = len(recent_kicks)
+        total_warnings = len(all_recent_warnings)
+
         special_kicks = ["Banned RP", "Staff Impersonation", "RTAP (Respawning to Avoid Punishment)"]
         extended_kicks = ["RDM (Random Deathmatch)", "VDM (Vehicle Deathmatch)"]
 
         is_special_kick = self.offence in special_kicks
         is_extended_kick = self.offence in extended_kicks
 
+        # 2nd offense for special kicks = ban
         if is_special_kick and kick_count >= 1:
             try:
                 embed = discord.Embed(
@@ -356,27 +349,25 @@ class KickTimeModal(discord.ui.Modal):
             except:
                 dm_status = "❌ Ban failed"
 
-            ban_data = {
-                'type': 'ban',
-                'infraction_type': 'ban',
-                'user': str(self.user),
-                'user_id': self.user.id,
-                'reason': f"2 counts of {self.offence}",
-                'duration': 'Permanent (2nd offense)',
-                'moderator': str(self.moderator),
-                'moderator_id': self.moderator.id,
-                'timestamp': datetime.now().isoformat(),
-                'dm_status': dm_status
-            }
-            mod_logs.append(ban_data)
+            # ✅ Save to database
+            await db.log_action(
+                guild_id=interaction.guild.id,
+                user_id=self.user.id,
+                action='ban',
+                details={
+                    'user': str(self.user),
+                    'reason': f"2 counts of {self.offence}",
+                    'duration': 'Permanent (2nd offense)',
+                    'moderator': str(self.moderator),
+                    'moderator_id': self.moderator.id,
+                    'dm_status': dm_status,
+                    'infraction_type': 'ban'
+                }
+            )
 
-            # Reset infractions when banned
-            # Need to get cog reference - add this line in __init__:
-            # self.cog = parent_view.cog if hasattr(parent_view, 'cog') else None
-            if hasattr(self, 'cog') and self.cog:
-                self.cog.reset_user_infractions(self.user.id)  # ADD THIS
-
-            save_logs()
+            # Reset infractions
+            if self.cog:
+                await self.cog.reset_user_infractions(interaction.guild.id, self.user.id)
 
             embed = discord.Embed(
                 title="Ban Action Summary (2nd Offense)",
@@ -387,6 +378,7 @@ class KickTimeModal(discord.ui.Modal):
             embed.set_footer(text=f"Logged at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
+        # 4th offense for extended kicks = ban
         elif is_extended_kick and kick_count >= 3:
             try:
                 embed = discord.Embed(
@@ -409,23 +401,24 @@ class KickTimeModal(discord.ui.Modal):
             except:
                 dm_status = "❌ Ban failed"
 
-            ban_data = {
-                'type': 'ban',
-                'user': str(self.user),
-                'user_id': self.user.id,
-                'reason': self.offence,
-                'duration': 'Permanent (4th offense)',
-                'moderator': str(self.moderator),
-                'moderator_id': self.moderator.id,
-                'timestamp': datetime.now().isoformat(),
-                'dm_status': dm_status
-            }
-            mod_logs.append(ban_data)
+            # ✅ Save to database
+            await db.log_action(
+                guild_id=interaction.guild.id,
+                user_id=self.user.id,
+                action='ban',
+                details={
+                    'user': str(self.user),
+                    'reason': self.offence,
+                    'duration': 'Permanent (4th offense)',
+                    'moderator': str(self.moderator),
+                    'moderator_id': self.moderator.id,
+                    'dm_status': dm_status,
+                    'infraction_type': 'ban'
+                }
+            )
 
-            if hasattr(self, 'cog') and self.cog:
-                self.cog.reset_user_infractions(self.user.id)  # ADD THIS
-
-            save_logs()
+            if self.cog:
+                await self.cog.reset_user_infractions(interaction.guild.id, self.user.id)
 
             embed = discord.Embed(
                 title="Ban Action Summary (4th Offense)",
@@ -436,6 +429,7 @@ class KickTimeModal(discord.ui.Modal):
             embed.set_footer(text=f"Logged at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
+        # 3rd offense for normal kicks = ban
         elif not is_special_kick and not is_extended_kick and kick_count >= 2:
             try:
                 embed = discord.Embed(
@@ -458,23 +452,24 @@ class KickTimeModal(discord.ui.Modal):
             except:
                 dm_status = "❌ Ban failed"
 
-            ban_data = {
-                'type': 'ban',
-                'user': str(self.user),
-                'user_id': self.user.id,
-                'reason': f"3 counts of {self.offence}",
-                'duration': 'Permanent (3rd offense)',
-                'moderator': str(self.moderator),
-                'moderator_id': self.moderator.id,
-                'timestamp': datetime.now().isoformat(),
-                'dm_status': dm_status
-            }
-            mod_logs.append(ban_data)
+            # ✅ Save to database
+            await db.log_action(
+                guild_id=interaction.guild.id,
+                user_id=self.user.id,
+                action='ban',
+                details={
+                    'user': str(self.user),
+                    'reason': f"3 counts of {self.offence}",
+                    'duration': 'Permanent (3rd offense)',
+                    'moderator': str(self.moderator),
+                    'moderator_id': self.moderator.id,
+                    'dm_status': dm_status,
+                    'infraction_type': 'ban'
+                }
+            )
 
-            if hasattr(self, 'cog') and self.cog:
-                self.cog.reset_user_infractions(self.user.id)  # ADD THIS
-
-            save_logs()
+            if self.cog:
+                await self.cog.reset_user_infractions(interaction.guild.id, self.user.id)
 
             embed = discord.Embed(
                 title="Ban Action Summary (3rd Offense)",
@@ -486,6 +481,7 @@ class KickTimeModal(discord.ui.Modal):
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
         else:
+            # Normal kick
             kick_number = kick_count + 1
 
             try:
@@ -520,21 +516,22 @@ class KickTimeModal(discord.ui.Modal):
             except:
                 dm_status = "❌ Kick failed"
 
-            kick_data = {
-                'type': 'kick',
-                'infraction_type': 'kick',
-                'user': str(self.user),
-                'user_id': self.user.id,
-                'reason': self.offence,
-                'duration': self.kick_time.value,
-                'moderator': str(self.moderator),
-                'moderator_id': self.moderator.id,
-                'timestamp': datetime.now().isoformat(),
-                'dm_status': dm_status,
-                'offense_number': kick_number
-            }
-            mod_logs.append(kick_data)
-            save_logs()
+            # ✅ Save to database
+            await db.log_action(
+                guild_id=interaction.guild.id,
+                user_id=self.user.id,
+                action='kick',
+                details={
+                    'user': str(self.user),
+                    'reason': self.offence,
+                    'duration': self.kick_time.value,
+                    'moderator': str(self.moderator),
+                    'moderator_id': self.moderator.id,
+                    'dm_status': dm_status,
+                    'offense_number': kick_number,
+                    'infraction_type': 'kick'
+                }
+            )
 
             if kick_number == 1:
                 suffix = "st"
@@ -563,9 +560,7 @@ class KickTimeModal(discord.ui.Modal):
             )
 
             embed.set_footer(text=f"Logged at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
             await interaction.response.send_message(embed=embed, ephemeral=True)
-
 
 class OffenceSelect(discord.ui.Select):
     def __init__(self, action_type, moderator, cog):
@@ -645,14 +640,19 @@ class NoteUserSelect(discord.ui.UserSelect):
 
     async def process_note(self, interaction: discord.Interaction, selected_user):
         now = datetime.now()
+        # ✅ CORRECT
+        recent_notes = await db.get_recent_logs(
+            guild_id=interaction.guild.id,
+            action_type='educational_note',
+            user_id=selected_user.id,
+            hours=24
+        )
+        # Then filter
         recent_notes = [
-            log for log in mod_logs
-            if log.get('infraction_type') == 'note'
-               and log.get('user_id') == selected_user.id
-               and log.get('reason') == self.offence
-               and (now - datetime.fromisoformat(log['timestamp'])).total_seconds() < 86400
+            log for log in recent_notes
+            if log.get('details', {}).get('infraction_type') == 'note'
+               and log.get('details', {}).get('reason') == self.offence
         ]
-
         all_recent_warnings = [
             log for log in mod_logs
             if log.get('infraction_type') == 'warning'
@@ -1101,7 +1101,26 @@ def has_mod_role():
 class ModCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        load_logs()  # Load logs when cog initializes
+
+        # ✅ CORRECT - Fix indentation
+        async def reset_user_infractions(self, guild_id: int, user_id: int):
+            """Reset all warning/kick counters for a user when they get banned"""
+            # Mark all previous infractions as archived
+            logs = await db.get_recent_logs(
+                guild_id=guild_id,
+                user_id=user_id,
+                limit=1000  # Get all logs
+            )
+
+            for log in logs:  # ✅ Properly indented (4 spaces)
+                if log.get('action') in ['kick', 'educational_note']:
+                    # Update the log to mark as archived
+                    await db.execute(
+                        '''UPDATE audit_logs
+                           SET details = details || '{"archived": true, "archived_reason": "User was banned - infractions reset"}'::jsonb
+                           WHERE id = $1''',
+                        log['id']
+                    )
 
     @commands.command(name="mod")
     @has_mod_role()
@@ -1132,10 +1151,19 @@ class ModCog(commands.Cog):
         if ctx.author.id != OWNER_ID:
             await ctx.send("You don't have permission to use this command!", ephemeral=True)
             return
-        global mod_logs
-        log_count = len(mod_logs)
-        mod_logs.clear()
-        save_logs()
+
+        # ✅ Clear from database
+        log_count_result = await db.fetch(
+            'SELECT COUNT(*) FROM audit_logs WHERE guild_id = $1',
+            ctx.guild.id
+        )
+        log_count = log_count_result[0]['count']
+
+        await db.execute(
+            'DELETE FROM audit_logs WHERE guild_id = $1',
+            ctx.guild.id
+        )
+
         await ctx.send(f"Cleared {log_count} moderation log entries.", ephemeral=True)
 
     @commands.command(name="modlogs")
@@ -1199,29 +1227,34 @@ class ModCog(commands.Cog):
             await help_message.delete(delay=60)
             return
 
-        if not mod_logs:
+        # ✅ CORRECT - already have filtered_logs from database
+        if not filtered_logs:
             await ctx.send("No moderation logs found.", ephemeral=True)
             return
 
         # Filter logs by user if specified
         if user:
-            filtered_logs = [log for log in mod_logs if log.get('user_id') == user.id]
-            if not filtered_logs:
-                await ctx.send(f"No moderation logs found for {user.mention}.", ephemeral=True)
-                return
-        else:
-            filtered_logs = mod_logs
+            # ✅ Get logs from database
+            if user:
+                filtered_logs = await db.get_recent_logs(
+                    guild_id=ctx.guild.id,
+                    user_id=user.id,
+                    limit=1000  # Get all to filter
+                )
+            else:
+                filtered_logs = await db.get_recent_logs(
+                    guild_id=ctx.guild.id,
+                    limit=1000
+                )
 
-        total_logs = len(filtered_logs)
-
-        start_index = max(0, total_logs - skip - limit)
-        end_index = total_logs - skip
+            # Rest of pagination logic stays the same
+            total_logs = len(filtered_logs)
+            start_index = max(0, total_logs - skip - limit)
+            end_index = total_logs - skip
 
         if end_index <= 0 or start_index >= total_logs:
             await ctx.send(f"Invalid skip amount. Total logs: {total_logs}", ephemeral=True)
             return
-
-        displayed_logs = filtered_logs[start_index:end_index]
 
         user_filter_text = f" for {user.mention}" if user else ""
         embed = discord.Embed(
@@ -1231,13 +1264,14 @@ class ModCog(commands.Cog):
         )
 
         for log in displayed_logs:
-            timestamp = datetime.fromisoformat(log['timestamp']).strftime('%Y-%m-%d %H:%M:%S')
-            field_value = f"**User:** <@{log['user_id']}>\n**Reason:** {log['reason']}\n**Moderator:** <@{log['moderator_id']}>\n**Time:** {timestamp}"
-            if 'duration' in log:
-                field_value += f"\n**Duration:** {log['duration']}"
+            details = log.get('details', {})
+            timestamp = log['timestamp'].strftime('%Y-%m-%d %H:%M:%S')
+            field_value = f"**User:** <@{log['user_id']}>\n**Reason:** {details.get('reason', 'N/A')}\n**Moderator:** <@{details.get('moderator_id', 'N/A')}>\n**Time:** {timestamp}"
+            if 'duration' in details:
+                field_value += f"\n**Duration:** {details['duration']}"
 
             embed.add_field(
-                name=f"{log['type'].upper()} - {log.get('dm_status', 'N/A')}",
+                name=f"{log['action'].upper()} - {details.get('dm_status', 'N/A')}",
                 value=field_value,
                 inline=False
             )

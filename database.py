@@ -54,6 +54,23 @@ class Database:
                 print(f'❌ Error adding watch: {e}')
                 return False
 
+    # Add to Database class in database.py (around line 150)
+
+    async def execute(self, query: str, *params):
+        """Execute a raw SQL query"""
+        async with self.pool.acquire() as conn:
+            return await conn.execute(query, *params)
+
+    async def fetch(self, query: str, *params):
+        """Fetch multiple rows"""
+        async with self.pool.acquire() as conn:
+            return await conn.fetch(query, *params)
+
+    async def fetchrow(self, query: str, *params):
+        """Fetch a single row"""
+        async with self.pool.acquire() as conn:
+            return await conn.fetchrow(query, *params)
+
     async def remove_watch(self, guild_id: int, user_id: int):
         """Remove a user from the watch list"""
         async with self.pool.acquire() as conn:
@@ -95,6 +112,36 @@ class Database:
             except Exception as e:
                 print(f'❌ Error creating ticket: {e}')
                 return False
+
+    # Test script - add to test_database.py
+    async def test_callsigns():
+        print("\n🔍 Testing callsign functions...")
+
+        # Test add
+        await add_callsign_to_database(
+            callsign="123",
+            discord_user_id=123456789,
+            discord_username="TestUser",
+            roblox_user_id="987654321",
+            roblox_username="TestRoblox",
+            fenz_prefix="RFF",
+            hhstj_prefix="EMT",
+            approved_by_id=111111111,
+            approved_by_name="Staff"
+        )
+        print("✅ Added callsign 123")
+
+        # Test check exists
+        result = await check_callsign_exists("123")
+        print(f"✅ Retrieved callsign: {result}")
+
+        # Test search
+        results = await search_callsign_database("123456789", "discord_id")
+        print(f"✅ Search found {len(results)} results")
+
+        # Cleanup
+        await remove_callsign_from_database("123")
+        print("✅ Cleaned up test callsign")
 
     async def close_ticket(self, guild_id: int, channel_id: int):
         """Close a ticket"""
@@ -212,19 +259,35 @@ class Database:
                 print(f'❌ Error logging action: {e}')
                 return False
 
-    async def get_recent_logs(self, guild_id: int, limit: int = 50) -> List[Dict]:
-        """Get recent audit logs"""
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch(
-                '''SELECT *
-                   FROM audit_logs
-                   WHERE guild_id = $1
-                   ORDER BY timestamp DESC
-                       LIMIT $2''',
-                guild_id, limit
-            )
-            return [dict(row) for row in rows]
+    # Add to database.py
 
+    async def get_recent_logs(self, guild_id: int, action_type: str = None, user_id: int = None,
+                              limit: int = 50, hours: int = None) -> List[Dict]:
+        """Get recent logs with filters"""
+        async with self.pool.acquire() as conn:
+            query = 'SELECT * FROM audit_logs WHERE guild_id = $1'
+            params = [guild_id]
+            param_count = 1
+
+            if action_type:
+                param_count += 1
+                query += f' AND action = ${param_count}'
+                params.append(action_type)
+
+            if user_id:
+                param_count += 1
+                query += f' AND user_id = ${param_count}'
+                params.append(user_id)
+
+            if hours:
+                param_count += 1
+                query += f" AND timestamp > NOW() - INTERVAL '{hours} hours'"
+
+            query += f' ORDER BY timestamp DESC LIMIT ${param_count + 1}'
+            params.append(limit)
+
+            rows = await conn.fetch(query, *params)
+            return [dict(row) for row in rows]
 
 # Global database instance
 db = Database()

@@ -3,8 +3,7 @@ from discord.ext import commands, tasks
 from discord import app_commands
 import random
 from datetime import timedelta
-from pathlib import Path
-from database import load_status_submissions, save_status_submissions
+from database import db
 
 # Your Discord User ID for approval permissions
 OWNER_ID = 678475709257089057
@@ -46,37 +45,64 @@ class StatusCog(commands.Cog):
         ]
         self.current_status_index = 0
         self.pending_statuses = []
-        self.submissions_file = Path('status_submissions.json')
-        self.load_submissions()
 
-    def load_submissions(self):
+    async def load_submissions(self):
         """Load pending submissions from file"""
-        data = load_status_submissions()
-        self.pending_statuses = data.get('pending', [])
-        # Load approved statuses if they exist
-        approved = data.get('approved', [])
+        pending = await db.get_setting(0, 'pending_statuses', [])  # guild_id=0 for bot-wide
+        self.pending_statuses = pending
+
+        # Get approved submissions
+        approved = await db.get_setting(0, 'approved_statuses', [])
         for status in approved:
             if status not in self.status_list:
                 self.status_list.append(status)
 
-    def save_submissions(self):
+    async def save_submissions(self):
         """Save pending submissions to file"""
-        save_status_submissions({
-            'pending': self.pending_statuses,
-            'approved': [s for s in self.status_list if s not in self.__class__(self.bot).status_list]
-        })
+        await db.set_setting(0, 'pending_statuses', self.pending_statuses)
+        default_statuses = [
+            "With fire trucks 🚒",
+            "With ambulances 🚑",
+            "Emergency services",
+            "Fire COMMS",
+            "Ambulance COMMS",
+            "K99",
+            "Cardiac arrest",
+            "CPR",
+            "Firefighting",
+            "Tourniquet",
+            "HAZMAT",
+            "Sirens",
+            "Ambulance TV shows",
+            "Ambulance movies",
+            "Fire station TV shows",
+            "Fire station movies",
+            "Using an Ariel",
+            "Moving ambulance",
+            "Inserting IV",
+            "Extinguishing fire",
+            "Finding fire",
+            "Finding vein",
+            "Firefighter games",
+            "Medical games",
+            "Emergency services games",
+            "Don't do /help for commands",
+            "Do /help for no commands",
+            "Keeping NZ safe",
+            "Monitoring emergencies"
+        ]
+        approved = [s for s in self.status_list if s not in default_statuses]
+        await db.set_setting(0, 'approved_statuses', approved)
+
 
     def is_duplicate_status(self, status_text: str) -> bool:
-        """Check if a status is a duplicate (case-insensitive and ignoring extra spaces)"""
-        # Normalize the new status
+        """Check if status is duplicate"""
         normalized_new = status_text.strip().lower()
 
-        # Check against existing approved statuses
         for existing in self.status_list:
             if existing.strip().lower() == normalized_new:
                 return True
 
-        # Check against pending statuses
         for pending in self.pending_statuses:
             if pending['status'].strip().lower() == normalized_new:
                 return True
@@ -86,6 +112,9 @@ class StatusCog(commands.Cog):
     async def cog_load(self):
         """Called when the cog is loaded - start tasks here"""
         print(f'Status cog loaded!')
+
+        await self.load_submissions()
+
         # Start the status rotation task
         if not self.change_status.is_running():
             self.change_status.start()
@@ -151,7 +180,7 @@ class StatusCog(commands.Cog):
         status = random.choice(self.status_list)
 
         # Pick a random activity type (1=Playing, 2=Streaming, 3=Listening, 4=Watching)
-        activity_type = random.randint(1, 3)
+        activity_type = random.randint(1, 4)
 
         if activity_type == 1:
             # Playing
@@ -200,7 +229,8 @@ class StatusCog(commands.Cog):
             'user_name': str(interaction.user),
             'submitted_at': discord.utils.utcnow().isoformat()
         })
-        self.save_submissions()
+
+        await self.save_submissions()
 
         # Confirm submission
         embed = discord.Embed(
@@ -266,7 +296,9 @@ class StatusCog(commands.Cog):
 
         # Remove from pending
         self.pending_statuses.pop(index)
-        self.save_submissions()
+
+        # UPDATED: Save to database
+        await self.save_submissions()
 
         # DM the user
         try:
@@ -310,7 +342,7 @@ class StatusCog(commands.Cog):
 
         # Remove from pending
         self.pending_statuses.pop(index)
-        self.save_submissions()
+        await self.save_submissions()
 
         # DM the user
         try:

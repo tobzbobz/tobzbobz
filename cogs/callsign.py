@@ -1,188 +1,1860 @@
 import discord
 from discord.ext import commands
-from database import load_ping_history as load_ping_history_db, save_ping_history as save_ping_history_db
-from datetime import datetime
+from discord import app_commands
+from dotenv import load_dotenv
+load_dotenv()
+import aiohttp
+import re
+import traceback
+import sys
+import os
+from datetime import datetime, timedelta
+import asyncio
+from database import db
+import json  # Still needed for JSON serialization in database
 
+BLOXLINK_API_KEY = os.getenv('BLOXLINK_API_KEY')
 # Your Discord User ID
 YOUR_USER_ID = 678475709257089057
 
-# JSON file for storing ping history
-PING_LOG_FILE = "ping_history.json"
+# Role ID that can approve/deny requests
+STAFF_ROLE_ID = 1285474077556998196
+
+# Channel ID where callsign requests are sent
+CALLSIGN_REQUEST_CHANNEL_ID = 1389064400043774022  # REPLACE WITH YOUR ACTUAL CHANNEL ID
+
+# Bot owner ID for error DMs
+OWNER_ID = 678475709257089057
+
+# Configuration: Map Discord Role IDs to FENZ Ranks
+FENZ_RANK_MAP = {
+    # Format: role_id: ("Rank Name", "PREFIX")
+    1309020834400047134: ("Recruit Firefighter", "RFF"),
+    1309020730561790052: ("Qualified Firefighter", "QFF"),
+    1309020647128825867: ("Senior Firefighter", "SFF"),
+    1309019405329502238: ("Station Officer", "SO"),
+    1309019042765344810: ("Senior Station Officer", "SSO"),
+    1365959865381556286: ("Deputy Chief Officer", "DCO"),
+    1365959864618188880: ("Chief Officer", "CO"),
+    1389158062635487312: ("Assistant Area Commander", "AAC"),
+    1365959866363150366: ("Area Commander", "AC"),
+    1389157690760232980: ("Assistant National Commander", "ANC"),
+    1389157641799991347: ("Deputy National Commander", "DNC"),
+    1285113945664917514: ("National Commander", "NC"),
+}
+
+# Configuration: Map Discord Role IDs to HHStJ Ranks
+HHSTJ_RANK_MAP = {
+    # Format: role_id: ("Rank Name", "PREFIX")
+    1389113026900394064: ("First Responder", "FR"),
+    1389112936517079230: ("Emergency Medical Technician", "EMT"),
+    1389112844364021871: ("Graduate Paramedic", "GPARA"),
+    1389112803712827473: ("Paramedic", "PARA"),
+    1389112753142366298: ("Extended Care Paramedic", "ECP"),
+    1389112689267314790: ("Critical Care Paramedic", "CCP"),
+    1389112601815941240: ("Doctor", "DR"),
+
+# Operational Management Ranks (these override medical ranks)
+    1389112470211264552: ("Watch Operations Manager", "WOM-MIKE30"),
+    1403314606839037983: ("Area Operations Manager", "AOM-OSCAR32"),
+    1403314387602767932: ("District Operations Support Manager", "DOSM-OSCAR31"),
+    1403312277876248626: ("District Operations Manager", "DOM-OSCAR30"),
+    1389111474949062726: ("Assistant National Operations Manager", "ANOM-OSCAR3"),
+    1389111326571499590: ("Deputy National Operations Manager", "DNOM-OSCAR2"),
+    1389110819190472775: ("National Operations Manager", "NOM-OSCAR1"),
+}
 
 
-def load_ping_history():
-    """Load ping history from JSON file"""
-    data = load_ping_history_db()
-    # Convert timestamp strings back to datetime objects
-    for ping in data:
-        ping['timestamp'] = datetime.fromisoformat(ping['timestamp'])
-        if ping.get('deleted_at'):
-            ping['deleted_at'] = datetime.fromisoformat(ping['deleted_at'])
-    from collections import deque
-    return deque(data, maxlen=100)
-
-def save_ping_history(ping_history):
-    """Save ping history to JSON file"""
-    data = []
-    for ping in ping_history:
-        ping_copy = ping.copy()
-        ping_copy['timestamp'] = ping['timestamp'].isoformat()
-        if ping_copy.get('deleted_at'):
-            ping_copy['deleted_at'] = ping_copy['deleted_at'].isoformat()
-        data.append(ping_copy)
-    save_ping_history_db(data)
-
-class PingLoggerCog(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-        self.ping_history = load_ping_history()  # Load from file on startup
-        self.message_cache = {}  # Cache messages for delete detection
-
-        # Print how many pings were loaded
-        print(f"[PING LOGGER] Loaded {len(self.ping_history)} pings from history")
-
-    @commands.Cog.listener()
-    async def on_message(self, message):
-        """Log whenever you get pinged"""
-
-        # Ignore bot messages
-        if message.author.bot:
-            return
-
-        # Check if you were mentioned
-        if self.bot.get_user(YOUR_USER_ID) in message.mentions:
-            # Cache the message for delete detection
-            self.message_cache[message.id] = {
-                'message': message,
-                'logged': False
-            }
-            await self.log_ping(message, deleted=False)
-
-    @commands.Cog.listener()
-    async def on_message_delete(self, message):
-        """Detect when a message that pinged you is deleted"""
-
-        # Check if this message pinged you
-        if message.id in self.message_cache:
-            cached = self.message_cache[message.id]
-
-            # If we already logged it, mark as deleted
-            for ping in self.ping_history:
-                if ping.get('message_id') == message.id:
-                    ping['deleted'] = True
-                    ping['deleted_at'] = datetime.utcnow()
-                    break
-
-            # Save updated history
-            save_ping_history(self.ping_history)
-
-            # Log to console
-            print(
-                f"[PING DELETED] {message.author.name} deleted a ping in {message.guild.name if message.guild else 'DM'}")
-
-            # Remove from cache
-            del self.message_cache[message.id]
-
-    async def log_ping(self, message, deleted=False):
-        """Log ping to history silently"""
-
-        # Create ping record
-        ping_data = {
-            'message_id': message.id,
-            'timestamp': datetime.utcnow(),
-            'server': message.guild.name if message.guild else "DM",
-            'server_id': message.guild.id if message.guild else None,
-            'channel': message.channel.name if message.guild else "Direct Message",
-            'channel_id': message.channel.id,
-            'channel_mention': message.channel.mention if message.guild else "DM",
-            'author': message.author.name,
-            'author_id': message.author.id,
-            'author_mention': message.author.mention,
-            'content': message.content[:500],  # Truncate long messages
-            'jump_url': message.jump_url,
-            'deleted': deleted,
-            'deleted_at': None
-        }
-
-        # Add to history
-        self.ping_history.append(ping_data)
-
-        # Save to file
-        save_ping_history(self.ping_history)
-
-        # Mark as logged in cache
-        if message.id in self.message_cache:
-            self.message_cache[message.id]['logged'] = True
-
-        # Log to console only
-        print(f"[PING LOG] {ping_data['author']} pinged you in {ping_data['server']} - #{ping_data['channel']}")
-
-    # Prefix command version - only works in DMs
-    @commands.command(name='pings')
-    async def pings_prefix(self, ctx):
-        """Show the 10 most recent pings (prefix command - DM only)"""
-
-        # Check if the user is you
-        if ctx.author.id != YOUR_USER_ID:
-            return  # Silently ignore
-
-        # Check if in DMs
-        if ctx.guild is not None:
-            return  # Silently ignore if not in DMs
-
-        if len(self.ping_history) == 0:
-            await ctx.send("📭 No pings logged yet!")
-            return
-
-        # Get last 10 pings (most recent first)
-        recent_pings = list(self.ping_history)[-10:]
-        recent_pings.reverse()
-
-        # Create embed
-        embed = discord.Embed(
-            title="📌 Your Recent Pings",
-            description=f"Showing {len(recent_pings)} most recent pings",
-            color=discord.Color.gold(),
-            timestamp=datetime.utcnow()
+# ✅ NEW DATABASE FUNCTIONS
+async def check_callsign_exists(callsign: str) -> dict:
+    """Check if a callsign exists in the database"""
+    async with db.pool.acquire() as conn:
+        row = await conn.fetchrow(
+            'SELECT * FROM callsigns WHERE callsign = $1',
+            callsign
         )
+        return dict(row) if row else None
 
-        for i, ping in enumerate(recent_pings, 1):
-            # Format timestamp
-            time_str = ping['timestamp'].strftime('%H:%M:%S %d/%m/%Y')
 
-            # Truncate content for display
-            content_preview = ping['content'][:100]
-            if len(ping['content']) > 100:
-                content_preview += "..."
+async def search_callsign_database(query: str, search_type: str) -> list:
+    async with db.pool.acquire() as conn:
+        if search_type == 'discord_id':
+            rows = await conn.fetch(
+                'SELECT * FROM callsigns WHERE discord_user_id = $1',
+                int(query)
+            )
+        elif search_type == 'roblox_username':
+            rows = await conn.fetch(
+                'SELECT * FROM callsigns WHERE LOWER(roblox_username) LIKE LOWER($1)',
+                f'%{query}%'
+            )
+        elif search_type == 'roblox_id':
+            rows = await conn.fetch(
+                'SELECT * FROM callsigns WHERE roblox_user_id = $1',
+                query
+            )
+        else:
+            return []
 
-            # Check if deleted
-            status_emoji = "🗑️" if ping['deleted'] else "✅"
-            deleted_info = ""
-            if ping['deleted']:
-                deleted_time = ping['deleted_at'].strftime('%H:%M:%S %d/%m/%Y') if ping['deleted_at'] else "Unknown"
-                deleted_info = f"\n⚠️ **DELETED** at {deleted_time}"
+        return [dict(row) for row in rows]
 
-            field_value = (
-                f"{status_emoji} **Server:** {ping['server']}\n"
-                f"**Channel:** {ping['channel_mention']}\n"
-                f"**From:** {ping['author_mention']} ({ping['author']})\n"
-                f"**When:** {time_str}{deleted_info}\n"
-                f"**Message:** {content_preview}\n"
+
+async def add_callsign_to_database(callsign: str, discord_user_id: int, discord_username: str,
+                                   roblox_user_id: str, roblox_username: str, fenz_prefix: str,
+                                   hhstj_prefix: str, approved_by_id: int, approved_by_name: str):
+    """Add a new approved callsign to the database"""
+    async with db.pool.acquire() as conn:
+        # Check if user already has a callsign
+        old_callsigns = await search_callsign_database(str(discord_user_id), 'discord_id')
+
+        # Store history of previous callsigns
+        history = []
+        for old_data in old_callsigns:
+            history.append({
+                "callsign": old_data.get("callsign"),
+                "fenz_prefix": old_data.get("fenz_prefix"),
+                "hhstj_prefix": old_data.get("hhstj_prefix"),
+                "approved_at": old_data.get("approved_at").isoformat() if old_data.get("approved_at") else None,
+                "approved_by_id": old_data.get("approved_by_id"),
+                "approved_by_name": old_data.get("approved_by_name"),
+                "replaced_at": int(datetime.utcnow().timestamp())
+            })
+
+            # Delete old callsign
+            await conn.execute(
+                'DELETE FROM callsigns WHERE callsign = $1',
+                old_data['callsign']
             )
 
-            # Only add jump link if not deleted
-            if not ping['deleted']:
-                field_value += f"[Jump to Message]({ping['jump_url']})"
+        # Insert new callsign
+        await conn.execute(
+            '''INSERT INTO callsigns
+               (callsign, discord_user_id, discord_username, roblox_user_id, roblox_username,
+                fenz_prefix, hhstj_prefix, approved_by_id, approved_by_name, callsign_history)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)''',
+            callsign, discord_user_id, discord_username, roblox_user_id, roblox_username,
+            fenz_prefix, hhstj_prefix, approved_by_id, approved_by_name,
+            json.dumps(history)
+        )
+
+
+async def send_error_to_owner(bot, title: str, error: Exception, interaction: discord.Interaction = None):
+    """Send error details to bot owner"""
+    try:
+        owner = await bot.fetch_user(OWNER_ID)
+        error_embed = discord.Embed(
+            title=f"⚠️ {title}",
+            description=f"```{str(error)}```",
+            color=discord.Color.red()
+        )
+        if interaction:
+            error_embed.add_field(name="User", value=f"{interaction.user.mention}", inline=True)
+            error_embed.add_field(name="Guild", value=f"{interaction.guild.name}", inline=True)
+        error_embed.timestamp = discord.utils.utcnow()
+        await owner.send(embed=error_embed)
+    except Exception as e:
+        print(f"Failed to send error to owner: {e}")
+
+
+class DenyReasonModal(discord.ui.Modal, title="Deny Counter Offer"):
+    def __init__(self, view, original_message, thread):
+        super().__init__()
+        self.view = view
+        self.original_message = original_message
+        self.thread = thread
+
+    reason = discord.ui.TextInput(
+        label="Reason for Denial",
+        placeholder="Enter the reason for denying this counter offer",
+        required=True,
+        max_length=500,
+        style=discord.TextStyle.paragraph
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            await interaction.response.defer()
+
+            # Update original embed with reason
+            embed = discord.Embed(
+                title="Callsign Request",
+                colour=discord.Colour(0xf24d4d)
+            )
 
             embed.add_field(
-                name=f"#{i}",
-                value=field_value,
+                name="Requested Callsign",
+                value=f"`{self.view.fenz_prefix}-{self.view.original_callsign}`" if self.view.fenz_prefix else f"`{self.view.original_callsign}`",
+                inline=True
+            )
+
+            embed.add_field(
+                name="User",
+                value=f"{self.view.requester.mention}",
+                inline=True
+            )
+
+            if self.view.fenz_prefix:
+                # Get the rank name from the map
+                fenz_rank_name = None
+                for role in self.view.requester.roles:
+                    if role.id in FENZ_RANK_MAP:
+                        fenz_rank_name = FENZ_RANK_MAP[role.id][0]
+                        break
+
+                embed.add_field(
+                    name="FENZ Rank",
+                    value=f"{fenz_rank_name}" if fenz_rank_name else f"`{self.view.fenz_prefix}`",
+                    inline=True
+                )
+
+            embed.add_field(name='Status:', value=f'Denied <:Denied:1426930694633816248>', inline=True)
+            embed.add_field(name='Denied at:', value=f'{discord.utils.format_dt(discord.utils.utcnow())}', inline=True)
+
+            embed.add_field(
+                name="Reason:",
+                value=self.reason.value,
                 inline=False
             )
 
-        embed.set_footer(text=f"Total pings logged: {len(self.ping_history)}")
-        await ctx.send(embed=embed)
+            embed.timestamp = discord.utils.utcnow()
+            embed.set_footer(text=f"Denied by {interaction.user.display_name}")
 
+            # Update original message
+            await self.original_message.edit(embed=embed, view=None)
+
+            try:
+                dm_embed = discord.Embed(
+                    title="Callsign Request Denied <:Denied:1426930694633816248>",
+                    description=f"Your callsign request has been denied.\n\n**Reason:** {self.reason.value}",
+                    color=discord.Color.red()
+                )
+                dm_embed.add_field(
+                    name="Next Steps",
+                    value="Please submit a new request using `/callsign request` command.",
+                    inline=False
+                )
+
+                await self.view.requester.send(embed=dm_embed)
+                await interaction.followup.send("Denial message sent via DM <:Accepted:1426930333789585509>",
+                                                ephemeral=True)
+
+            except discord.Forbidden:
+                await interaction.followup.send(
+                    "Could not DM the requester – they may have DMs disabled <:Denied:1426930694633816248>",
+                    ephemeral=True
+                )
+            except Exception as e:
+                print(f"Error sending DM to requester: {e}")
+
+            # Delete thread after a short delay
+            if hasattr(self.view, 'thread') and self.view.thread:
+                await asyncio.sleep(5)
+                try:
+                    await self.thread.delete()
+                except Exception as e:
+                    print(f"Failed to delete thread: {e}")
+
+        except Exception as e:
+            await send_error_to_owner(interaction.client, "Deny reason error", e, interaction)
+            error_embed = discord.Embed(
+                title="Error <:Denied:1426930694633816248>",
+                description=f"An error occurred: {str(e)}",
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=error_embed, ephemeral=True)
+
+class OverrideModal(discord.ui.Modal, title="Override with New Callsign"):
+    def __init__(self, view, thread=None):
+        super().__init__()
+        self.view = view
+        self.thread = thread
+
+    new_callsign = discord.ui.TextInput(
+        label="New Callsign",
+        placeholder="Enter the callsign to approve instead",
+        required=True,
+        max_length=10,
+        style=discord.TextStyle.short
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            await interaction.response.defer()
+
+            # Validate callsign is numeric
+            if not self.new_callsign.value.isdigit():
+                await interaction.followup.send(
+                    f"Callsign must be numeric only <:Denied:1426930694633816248> Invalid: `{self.new_callsign.value}`",
+                    ephemeral=True
+                )
+                return
+
+            # Validate callsign is not over 999
+            if int(self.new_callsign.value) > 999:
+                await interaction.followup.send(
+                    f"Callsign must be 999 or below <:Denied:1426930694633816248> Invalid: `{self.new_callsign.value}`",
+                    ephemeral=True
+                )
+                return
+
+            # Add to database with the NEW callsign
+            await add_callsign_to_database(
+                callsign=self.new_callsign.value,
+                discord_user_id=self.view.requester.id,
+                discord_username=self.view.requester.display_name,
+                roblox_user_id=self.view.roblox_user_id,
+                roblox_username=self.view.roblox_username,
+                fenz_prefix=self.view.fenz_prefix,
+                hhstj_prefix=self.view.hhstj_prefix,
+                approved_by_id=interaction.user.id,
+                approved_by_name=interaction.user.display_name
+            )
+
+            # Update nickname with NEW callsign
+            nickname_parts = []
+            if self.view.fenz_prefix:
+                nickname_parts.append(f"{self.view.fenz_prefix}-{self.new_callsign.value}")
+            if self.view.hhstj_prefix:
+                if "-" not in self.view.hhstj_prefix:
+                    nickname_parts.append(self.view.hhstj_prefix)
+            if self.view.roblox_username:
+                nickname_parts.append(self.view.roblox_username)
+
+            new_nickname = " | ".join(nickname_parts)
+            nickname_success = False
+            nickname_error = None
+
+            if len(new_nickname) <= 32:
+                try:
+                    await self.view.requester.edit(nick=new_nickname)
+                    nickname_success = True
+                except Exception as e:
+                    nickname_error = str(e)
+            else:
+                # [INSERT THE FULL FALLBACK LOGIC FROM accept_button HERE]
+                # Copy the entire fallback logic block from the accept_button method
+                pass
+
+            # Delete thread after approval
+            if self.thread:
+                await asyncio.sleep(3)
+                try:
+                    await self.thread.delete()
+                except Exception as e:
+                    print(f"Failed to delete thread: {e}")
+
+            # Update embed to show override approval with NEW callsign
+            embed = discord.Embed(
+                title="Callsign Request",
+                colour=discord.Colour(0x2ecc71)
+            )
+
+            embed.add_field(
+                name="Approved Callsign",
+                value=f"`{self.view.fenz_prefix}-{self.new_callsign.value}`" if self.view.fenz_prefix else f"`{self.new_callsign.value}`",
+                inline=True
+            )
+
+            embed.add_field(
+                name="User",
+                value=f"{self.view.requester.mention}",
+                inline=True
+            )
+
+            if self.view.fenz_prefix:
+                fenz_rank_name = None
+                for role in self.view.requester.roles:
+                    if role.id in FENZ_RANK_MAP:
+                        fenz_rank_name = FENZ_RANK_MAP[role.id][0]
+                        break
+
+                embed.add_field(
+                    name="FENZ Rank",
+                    value=f"{fenz_rank_name}" if fenz_rank_name else f"`{self.view.fenz_prefix}`",
+                    inline=True
+                )
+
+            embed.add_field(name='Status:', value=f'Approved (Override) <:Accepted:1426930333789585509>', inline=True)
+            embed.add_field(name='Approved at:', value=f'{discord.utils.format_dt(discord.utils.utcnow())}', inline=True)
+
+            embed.timestamp = discord.utils.utcnow()
+            embed.set_footer(text=f"Overridden by {interaction.user.display_name}")
+
+            # Delete the original message
+            await interaction.message.delete()
+
+            # Send new message with ping
+            await interaction.channel.send(
+                content=f"-# ||{self.view.requester.mention}||",
+                embed=embed
+            )
+
+            await interaction.followup.send("Callsign approved via override <:Accepted:1426930333789585509>", ephemeral=True)
+
+        except Exception as e:
+            await send_error_to_owner(interaction.client, "Override approval error", e, interaction)
+            error_embed = discord.Embed(
+                title="Error <:Denied:1426930694633816248>",
+                description=f"An error occurred: {str(e)}",
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=error_embed, ephemeral=True)
+
+class CounterOfferModal(discord.ui.Modal, title="Counter Offer Callsigns"):
+    def __init__(self, view, thread, original_message):
+        super().__init__()
+        self.view = view
+        self.thread = thread
+        self.original_message = original_message
+
+    offer1 = discord.ui.TextInput(
+        label="Offer 1 (Required)",
+        placeholder="Enter the first callsign offer",
+        required=True,
+        max_length=10,
+        style=discord.TextStyle.short
+    )
+
+    offer2 = discord.ui.TextInput(
+        label="Offer 2 (Optional)",
+        placeholder="Enter the second callsign offer",
+        required=False,
+        max_length=10,
+        style=discord.TextStyle.short
+    )
+
+    offer3 = discord.ui.TextInput(
+        label="Offer 3 (Optional)",
+        placeholder="Enter the third callsign offer",
+        required=False,
+        max_length=10,
+        style=discord.TextStyle.short
+    )
+
+    offer4 = discord.ui.TextInput(
+        label="Offer 4 (Optional)",
+        placeholder="Enter the fourth callsign offer",
+        required=False,
+        max_length=10,
+        style=discord.TextStyle.short
+    )
+
+    offer5 = discord.ui.TextInput(
+        label="Offer 5 (Optional)",
+        placeholder="Enter the fifth callsign offer",
+        required=False,
+        max_length=10,
+        style=discord.TextStyle.short
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):  # ← Column 4
+        try:  # ← Column 8
+            await interaction.response.defer()  # ← Column 12
+            channel = interaction.guild.get_channel(CALLSIGN_REQUEST_CHANNEL_ID)
+
+            # Collect all offers
+            offers = []
+            if self.offer1.value:
+                offers.append(self.offer1.value)
+            if self.offer2.value:
+                offers.append(self.offer2.value)
+            if self.offer3.value:
+                offers.append(self.offer3.value)
+            if self.offer4.value:
+                offers.append(self.offer4.value)
+            if self.offer5.value:
+                offers.append(self.offer5.value)
+
+            # Validate all offers are numeric
+            for offer in offers:
+                if not offer.isdigit():
+                    await interaction.followup.send(
+                        f"All callsign offers must be numeric only <:Denied:1426930694633816248> Invalid: `{offer}`",
+                        ephemeral=True
+                    )
+                    return
+
+                # Validate all offers are numeric
+                for offer in offers:
+                    if not offer.isdigit():
+                        await interaction.followup.send(
+                            f"All callsign offers must be numeric only <:Denied:1426930694633816248> Invalid: `{offer}`",
+                            ephemeral=True
+                        )
+                        return
+
+                    if int(offer) > 999:
+                        await interaction.followup.send(
+                            f"Callsign offers must be 999 or below <:Denied:1426930694633816248> Invalid: `{offer}`",
+                            ephemeral=True
+                        )
+                        return
+
+                # ✅ No need to send to channel here — we’ll build and send the counter embed next
+
+            # Create counter offer embed
+            counter_embed = discord.Embed(
+                title="Counter Offer",
+                description=f"{self.view.requester.mention} has provided alternative callsign options:",
+                color=discord.Color(0xffffff)
+            )
+
+            for i, offer in enumerate(offers, 1):
+                counter_embed.add_field(
+                    name=f"‎",
+                    value=f"`{self.view.fenz_prefix}-{offer}`" if self.view.fenz_prefix else f"`{offer}`",
+                    inline=True
+                )
+
+            counter_embed.set_footer(text="FENZ | Leadership can approve or deny these options")
+
+            # Create view with counter offer buttons
+            counter_view = CounterOfferApprovalView(
+                self.view.requester,
+                offers,
+                self.view.fenz_prefix,
+                self.view.hhstj_prefix,
+                self.view.roblox_username,
+                self.view.roblox_user_id,
+                self.view.original_callsign,
+                self.original_message,
+                self.thread
+            )
+
+            await self.thread.send(
+                embed=counter_embed,
+                view=counter_view
+            )
+
+            await interaction.message.delete()
+
+            # Edit the original message to show counter offer was submitted
+            edit_embed = discord.Embed(
+                title="Counter Offer Submitted",
+                description=f"{interaction.user.mention} has submitted alternative callsign options.",
+                color=discord.Color(0xffffff)
+            )
+            edit_embed.timestamp = discord.utils.utcnow()
+            edit_embed.set_footer(text=f"{interaction.user.display_name} has submitted a counter offer.")
+
+            await self.original_message.edit(embed=edit_embed, view=None)
+            await interaction.followup.send("Counter offer submitted <:Accepted:1426930333789585509>", ephemeral=True)
+
+        except Exception as e:
+            await send_error_to_owner(interaction.client, "Counter offer error", e, interaction)
+            error_embed = discord.Embed(
+                title="Error <:Denied:1426930694633816248>",
+                description=f"An error occurred: {str(e)}",
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=error_embed, ephemeral=True)
+
+
+class CounterOfferApprovalView(discord.ui.View):
+    def __init__(self, requester: discord.Member, offers: list, fenz_prefix: str, hhstj_prefix: str,
+                 roblox_username: str, roblox_user_id: str, original_callsign: str,
+                 original_message: discord.Message, thread: discord.Thread):
+        super().__init__(timeout=None)
+        self.requester = requester
+        self.offers = offers
+        self.fenz_prefix = fenz_prefix
+        self.hhstj_prefix = hhstj_prefix
+        self.roblox_username = roblox_username
+        self.roblox_user_id = roblox_user_id
+        self.original_callsign = original_callsign
+        self.original_message = original_message
+        self.thread = thread
+
+        # Add buttons for each offer
+        for i, offer in enumerate   (offers, 1):
+            button = discord.ui.Button(
+                label=f"{self.fenz_prefix}-{offer}",
+                style=discord.ButtonStyle.primary,
+                custom_id=f"counter_offer_{i}_{offer}"
+            )
+            button.callback = self.create_offer_callback(offer)
+            self.add_item(button)
+
+        # Add deny button
+        deny_button = discord.ui.Button(
+            label="Deny",
+            style=discord.ButtonStyle.danger,
+            emoji="<:Denied:1426930694633816248>"
+        )
+        deny_button.callback = self.deny_callback
+        self.add_item(deny_button)
+
+    def create_offer_callback(self, callsign: str):
+        async def callback(interaction: discord.Interaction):
+            # Check if user has the staff role
+            if not any(role.id == STAFF_ROLE_ID for role in interaction.user.roles):
+                await interaction.response.send_message(
+                    "You don't have permission to approve callsigns <:Denied:1426930694633816248>",
+                    ephemeral=True
+                )
+                return
+
+            await interaction.response.defer()
+
+            try:
+                # Add to database
+                await add_callsign_to_database(
+                    callsign=callsign,
+                    discord_user_id=self.requester.id,
+                    discord_username=self.requester.display_name,
+                    roblox_user_id=self.roblox_user_id,
+                    roblox_username=self.roblox_username,
+                    fenz_prefix=self.fenz_prefix,
+                    hhstj_prefix=self.hhstj_prefix,
+                    approved_by_id=interaction.user.id,
+                    approved_by_name=interaction.user.display_name
+                )
+
+                # Update nickname
+                nickname_parts = []
+                if self.fenz_prefix:
+                    nickname_parts.append(f"{self.fenz_prefix}-{callsign}")
+                if self.hhstj_prefix:
+                    # If operational management (has hyphen), use as-is, otherwise add to parts
+                    if "-" not in self.hhstj_prefix:
+                        nickname_parts.append(self.hhstj_prefix)
+                if self.roblox_username:
+                    nickname_parts.append(self.roblox_username)
+
+                new_nickname = " | ".join(nickname_parts)
+                nickname_success = False
+                nickname_error = None
+
+                if len(new_nickname) <= 32:
+                    try:
+                        await self.requester.edit(nick=new_nickname)
+                        nickname_success = True
+                    except Exception as e:
+                        nickname_error = str(e)
+                else:
+                    # Fallback logic for operational management
+                    if self.hhstj_prefix and "-" in self.hhstj_prefix:
+                        # Try shortening the OM callsign (e.g., MIKE30 → MKE30)
+                        om_parts = self.hhstj_prefix.split("-")
+                        if len(om_parts) == 2:
+                            base, callsign_num = om_parts
+                            # Try shortened version (first 3 letters)
+                            shortened_prefix = f"{base[:3]}-{callsign_num}"
+
+                            fallback_parts = []
+                            if self.fenz_prefix:
+                                fallback_parts.append(f"{self.fenz_prefix}-{callsign}")
+                            fallback_parts.append(shortened_prefix)
+                            if self.roblox_username:
+                                fallback_parts.append(self.roblox_username)
+                            fallback_nickname = " | ".join(fallback_parts)
+
+                            if len(fallback_nickname) <= 32:
+                                try:
+                                    await self.requester.edit(nick=fallback_nickname)
+                                    nickname_success = True
+                                    new_nickname = fallback_nickname
+                                except Exception as e:
+                                    nickname_error = str(e)
+                            else:
+                                # Try just the base OM rank (e.g., WOM)
+                                fallback_parts = []
+                                if self.fenz_prefix:
+                                    fallback_parts.append(f"{self.fenz_prefix}-{callsign}")
+                                fallback_parts.append(base)
+                                if self.roblox_username:
+                                    fallback_parts.append(self.roblox_username)
+                                fallback_nickname = " | ".join(fallback_parts)
+
+                                if len(fallback_nickname) <= 32:
+                                    try:
+                                        await self.requester.edit(nick=fallback_nickname)
+                                        nickname_success = True
+                                        new_nickname = fallback_nickname
+                                    except Exception as e:
+                                        nickname_error = str(e)
+                                else:
+                                    # Last resort: Drop OM entirely
+                                    fallback_parts = []
+                                    if self.fenz_prefix:
+                                        fallback_parts.append(f"{self.fenz_prefix}-{callsign}")
+                                    if self.roblox_username:
+                                        fallback_parts.append(self.roblox_username)
+                                    fallback_nickname = " | ".join(fallback_parts)
+
+                                    if len(fallback_nickname) <= 32:
+                                        try:
+                                            await self.requester.edit(nick=fallback_nickname)
+                                            nickname_success = True
+                                            new_nickname = fallback_nickname
+                                        except Exception as e:
+                                            nickname_error = str(e)
+                    else:
+                        # Non-OM: just drop HHStJ clinical rank
+                        fallback_parts = []
+                        if self.fenz_prefix:
+                            fallback_parts.append(f"{self.fenz_prefix}-{callsign}")
+                        if self.roblox_username:
+                            fallback_parts.append(self.roblox_username)
+                        fallback_nickname = " | ".join(fallback_parts)
+
+                        if len(fallback_nickname) <= 32:
+                            try:
+                                await self.requester.edit(nick=fallback_nickname)
+                                nickname_success = True
+                                new_nickname = fallback_nickname
+                            except Exception as e:
+                                nickname_error = str(e)
+
+                # Update original embed
+                embed = discord.Embed(
+                    title="Callsign Request",
+                    colour=discord.Colour(0x2ecc71)
+                )
+
+                embed.add_field(
+                    name="Requested Callsign",
+                    value=f"`{self.fenz_prefix}-{callsign}`" if self.fenz_prefix else f"`{callsign}`",
+                    inline=True
+                )
+
+                embed.add_field(
+                    name="User",
+                    value=f"{self.requester.mention}",
+                    inline=True
+                )
+
+                if self.fenz_prefix:
+                    # Get the rank name from the map
+                    fenz_rank_name = None
+                    for role in self.requester.roles:
+                        if role.id in FENZ_RANK_MAP:
+                            fenz_rank_name = FENZ_RANK_MAP[role.id][0]
+                            break
+
+                    embed.add_field(
+                        name="FENZ Rank",
+                        value=f"{fenz_rank_name}" if fenz_rank_name else f"`{fenz_prefix}`",
+                        inline=True
+                    )
+
+                embed.add_field(name='Status:', value=f'Approved <:Accepted:1426930333789585509>', inline=True)
+                embed.add_field(name='Approved at:', value=f'{discord.utils.format_dt(discord.utils.utcnow())}',
+                                inline=True)
+
+                embed.timestamp = discord.utils.utcnow()
+                embed.set_footer(text=f"Approved by {interaction.user.display_name}")
+
+                embed.timestamp = discord.utils.utcnow()
+
+                # Delete thread after a short delay
+                await interaction.followup.send("Callsign approved <:Accepted:1426930333789585509>, Deleting thread <a:Load:1430912797469970444>", ephemeral=True)
+
+                # Send new message with ping in the callsign channel
+                channel = interaction.guild.get_channel(CALLSIGN_REQUEST_CHANNEL_ID)
+                if channel:
+                    await channel.send(
+                        content=f"-# ||{self.requester.mention}||",
+                        embed=embed
+                    )
+
+                # Delete the original message
+                await self.original_message.delete()
+                await asyncio.sleep(3)
+                await self.thread.delete()
+
+            except Exception as e:
+                await send_error_to_owner(interaction.client, "Counter offer approval error", e, interaction)
+                error_embed = discord.Embed(
+                    title="Error <:Denied:1426930694633816248>",
+                    description=f"An error occurred: {str(e)}",
+                    color=discord.Color.red()
+                )
+                await interaction.followup.send(embed=error_embed, ephemeral=True)
+
+        return callback
+
+    async def deny_callback(self, interaction: discord.Interaction):
+        # Check if user has the staff role
+        if not any(role.id == STAFF_ROLE_ID for role in interaction.user.roles):
+            await interaction.response.send_message(
+                "You don't have permission to deny callsigns <:Denied:1426930694633816248>",
+                ephemeral=True
+            )
+            return
+
+        # Show modal for denial reason
+        modal = DenyReasonModal(self, self.original_message, self.thread)
+        await interaction.response.send_modal(modal)
+
+class DenyModal(discord.ui.Modal, title="Deny Callsign Request"):
+    def __init__(self, view):
+        super().__init__()
+        self.view = view
+
+    offer1 = discord.ui.TextInput(
+        label="Offer 1 (Required)",
+        placeholder="Enter the first callsign offer",
+        required=True,
+        max_length=10,
+        style=discord.TextStyle.short
+    )
+
+    offer2 = discord.ui.TextInput(
+        label="Offer 2 (Optional)",
+        placeholder="Enter the second callsign offer",
+        required=False,
+        max_length=10,
+        style=discord.TextStyle.short
+    )
+
+    offer3 = discord.ui.TextInput(
+        label="Offer 3 (Optional)",
+        placeholder="Enter the third callsign offer",
+        required=False,
+        max_length=10,
+        style=discord.TextStyle.short
+    )
+
+    offer4 = discord.ui.TextInput(
+        label="Offer 4 (Optional)",
+        placeholder="Enter the fourth callsign offer",
+        required=False,
+        max_length=10,
+        style=discord.TextStyle.short
+    )
+
+    offer5 = discord.ui.TextInput(
+        label="Offer 5 (Optional)",
+        placeholder="Enter the fifth callsign offer",
+        required=False,
+        max_length=10,
+        style=discord.TextStyle.short
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            await interaction.response.defer()
+
+            # Collect all offers
+            offers = []
+            if self.offer1.value:
+                offers.append(self.offer1.value)
+            if self.offer2.value:
+                offers.append(self.offer2.value)
+            if self.offer3.value:
+                offers.append(self.offer3.value)
+            if self.offer4.value:
+                offers.append(self.offer4.value)
+            if self.offer5.value:
+                offers.append(self.offer5.value)
+
+            # Validate all offers are numeric
+            for offer in offers:
+                if not offer.isdigit():
+                    await interaction.followup.send(
+                        f"All callsign offers must be numeric only <:Denied:1426930694633816248> Invalid: `{offer}`",
+                        ephemeral=True
+                    )
+                    return
+
+                # Validate callsign is not over 999
+                if int(offer) > 999:
+                    await interaction.followup.send(
+                        f"Callsign offers must be 999 or below <:Denied:1426930694633816248> Invalid: `{offer}`",
+                        ephemeral=True
+                    )
+                    return
+
+            embed = discord.Embed(
+                title="Callsign Request",
+                colour=discord.Colour(0xf24d4d)
+            )
+
+            embed.add_field(
+                name="Requested Callsign",
+                value=f"`{self.view.fenz_prefix}-{self.view.callsign}`" if self.view.fenz_prefix else f"`{self.view.callsign}`",
+                inline=True
+            )
+
+            embed.add_field(
+                name="User",
+                value=f"{self.view.requester.mention}",
+                inline=True
+            )
+
+            if self.view.fenz_prefix:
+                # Get the rank name from the map
+                fenz_rank_name = None
+                for role in self.view.requester.roles:
+                    if role.id in FENZ_RANK_MAP:
+                        fenz_rank_name = FENZ_RANK_MAP[role.id][0]
+                        break
+
+                embed.add_field(
+                    name="FENZ Rank",
+                    value=f"{fenz_rank_name}" if fenz_rank_name else f"`{self.view.fenz_prefix}`",
+                    inline=True
+                )
+
+            embed.add_field(name='Status:', value=f'Denied <:Denied:1426930694633816248>', inline=True)
+            embed.add_field(name='Denied at:', value=f'{discord.utils.format_dt(discord.utils.utcnow())}', inline=True)
+
+            embed.timestamp = discord.utils.utcnow()
+            embed.set_footer(text=f"Denied by {interaction.user.display_name}")
+
+            # Disable Accept/Deny buttons, add Override button
+            for item in self.view.children[:]:
+                if hasattr(item, 'label') and item.label in ["Accept", "Deny"]:
+                    self.view.remove_item(item)
+
+            # Add override button
+            override_button = discord.ui.Button(
+                label="Override",
+                style=discord.ButtonStyle.danger,
+                emoji="🔓"
+            )
+
+            # Create a callback that shows modal without deferring
+            async def override_with_modal(interaction: discord.Interaction):
+                # Check if user has the staff role
+                if not any(role.id == STAFF_ROLE_ID for role in interaction.user.roles):
+                    await interaction.response.send_message(
+                        "You don't have permission to override <:Denied:1426930694633816248>",
+                        ephemeral=True
+                    )
+                    return
+
+                # Show modal directly (don't defer!)
+                modal = OverrideModal(self.view, thread)  # Pass the thread
+                await interaction.response.send_modal(modal)
+
+            override_button.callback = override_with_modal
+            self.view.add_item(override_button)
+            self.view.override_button = override_button
+
+            # Delete the original message
+            original_channel = interaction.message.channel
+            await interaction.message.delete()
+
+            # Send new message with user ping
+            new_message = await original_channel.send(
+                content=f"-# ||{self.view.requester.mention}||",
+                embed=embed,
+                view=self.view
+            )
+
+            # Update the message reference for the thread
+            interaction.message = new_message
+
+            # Create thread
+            thread_name = f"{self.view.roblox_username}'s Callsign Request" if self.view.roblox_username else f"Callsign Request - {self.view.requester.display_name}"
+            thread = await new_message.create_thread(
+                name=thread_name[:100],
+                auto_archive_duration=1440
+            )
+
+            # Create offers embed
+            offers_embed = discord.Embed(
+                title="Alternative Callsign Offers",
+                description=f"The following callsigns have been provided as options for you to choose from:",
+                color=discord.Color(0xffffff)
+            )
+
+            for i, offer in enumerate(offers, 1):
+                offers_embed.add_field(
+                    name=f"‎",
+                    value=f"`{self.view.fenz_prefix}-{offer}`" if self.view.fenz_prefix else f"`{offer}`",
+                    inline=True
+                )
+
+            offers_embed.set_footer(text="Select one of the offers below or provide your own alternative.")
+
+            # Create view with offer buttons
+            offers_view = CallsignOffersView(
+                self.view.requester,
+                offers,
+                self.view.fenz_prefix,
+                self.view.hhstj_prefix,
+                self.view.roblox_username,
+                self.view.roblox_user_id,
+                interaction.user.id,
+                interaction.user.display_name,
+                self.view.callsign,
+                new_message,  # Changed from interaction.message
+                thread
+            )
+
+            # Ping user OUTSIDE the embed
+            await thread.send(
+                content=f"{self.view.requester.mention}",
+                embed=offers_embed,
+                view=offers_view
+            )
+
+            await interaction.followup.send("Alternative offers provided successfully <:Accepted:1426930333789585509>", ephemeral=True)
+
+        except Exception as e:
+            await send_error_to_owner(interaction.client, "Deny callsign error", e, interaction)
+            error_embed = discord.Embed(
+                title="Error <:Denied:1426930694633816248>",
+                description=f"An error occurred: {str(e)}",
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=error_embed, ephemeral=True)
+
+class CallsignOffersView(discord.ui.View):
+    def __init__(self, requester: discord.Member, offers: list, fenz_prefix: str, hhstj_prefix: str,
+                 roblox_username: str, roblox_user_id: str, staff_id: int, staff_name: str,
+                 original_callsign: str, original_message: discord.Message, thread: discord.Thread):
+        super().__init__(timeout=None)
+        self.requester = requester
+        self.offers = offers
+        self.fenz_prefix = fenz_prefix
+        self.hhstj_prefix = hhstj_prefix
+        self.roblox_username = roblox_username
+        self.roblox_user_id = roblox_user_id
+        self.staff_id = staff_id
+        self.staff_name = staff_name
+        self.original_callsign = original_callsign
+        self.original_message = original_message
+        self.thread = thread
+
+        # Add buttons for each offer
+        for i, offer in enumerate(offers, 1):
+            button = discord.ui.Button(
+                label=f"{self.fenz_prefix}-{offer}"  if self.fenz_prefix else f"{offer}",
+                style=discord.ButtonStyle.primary,
+                custom_id=f"offer_{i}_{offer}"
+            )
+            button.callback = self.create_offer_callback(offer)
+            self.add_item(button)
+
+        # Add "Offer something else" button
+        other_button = discord.ui.Button(
+            label="Offer Something Else",
+            style=discord.ButtonStyle.red,
+            emoji="<:Denied:1426930694633816248>"
+        )
+        other_button.callback = self.offer_other_callback
+        self.add_item(other_button)
+
+    def create_offer_callback(self, callsign: str):
+        async def callback(interaction: discord.Interaction):
+            # Only the requester can select an offer
+            if interaction.user.id != self.requester.id:
+                await interaction.response.send_message(
+                    "Only the person who requested the callsign can select an offer <:Denied:1426930694633816248>",
+                    ephemeral=True
+                )
+                return
+
+            await interaction.response.defer()
+
+            try:
+                # Add to database
+                await add_callsign_to_database(
+                    callsign=callsign,
+                    discord_user_id=self.requester.id,
+                    discord_username=self.requester.display_name,
+                    roblox_user_id=self.roblox_user_id,
+                    roblox_username=self.roblox_username,
+                    fenz_prefix=self.fenz_prefix,
+                    hhstj_prefix=self.hhstj_prefix,
+                    approved_by_id=self.staff_id,
+                    approved_by_name=self.staff_name
+                )
+
+                # Update nickname
+                nickname_parts = []
+                if self.fenz_prefix:
+                    nickname_parts.append(f"{self.fenz_prefix}-{callsign}")
+                if self.hhstj_prefix:
+                    # If operational management (has hyphen), use as-is, otherwise add to parts
+                    if "-" not in self.hhstj_prefix:
+                        nickname_parts.append(self.hhstj_prefix)
+                if self.roblox_username:
+                    nickname_parts.append(self.roblox_username)
+
+                new_nickname = " | ".join(nickname_parts)
+                nickname_success = False
+                nickname_error = None
+
+                if len(new_nickname) <= 32:
+                    try:
+                        await self.requester.edit(nick=new_nickname)
+                        nickname_success = True
+                    except Exception as e:
+                        nickname_error = str(e)
+                else:
+                    # Fallback logic for operational management
+                    if self.hhstj_prefix and "-" in self.hhstj_prefix:
+                        # Try shortening the OM callsign (e.g., MIKE30 → MKE30)
+                        om_parts = self.hhstj_prefix.split("-")
+                        if len(om_parts) == 2:
+                            base, callsign_num = om_parts
+                            # Try shortened version (first 3 letters)
+                            shortened_prefix = f"{base[:3]}-{callsign_num}"
+
+                            fallback_parts = []
+                            if self.fenz_prefix:
+                                fallback_parts.append(f"{self.fenz_prefix}-{callsign}")
+                            fallback_parts.append(shortened_prefix)
+                            if self.roblox_username:
+                                fallback_parts.append(self.roblox_username)
+                            fallback_nickname = " | ".join(fallback_parts)
+
+                            if len(fallback_nickname) <= 32:
+                                try:
+                                    await self.requester.edit(nick=fallback_nickname)
+                                    nickname_success = True
+                                    new_nickname = fallback_nickname
+                                except Exception as e:
+                                    nickname_error = str(e)
+                            else:
+                                # Try just the base OM rank (e.g., WOM)
+                                fallback_parts = []
+                                if self.fenz_prefix:
+                                    fallback_parts.append(f"{self.fenz_prefix}-{callsign}")
+                                fallback_parts.append(base)
+                                if self.roblox_username:
+                                    fallback_parts.append(self.roblox_username)
+                                fallback_nickname = " | ".join(fallback_parts)
+
+                                if len(fallback_nickname) <= 32:
+                                    try:
+                                        await self.requester.edit(nick=fallback_nickname)
+                                        nickname_success = True
+                                        new_nickname = fallback_nickname
+                                    except Exception as e:
+                                        nickname_error = str(e)
+                                else:
+                                    # Last resort: Drop OM entirely
+                                    fallback_parts = []
+                                    if self.fenz_prefix:
+                                        fallback_parts.append(f"{self.fenz_prefix}-{callsign}")
+                                    if self.roblox_username:
+                                        fallback_parts.append(self.roblox_username)
+                                    fallback_nickname = " | ".join(fallback_parts)
+
+                                    if len(fallback_nickname) <= 32:
+                                        try:
+                                            await self.requester.edit(nick=fallback_nickname)
+                                            nickname_success = True
+                                            new_nickname = fallback_nickname
+                                        except Exception as e:
+                                            nickname_error = str(e)
+                    else:
+                        # Non-OM: just drop HHStJ clinical rank
+                        fallback_parts = []
+                        if self.fenz_prefix:
+                            fallback_parts.append(f"{self.fenz_prefix}-{callsign}")
+                        if self.roblox_username:
+                            fallback_parts.append(self.roblox_username)
+                        fallback_nickname = " | ".join(fallback_parts)
+
+                        if len(fallback_nickname) <= 32:
+                            try:
+                                await self.requester.edit(nick=fallback_nickname)
+                                nickname_success = True
+                                new_nickname = fallback_nickname
+                            except Exception as e:
+                                nickname_error = str(e)
+
+                # Update original embed to approved
+                embed = discord.Embed(
+                    title="Callsign Request",
+                    description="This callsign request has been approved.",
+                    color=discord.Color.green()
+                )
+
+                embed = discord.Embed(
+                    title="Callsign Request",
+                    colour=discord.Colour(0x2ecc71)
+                )
+
+                embed.add_field(
+                    name="Requested Callsign",
+                    value=f"`{self.fenz_prefix}-{callsign}`" if self.fenz_prefix else f"`{self.callsign}`",
+                    inline=True
+                )
+
+                embed.add_field(
+                    name="User",
+                    value=f"{self.requester.mention}",
+                    inline=True
+                )
+
+                if self.fenz_prefix:
+                    # Get the rank name from the map
+                    fenz_rank_name = None
+                    for role in self.requester.roles:
+                        if role.id in FENZ_RANK_MAP:
+                            fenz_rank_name = FENZ_RANK_MAP[role.id][0]
+                            break
+
+                    embed.add_field(
+                        name="FENZ Rank",
+                        value=f"{fenz_rank_name}" if fenz_rank_name else f"`{fenz_prefix}`",
+                        inline=True
+                    )
+
+                embed.add_field(name='Status:', value=f'Approved <:Accepted:1426930333789585509>', inline=True)
+                embed.add_field(name='Approved at:', value=f'{discord.utils.format_dt(discord.utils.utcnow())}',
+                                inline=True)
+
+                embed.timestamp = discord.utils.utcnow()
+                embed.set_footer(text=f"Approved by {interaction.user.display_name}")
+
+                embed.timestamp = discord.utils.utcnow()
+
+                # Delete thread after a short delay
+                await interaction.followup.send("Callsign approved <:Accepted:1426930333789585509>, Deleting thread <a:Load:1430912797469970444>", ephemeral=True)
+
+                # Send new message with ping in the callsign channel
+                channel = interaction.guild.get_channel(CALLSIGN_REQUEST_CHANNEL_ID)
+                if channel:
+                    await channel.send(
+                        content=f"-# ||{self.requester.mention}||",
+                        embed=embed
+                    )
+
+                # Delete the original message
+                await self.original_message.delete()
+                await asyncio.sleep(3)
+                await self.thread.delete()
+
+            except Exception as e:
+                await send_error_to_owner(interaction.client, "Offer acceptance error", e, interaction)
+                error_embed = discord.Embed(
+                    title="Error <:Denied:1426930694633816248>",
+                    description=f"An error occurred: {str(e)}",
+                    color=discord.Color.red()
+                )
+                await interaction.followup.send(embed=error_embed, ephemeral=True)
+
+        return callback
+
+    async def offer_other_callback(self, interaction: discord.Interaction):
+        # Only the requester can offer something else
+        if interaction.user.id != self.requester.id:
+            await interaction.response.send_message(
+                "Only the person who requested the callsign can offer alternatives <:Denied:1426930694633816248>",
+                ephemeral=True
+            )
+            return
+
+        # Show modal for counter offer
+        modal = CounterOfferModal(self, self.thread, self.original_message)
+        await interaction.response.send_modal(modal)
+
+class CallsignRequestView(discord.ui.View):
+    def __init__(self, requester: discord.Member, callsign: str, fenz_prefix: str, hhstj_prefix: str,
+            roblox_username: str, roblox_user_id: str):
+        super().__init__(timeout=None)
+        self.requester = requester
+        self.callsign = callsign
+        self.fenz_prefix = fenz_prefix
+        self.hhstj_prefix = hhstj_prefix
+        self.roblox_username = roblox_username
+        self.roblox_user_id = roblox_user_id
+
+    @discord.ui.button(label="Accept", style=discord.ButtonStyle.success, emoji="<:Accepted:1426930333789585509>")
+    async def accept_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Check if user has the staff role
+        if not any(role.id == STAFF_ROLE_ID for role in interaction.user.roles):
+            await interaction.response.send_message(
+                "You don't have permission to approve callsigns <:Denied:1426930694633816248>",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.defer()
+
+        try:
+            # Add to database
+            await add_callsign_to_database(
+                callsign=self.callsign,
+                discord_user_id=self.requester.id,
+                discord_username=self.requester.display_name,
+                roblox_user_id=self.roblox_user_id,
+                roblox_username=self.roblox_username,
+                fenz_prefix=self.fenz_prefix,
+                hhstj_prefix=self.hhstj_prefix,
+                approved_by_id=interaction.user.id,
+                approved_by_name=interaction.user.display_name
+            )
+
+            # Update nickname
+            nickname_parts = []
+            if self.fenz_prefix:
+                nickname_parts.append(f"{self.fenz_prefix}-{self.callsign}")
+            if self.hhstj_prefix:
+                # If operational management (has hyphen), use as-is, otherwise add to parts
+                if "-" not in self.hhstj_prefix:
+                    nickname_parts.append(self.hhstj_prefix)
+            if self.roblox_username:
+                nickname_parts.append(self.roblox_username)
+            new_nickname = " | ".join(nickname_parts)
+            nickname_success = False
+            nickname_error = None
+
+            if len(new_nickname) <= 32:
+                try:
+                    await self.requester.edit(nick=new_nickname)
+                    nickname_success = True
+                except Exception as e:
+                    nickname_error = str(e)
+            else:
+                # Fallback logic for operational management
+                if self.hhstj_prefix and "-" in self.hhstj_prefix:
+                    # Try shortening the OM callsign (e.g., MIKE30 → MKE30)
+                    om_parts = self.hhstj_prefix.split("-")
+                    if len(om_parts) == 2:
+                        base, callsign_num = om_parts
+                        # Try shortened version (first 3 letters)
+                        shortened_prefix = f"{base[:3]}-{callsign_num}"
+
+                        fallback_parts = []
+                        if self.fenz_prefix:
+                            fallback_parts.append(f"{self.fenz_prefix}-{callsign}")
+                        fallback_parts.append(shortened_prefix)
+                        if self.roblox_username:
+                            fallback_parts.append(self.roblox_username)
+                        fallback_nickname = " | ".join(fallback_parts)
+
+                        if len(fallback_nickname) <= 32:
+                            try:
+                                await self.requester.edit(nick=fallback_nickname)
+                                nickname_success = True
+                                new_nickname = fallback_nickname
+                            except Exception as e:
+                                nickname_error = str(e)
+                        else:
+                            # Try just the base OM rank (e.g., WOM)
+                            fallback_parts = []
+                            if self.fenz_prefix:
+                                fallback_parts.append(f"{self.fenz_prefix}-{callsign}")
+                            fallback_parts.append(base)
+                            if self.roblox_username:
+                                fallback_parts.append(self.roblox_username)
+                            fallback_nickname = " | ".join(fallback_parts)
+
+                            if len(fallback_nickname) <= 32:
+                                try:
+                                    await self.requester.edit(nick=fallback_nickname)
+                                    nickname_success = True
+                                    new_nickname = fallback_nickname
+                                except Exception as e:
+                                    nickname_error = str(e)
+                            else:
+                                # Last resort: Drop OM entirely
+                                fallback_parts = []
+                                if self.fenz_prefix:
+                                    fallback_parts.append(f"{self.fenz_prefix}-{callsign}")
+                                if self.roblox_username:
+                                    fallback_parts.append(self.roblox_username)
+                                fallback_nickname = " | ".join(fallback_parts)
+
+                                if len(fallback_nickname) <= 32:
+                                    try:
+                                        await self.requester.edit(nick=fallback_nickname)
+                                        nickname_success = True
+                                        new_nickname = fallback_nickname
+                                    except Exception as e:
+                                        nickname_error = str(e)
+                else:
+                    # Non-OM: just drop HHStJ clinical rank
+                    fallback_parts = []
+                    if self.fenz_prefix:
+                        fallback_parts.append(f"{self.fenz_prefix}-{callsign}")
+                    if self.roblox_username:
+                        fallback_parts.append(self.roblox_username)
+                    fallback_nickname = " | ".join(fallback_parts)
+
+                    if len(fallback_nickname) <= 32:
+                        try:
+                            await self.requester.edit(nick=fallback_nickname)
+                            nickname_success = True
+                            new_nickname = fallback_nickname
+                        except Exception as e:
+                            nickname_error = str(e)
+
+            # Update embed
+            embed = discord.Embed(
+                title="Callsign Request",
+                colour=discord.Colour(0x2ecc71)
+            )
+
+            embed.add_field(
+                name="Requested Callsign",
+                value=f"`{self.fenz_prefix}-{self.callsign}`" if self.fenz_prefix else f"`{self.callsign}`",
+                inline=True
+            )
+
+            embed.add_field(
+                name="User",
+                value=f"{self.requester.mention}",
+                inline=True
+            )
+
+            if self.fenz_prefix:
+                # Get the rank name from the map
+                fenz_rank_name = None
+                for role in self.requester.roles:
+                    if role.id in FENZ_RANK_MAP:
+                        fenz_rank_name = FENZ_RANK_MAP[role.id][0]
+                        break
+
+                embed.add_field(
+                    name="FENZ Rank",
+                    value=f"{fenz_rank_name}" if fenz_rank_name else f"`{fenz_prefix}`",
+                    inline=True
+                )
+
+            embed.add_field(name='Status:', value=f'Approved <:Accepted:1426930333789585509>', inline=True)
+            embed.add_field(name='Approved at:', value=f'{discord.utils.format_dt(discord.utils.utcnow())}',
+                            inline=True)
+
+            embed.timestamp = discord.utils.utcnow()
+            embed.set_footer(text=f"Approved by {interaction.user.display_name}")
+
+            embed.timestamp = discord.utils.utcnow()
+
+            # Delete the original message
+            await interaction.message.delete()
+
+            # Send new message with ping
+            await interaction.channel.send(
+                content=f"-# ||{self.requester.mention}||",
+                embed=embed
+            )
+
+            await interaction.followup.send("Callsign approved <:Accepted:1426930333789585509>", ephemeral=True)
+        except Exception as e:
+            await send_error_to_owner(interaction.client, "Callsign approval error", e, interaction)
+            error_embed = discord.Embed(
+                title="Error <:Denied:1426930694633816248>",
+                description=f"An error occurred: {str(e)}",
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=error_embed, ephemeral=True)
+
+    @discord.ui.button(label="Deny", style=discord.ButtonStyle.danger, emoji="<:Denied:1426930694633816248>")
+    async def deny_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Check if user has the staff role
+        if not any(role.id == STAFF_ROLE_ID for role in interaction.user.roles):
+            await interaction.response.send_message(
+                "You don't have permission to deny callsigns <:Denied:1426930694633816248>",
+                ephemeral=True
+            )
+            return
+
+        # Show modal for deny with offers
+        modal = DenyModal(self)
+        await interaction.response.send_modal(modal)
+
+    async def override_callback(self, interaction: discord.Interaction):
+        """Show modal to enter a new callsign for override approval"""
+        # Check if user has the staff role
+        if not any(role.id == STAFF_ROLE_ID for role in interaction.user.roles):
+            await interaction.response.send_message(
+                "You don't have permission to override <:Denied:1426930694633816248>",
+                ephemeral=True
+            )
+            return
+
+        # Show modal for new callsign
+        modal = OverrideModal(self)
+        await interaction.response.send_modal(modal)
+
+        try:
+            # Add to database
+            await add_callsign_to_database(
+                callsign=self.callsign,
+                discord_user_id=self.requester.id,
+                discord_username=self.requester.display_name,
+                roblox_user_id=self.roblox_user_id,
+                roblox_username=self.roblox_username,
+                fenz_prefix=self.fenz_prefix,
+                hhstj_prefix=self.hhstj_prefix,
+                approved_by_id=interaction.user.id,
+                approved_by_name=interaction.user.display_name
+            )
+
+            # Update nickname (same logic as accept button)
+            nickname_parts = []
+            if self.fenz_prefix:
+                nickname_parts.append(f"{self.fenz_prefix}-{self.callsign}")
+            if self.hhstj_prefix:
+                if "-" not in self.hhstj_prefix:
+                    nickname_parts.append(self.hhstj_prefix)
+            if self.roblox_username:
+                nickname_parts.append(self.roblox_username)
+
+            new_nickname = " | ".join(nickname_parts)
+            nickname_success = False
+            nickname_error = None
+
+            if len(new_nickname) <= 32:
+                try:
+                    await self.requester.edit(nick=new_nickname)
+                    nickname_success = True
+                except Exception as e:
+                    nickname_error = str(e)
+            else:
+                # Fallback logic for operational management
+                if self.hhstj_prefix and "-" in self.hhstj_prefix:
+                    om_parts = self.hhstj_prefix.split("-")
+                    if len(om_parts) == 2:
+                        base, callsign_num = om_parts
+                        shortened_prefix = f"{base[:3]}-{callsign_num}"
+
+                        fallback_parts = []
+                        if self.fenz_prefix:
+                            fallback_parts.append(f"{self.fenz_prefix}-{self.callsign}")
+                        fallback_parts.append(shortened_prefix)
+                        if self.roblox_username:
+                            fallback_parts.append(self.roblox_username)
+                        fallback_nickname = " | ".join(fallback_parts)
+
+                        if len(fallback_nickname) <= 32:
+                            try:
+                                await self.requester.edit(nick=fallback_nickname)
+                                nickname_success = True
+                                new_nickname = fallback_nickname
+                            except Exception as e:
+                                nickname_error = str(e)
+                        else:
+                            fallback_parts = []
+                            if self.fenz_prefix:
+                                fallback_parts.append(f"{self.fenz_prefix}-{self.callsign}")
+                            fallback_parts.append(base)
+                            if self.roblox_username:
+                                fallback_parts.append(self.roblox_username)
+                            fallback_nickname = " | ".join(fallback_parts)
+
+                            if len(fallback_nickname) <= 32:
+                                try:
+                                    await self.requester.edit(nick=fallback_nickname)
+                                    nickname_success = True
+                                    new_nickname = fallback_nickname
+                                except Exception as e:
+                                    nickname_error = str(e)
+                            else:
+                                fallback_parts = []
+                                if self.fenz_prefix:
+                                    fallback_parts.append(f"{self.fenz_prefix}-{self.callsign}")
+                                if self.roblox_username:
+                                    fallback_parts.append(self.roblox_username)
+                                fallback_nickname = " | ".join(fallback_parts)
+
+                                if len(fallback_nickname) <= 32:
+                                    try:
+                                        await self.requester.edit(nick=fallback_nickname)
+                                        nickname_success = True
+                                        new_nickname = fallback_nickname
+                                    except Exception as e:
+                                        nickname_error = str(e)
+                else:
+                    fallback_parts = []
+                    if self.fenz_prefix:
+                        fallback_parts.append(f"{self.fenz_prefix}-{self.callsign}")
+                    if self.roblox_username:
+                        fallback_parts.append(self.roblox_username)
+                    fallback_nickname = " | ".join(fallback_parts)
+
+                    if len(fallback_nickname) <= 32:
+                        try:
+                            await self.requester.edit(nick=fallback_nickname)
+                            nickname_success = True
+                            new_nickname = fallback_nickname
+                        except Exception as e:
+                            nickname_error = str(e)
+
+            # Update embed to show override approval
+            embed = discord.Embed(
+                title="Callsign Request",
+                colour=discord.Colour(0x2ecc71)
+            )
+
+            embed.add_field(
+                name="Requested Callsign",
+                value=f"`{self.fenz_prefix}-{self.callsign}`" if self.fenz_prefix else f"`{self.callsign}`",
+                inline=True
+            )
+
+            embed.add_field(
+                name="User",
+                value=f"{self.requester.mention}",
+                inline=True
+            )
+
+            if self.fenz_prefix:
+                fenz_rank_name = None
+                for role in self.requester.roles:
+                    if role.id in FENZ_RANK_MAP:
+                        fenz_rank_name = FENZ_RANK_MAP[role.id][0]
+                        break
+
+                embed.add_field(
+                    name="FENZ Rank",
+                    value=f"{fenz_rank_name}" if fenz_rank_name else f"`{self.fenz_prefix}`",
+                    inline=True
+                )
+
+            embed.add_field(name='Status:', value=f'Approved (Override) <:Accepted:1426930333789585509>', inline=True)
+            embed.add_field(name='Approved at:', value=f'{discord.utils.format_dt(discord.utils.utcnow())}',
+                            inline=True)
+
+            embed.timestamp = discord.utils.utcnow()
+            embed.set_footer(text=f"Overridden by {interaction.user.display_name}")
+
+            # Delete the original message
+            await interaction.message.delete()
+
+            # Send new message with ping
+            await interaction.channel.send(
+                content=f"-# ||{self.requester.mention}||",
+                embed=embed
+            )
+
+            await interaction.followup.send("Callsign approved via override <:Accepted:1426930333789585509>",
+                                            ephemeral=True)
+
+        except Exception as e:
+            await send_error_to_owner(interaction.client, "Override approval error", e, interaction)
+            error_embed = discord.Embed(
+                title="Error <:Denied:1426930694633816248>",
+                description=f"An error occurred: {str(e)}",
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=error_embed, ephemeral=True)
+
+class CallsignCog(commands.Cog):
+    # Define command group as CLASS ATTRIBUTE (before __init__)
+    callsign_group = app_commands.Group(name="callsign", description="Callsign management commands")
+
+    async def get_roblox_user_info(self, username: str):
+        """Get Roblox user ID from username"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                        'https://users.roblox.com/v1/usernames/users',
+                        json={"usernames": [username], "excludeBannedUsers": True}
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if data.get('data') and len(data['data']) > 0:
+                            user_data = data['data'][0]
+                            return {
+                                'id': str(user_data['id']),
+                                'username': user_data['name'],
+                                'display_name': user_data['displayName']
+                            }
+            return None
+        except Exception as e:
+            print(f"Error fetching Roblox user: {e}")
+            return None
+
+    async def get_bloxlink_data(self, user_id: int, guild_id: int):
+        """Get Roblox info from Bloxlink API"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                        f'https://api.blox.link/v4/public/guilds/{guild_id}/discord-to-roblox/{user_id}',
+                        headers={'Authorization': BLOXLINK_API_KEY}
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        print(f"Bloxlink API Response: {data}")  # Debug line
+                        return {
+                            'id': str(data['robloxID'])
+                        }
+            return None
+        except Exception as e:
+            print(f"Error fetching from Bloxlink: {e}")
+            return None
+
+    async def get_roblox_user_from_id(self, user_id: str):
+        """Get Roblox username from user ID"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                        f'https://users.roblox.com/v1/users/{user_id}'
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        return {
+                            'id': str(data['id']),
+                            'username': data['name'],
+                            'display_name': data['displayName']
+                        }
+            return None
+        except Exception as e:
+            print(f"Error fetching Roblox user from ID: {e}")
+            return None
+
+    @callsign_group.command(name="request", description="Request a callsign.")
+    @app_commands.describe(callsign="The numeric callsign you want e.g.20 (must be under 1000).")
+    async def request_callsign(self, interaction: discord.Interaction, callsign: str):
+        await interaction.response.send_message("Processing <a:Load:1430912797469970444>", ephemeral=True)
+        # Get Roblox data from Bloxlink
+        bloxlink_data = await self.get_bloxlink_data(interaction.user.id, interaction.guild.id)
+
+        if not bloxlink_data:
+            error_embed = discord.Embed(
+                title="Not Linked <:Denied:1426930694633816248>",
+                description="You must link your Roblox account with Bloxlink first!\nUse `/verify` to link your account.",
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=error_embed, ephemeral=True)
+            return
+
+        roblox_user_id = bloxlink_data['id']
+        roblox_username = roblox_data['username']
+        roblox_data = await self.get_roblox_user_from_id(roblox_user_id)
+
+        if not roblox_data:
+            error_embed = discord.Embed(
+                title="Error <:Denied:1426930694633816248>",
+                description="Could not fetch your Roblox profile. Please try again later.",
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=error_embed, ephemeral=True)
+            return
+
+        # Validate callsign is numeric
+        if not callsign.isdigit():
+            error_embed = discord.Embed(
+                title="Invalid Callsign <:Denied:1426930694633816248>",
+                description="Callsign must be numeric only (e.g., 101, 202, 303)",
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=error_embed, ephemeral=True)
+            return
+            # ADD THIS: Validate callsign is not over 999
+        if int(callsign) > 999:
+            error_embed = discord.Embed(
+                title="Invalid Callsign <:Denied:1426930694633816248>",
+                description="Callsign must be 999 or below (e.g., 101, 202, 999)",
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=error_embed, ephemeral=True)
+            return
+
+        # Find FENZ prefix
+        fenz_prefix = None
+        for role in interaction.user.roles:
+            if role.id in FENZ_RANK_MAP:
+                fenz_prefix = FENZ_RANK_MAP[role.id][1]
+                break
+
+        # Find HHStJ prefix
+        hhstj_prefix = None
+        for role in interaction.user.roles:
+            if role.id in HHSTJ_RANK_MAP:
+                hhstj_prefix = HHSTJ_RANK_MAP[role.id][1]
+                break
+
+        # Verify user has at least one rank
+        if not fenz_prefix and not hhstj_prefix:
+            error_embed = discord.Embed(
+                title="No Rank Role <:Denied:1426930694633816248>",
+                description="You must have a FENZ or HHStJ rank role to request a callsign!",
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=error_embed, ephemeral=True)
+            return
+
+        # Build the request embed
+        request_embed = discord.Embed(
+            title="Callsign Request",
+            color=discord.Color(0xffffff)
+        )
+
+        request_embed.add_field(
+            name="Requested Callsign",
+            value=f"`{fenz_prefix}-{callsign}`" if fenz_prefix else f"`{callsign}`",
+            inline=True
+        )
+
+        request_embed.add_field(
+            name="User",
+            value=f"{interaction.user.mention}",
+            inline=True
+        )
+
+        if fenz_prefix:
+            # Get the rank name from the map
+            fenz_rank_name = None
+            for role in interaction.user.roles:
+                if role.id in FENZ_RANK_MAP:
+                    fenz_rank_name = FENZ_RANK_MAP[role.id][0]
+
+        request_embed.add_field(
+            name="FENZ Rank",
+            value=f"{fenz_rank_name}" if fenz_rank_name else f"`{fenz_prefix}`",
+            inline=True
+        )
+
+        request_embed.add_field(name='Status:', value=f'Awaiting Review <a:Load:1430912797469970444>', inline=True)
+        request_embed.add_field(name='Requested at:', value=f'{discord.utils.format_dt(discord.utils.utcnow())}',
+                                inline=True)
+
+        request_embed.timestamp = discord.utils.utcnow()
+        request_embed.set_footer(text=f"Requested by {interaction.user.display_name}")
+
+        # Create the view
+        view = CallsignRequestView(
+            interaction.user,
+            callsign,
+            fenz_prefix,
+            hhstj_prefix,
+            roblox_username,
+            roblox_user_id
+        )
+
+        # Get the request channel
+        channel = interaction.guild.get_channel(CALLSIGN_REQUEST_CHANNEL_ID)
+
+        if not channel:
+            error_embed = discord.Embed(
+                title="Configuration Error <:Denied:1426930694633816248>",
+                description="Callsign request channel not found. Please contact an administrator.",
+                color=discord.Color.red()
+            )
+
+            await interaction.followup.send(embed=error_embed, ephemeral=True)
+
+
+        # Send to channel
+        await channel.send(
+            content=f"-# ||<@&{STAFF_ROLE_ID}>||",
+            embed=request_embed,
+            view=view
+        )
+
+        success_embed = discord.Embed(
+            title="Request Submitted <:Accepted:1426930333789585509>",
+            description=f"Your callsign request for `{fenz_prefix}-{callsign}` has been submitted!" if fenz_prefix else f"Your callsign request for `{callsign}` has been submitted!",
+            color=discord.Color.green()
+        )
+
+        success_embed.add_field(
+            name="What's Next?",
+            value="<@&1285474077556998196> will review your request. You'll be notified once it's been processed.",
+            inline=False
+        )
+        await interaction.followup.send(embed=success_embed, ephemeral=True)
+
+        # Delete the processing message
+        try:
+            await interaction.delete_original_response()
+        except:
+            pass  # If it fails, no big deal
+        return
 
 async def setup(bot):
-    await bot.add_cog(PingLoggerCog(bot))
+    """This function is called when the cog is loaded"""
+    await bot.add_cog(CallsignCog(bot))
