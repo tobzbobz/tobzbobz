@@ -43,7 +43,7 @@ STATUS_CHANNEL_ID = 1429492069289693184
 DEVELOPMENT_MODE = False
 
 # Aggressive command sync
-AGGRESSIVE_SYNC = True
+AGGRESSIVE_SYNC = True  # ← CHANGE THIS TO True TEMPORARILY
 
 
 async def health_check(request):
@@ -63,6 +63,7 @@ async def start_web_server():
     site = web.TCPSite(runner, '0.0.0.0', 8080)
     await site.start()
     print('🌐 Health server started on port 8080')
+
 
 class Client(commands.Bot):
     def __init__(self, *args, **kwargs):
@@ -111,6 +112,7 @@ class Client(commands.Bot):
             except Exception as e:
                 self.failed_cogs.append(cog_name)
                 print(f'❌ Failed to load {cog_name}: {e}')
+                traceback.print_exc()  # ← Added to see full error
 
         if self.loaded_cogs:
             print(f'✅ Loaded cogs: {", ".join(self.loaded_cogs)}')
@@ -297,6 +299,10 @@ class Client(commands.Bot):
         # Errors are now handled by LoggingCog, this is just for backward compatibility
         pass
 
+
+# ========================================
+# Create bot instance
+# ========================================
 handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
 intents = discord.Intents.default()
 intents.message_content = True
@@ -306,6 +312,48 @@ intents.presences = True
 intents.voice_states = True
 client = Client(command_prefix='!', intents=intents)
 
+
+# ========================================
+# Owner-only commands (AFTER client is created)
+# ========================================
+
+@client.command(name='forcesync')
+@commands.is_owner()
+async def force_sync(ctx):
+    """Force sync all commands (owner only)"""
+    await ctx.send("🔄 Force syncing commands...")
+
+    try:
+        # Sync to all configured guilds
+        sync_results = []
+        for guild_id in GUILD_IDS:
+            guild = discord.Object(id=guild_id)
+            synced = await client.tree.sync(guild=guild)
+            sync_results.append(f"{guild_id}: {len(synced)} commands")
+
+        result_text = "\n".join(sync_results)
+        await ctx.send(f"✅ Synced commands:\n```{result_text}```")
+    except Exception as e:
+        await ctx.send(f"❌ Sync failed: {e}")
+        traceback.print_exc()
+
+
+@client.command(name='listcogs')
+@commands.is_owner()
+async def list_cogs(ctx):
+    """List all loaded cogs (owner only)"""
+    loaded = "\n".join([f"• {cog}" for cog in client.loaded_cogs]) or "None"
+    failed = "\n".join([f"• {cog}" for cog in client.failed_cogs]) or "None"
+
+    embed = discord.Embed(title="Loaded Cogs", color=discord.Color.blue())
+    embed.add_field(name="✅ Loaded", value=loaded, inline=False)
+    embed.add_field(name="❌ Failed", value=failed, inline=False)
+    await ctx.send(embed=embed)
+
+
+# ========================================
+# Run the bot
+# ========================================
 try:
     client.run(token, log_handler=handler, log_level=logging.DEBUG)
 except Exception as e:

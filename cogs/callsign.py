@@ -567,7 +567,7 @@ class CounterOfferApprovalView(discord.ui.View):
         self.thread = thread
 
         # Add buttons for each offer
-        for i, offer in enumerate   (offers, 1):
+        for i, offer in enumerate(offers, 1):
             button = discord.ui.Button(
                 label=f"{self.fenz_prefix}-{offer}",
                 style=discord.ButtonStyle.primary,
@@ -1196,7 +1196,7 @@ class CallsignOffersView(discord.ui.View):
 
                     embed.add_field(
                         name="FENZ Rank",
-                        value=f"{fenz_rank_name}" if fenz_rank_name else f"`{fenz_prefix}`",
+                        value=f"{fenz_rank_name}" if fenz_rank_name else f"`{self.fenz_prefix}`",
                         inline=True
                     )
 
@@ -2171,6 +2171,20 @@ class CallsignCog(commands.Cog):
             import traceback
             traceback.print_exc()
 
+
 async def setup(bot):
     """This function is called when the cog is loaded"""
-    await bot.add_cog(CallsignCog(bot))
+    print("🔄 Loading CallsignCog...")
+    try:
+        cog = CallsignCog(bot)
+        await bot.add_cog(cog)
+        print(f"✅ CallsignCog loaded successfully with {len(cog.callsign_group.commands)} commands")
+
+        # List the commands
+        for cmd in cog.callsign_group.commands:
+            print(f"   • /callsign {cmd.name}")
+    except Exception as e:
+        print(f"❌ Failed to load CallsignCog: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
