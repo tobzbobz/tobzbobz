@@ -619,7 +619,7 @@ class CounterOfferApprovalView(discord.ui.View):
             await interaction.response.defer()
 
             # Check if callsign already exists
-            existing = await check_callsign_exists(callsign)
+            existing = await check_callsign_exists(self.callsign)
             if existing and existing['discord_user_id'] != self.requester.id:
                 await interaction.followup.send(
                     f"❌ Callsign `{self.fenz_prefix}-{self.callsign}` is already occupied by <@{existing['discord_user_id']}>. Please click deny on this request and offer an alternative callsign.",
@@ -1106,7 +1106,7 @@ class CallsignOffersView(discord.ui.View):
             existing = await check_callsign_exists(callsign)
             if existing and existing['discord_user_id'] != self.requester.id:
                 await interaction.followup.send(
-                    f"❌ Callsign `{self.fenz_prefix}-{self.callsign}` is already occupied by <@{existing['discord_user_id']}>. Please click deny on this request and offer an alternative callsign.",
+                    f"❌ Callsign `{self.fenz_prefix}-{callsign}` is already occupied by <@{existing['discord_user_id']}>. Please click deny on this request and offer an alternative callsign.",
                     ephemeral=True
                 )
                 return
@@ -1355,7 +1355,7 @@ class CallsignRequestView(discord.ui.View):
         existing = await check_callsign_exists(callsign)
         if existing and existing['discord_user_id'] != self.requester.id:
             await interaction.followup.send(
-                f"❌ Callsign `{self.fenz_prefix}-{self.callsign}` is already occupied by <@{existing['discord_user_id']}>. Please click deny on this request and offer an alternative callsign.",
+                f"❌ Callsign `{self.fenz_prefix}-{callsign}` is already occupied by <@{existing['discord_user_id']}>. Please click deny on this request and offer an alternative callsign.",
                 ephemeral=True
             )
             return
