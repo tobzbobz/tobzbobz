@@ -619,7 +619,7 @@ class CounterOfferApprovalView(discord.ui.View):
             await interaction.response.defer()
 
             # Check if callsign already exists
-            existing = await check_callsign_exists(self.callsign)
+            existing = await check_callsign_exists(callsign)
             if existing and existing['discord_user_id'] != self.requester.id:
                 await interaction.followup.send(
                     f"❌ Callsign `{self.fenz_prefix}-{self.callsign}` is already occupied by <@{existing['discord_user_id']}>. Please deny this request and offer an alternative callsign.",
@@ -1103,7 +1103,7 @@ class CallsignOffersView(discord.ui.View):
             await interaction.response.defer()
 
             # Check if callsign already exists
-            existing = await check_callsign_exists(self.callsign)
+            existing = await check_callsign_exists(callsign)
             if existing and existing['discord_user_id'] != self.requester.id:
                 await interaction.followup.send(
                     f"❌ Callsign `{self.fenz_prefix}-{self.callsign}` is already occupied by <@{existing['discord_user_id']}>. Please deny this request and offer an alternative callsign.",
@@ -1352,7 +1352,7 @@ class CallsignRequestView(discord.ui.View):
         await interaction.response.defer()
 
         # Check if callsign already exists
-        existing = await check_callsign_exists(self.callsign)
+        existing = await check_callsign_exists(callsign)
         if existing and existing['discord_user_id'] != self.requester.id:
             await interaction.followup.send(
                 f"❌ Callsign `{self.fenz_prefix}-{self.callsign}` is already occupied by <@{existing['discord_user_id']}>. Please deny this request and offer an alternative callsign.",
@@ -1593,7 +1593,7 @@ class CallsignRequestView(discord.ui.View):
             async with db.pool.acquire() as conn:
                 row = await conn.fetchrow(
                     'SELECT id FROM callsigns WHERE discord_user_id = $1',
-                    self.requester.id
+                    self.view.requester.id
                 )
                 callsign_id = row['id'] if row else None
 
