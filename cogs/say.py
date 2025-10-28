@@ -53,7 +53,6 @@ class EditTextModal(discord.ui.Modal, title='Edit Message'):
 
         except Exception as e:
             print(f'Error editing message: {e}')
-            await self.bot.send_error_dm('EditTextModal submission error', e, interaction)
 
             error_embed = discord.Embed(
                 description=f'Error <:Denied:1426930694633816248>: {e}',
@@ -64,6 +63,7 @@ class EditTextModal(discord.ui.Modal, title='Edit Message'):
             except:
                 pass
 
+            raise
 
 class EmbedModal(discord.ui.Modal, title='Create Embed'):
     embed_title = discord.ui.TextInput(
@@ -153,7 +153,6 @@ class EmbedModal(discord.ui.Modal, title='Create Embed'):
         except Exception as e:
             print(f'Error sending embed: {e}')
             # Send error DM to owner
-            await self.bot.send_error_dm('EmbedModal submission error', e, interaction)
 
             error_embed = discord.Embed(
                 description=f'Error <:Denied:1426930694633816248>: {e}',
@@ -163,6 +162,8 @@ class EmbedModal(discord.ui.Modal, title='Create Embed'):
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
             except:
                 pass  # Response might already be sent
+
+            raise
 
 
 class EditEmbedModal(discord.ui.Modal, title='Edit Embed'):
@@ -269,7 +270,6 @@ class EditEmbedModal(discord.ui.Modal, title='Edit Embed'):
 
         except Exception as e:
             print(f'Error editing embed: {e}')
-            await self.bot.send_error_dm('EditEmbedModal submission error', e, interaction)
 
             error_embed = discord.Embed(
                 description=f'Error <:Denied:1426930694633816248>: {e}',
@@ -279,6 +279,8 @@ class EditEmbedModal(discord.ui.Modal, title='Edit Embed'):
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
             except:
                 pass
+
+            raise
 
 
 class SayCog(commands.Cog):
@@ -450,7 +452,6 @@ class SayCog(commands.Cog):
         except Exception as e:
             print(f'Error in say text command: {e}')
             # Send error DM to owner
-            await self.bot.send_error_dm('Say text command error', e, interaction)
 
             error_embed = discord.Embed(
                 description=f'Error <:Denied:1426930694633816248>: {e}',
@@ -460,6 +461,9 @@ class SayCog(commands.Cog):
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
             else:
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
+
+            raise
+
     @say_text.autocomplete('edit')
     async def edit_text_autocomplete(
             self,
@@ -601,7 +605,6 @@ class SayCog(commands.Cog):
         except Exception as e:
             print(f'Error in say embed command: {e}')
             # Send error DM to owner
-            await self.bot.send_error_dm('Say embed command error', e, interaction)
 
             error_embed = discord.Embed(
                 description=f'Error <:Denied:1426930694633816248>: {e}',
@@ -611,6 +614,9 @@ class SayCog(commands.Cog):
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
             else:
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
+
+            raise
+
     @say_embed.autocomplete('edit')
     async def edit_embed_autocomplete(
             self,

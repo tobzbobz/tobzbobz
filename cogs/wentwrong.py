@@ -69,7 +69,6 @@ class WentWrongCog(commands.Cog):
         except Exception as e:
             print(f'Error in time_entry command: {e}')
             # Send error DM to owner
-            await self.bot.send_error_dm('Time entry command error', e, interaction)
 
             error_embed = discord.Embed(
                 description=f'❌ Error: {e}',
@@ -79,6 +78,7 @@ class WentWrongCog(commands.Cog):
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
             else:
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
+            raise
 
     @went_group.command(name='wrong',
                         description='Funny snapshots of things that have gone wrong (accidents) on the job!.')
@@ -195,7 +195,6 @@ class WentWrongCog(commands.Cog):
         except Exception as e:
             print(f'Error in went_wrong command: {e}')
             # Send error DM to owner
-            await self.bot.send_error_dm('Went wrong command error', e, interaction)
 
             error_embed = discord.Embed(
                 description=f'❌ Error: {e}',
@@ -205,6 +204,7 @@ class WentWrongCog(commands.Cog):
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
             else:
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
+            raise
 
 
 # Setup function (required for cogs)

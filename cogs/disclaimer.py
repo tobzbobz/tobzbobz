@@ -82,7 +82,6 @@ class DisclaimerCog(commands.Cog):
 
         except Exception as e:
             print(f'Error in disclaimer command: {e}')
-            await self.bot.send_error_dm('Disclaimer command error', e, interaction)
 
             error_embed = discord.Embed(
                 description=f'Error <:Denied:1426930694633816248>: {e}',
@@ -92,6 +91,8 @@ class DisclaimerCog(commands.Cog):
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
             else:
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
+
+            raise
 
 
 # Setup function (required for cogs)

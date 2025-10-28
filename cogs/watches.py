@@ -153,13 +153,13 @@ class VoteButton(discord.ui.View):
                 await interaction.followup.send(embed=voted_embed, ephemeral=True)
 
         except Exception as e:
-            await interaction.client.send_error_dm('Vote button error', e, interaction)
             error_embed = discord.Embed(description=f'❌ Error: {e}', colour=discord.Colour(0xf24d4d))
             if not interaction.response.is_done():
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
             else:
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
             print(f'Error processing vote: {e}')
+            raise
 
     @discord.ui.button(label='Remove Vote', emoji='🗑️', style=discord.ButtonStyle.red, custom_id='remove_vote_button')
     async def remove_vote_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -188,13 +188,13 @@ class VoteButton(discord.ui.View):
             await interaction.followup.send(embed=removed_embed, ephemeral=True)
 
         except Exception as e:
-            await interaction.client.send_error_dm('Remove vote button error', e, interaction)
             error_embed = discord.Embed(description=f'❌ Error: {e}', colour=discord.Colour(0xf24d4d))
             if not interaction.response.is_done():
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
             else:
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
             print(f'Error removing vote: {e}')
+            raise
 
 
 class WatchRoleButton(discord.ui.View):
@@ -232,10 +232,10 @@ class WatchRoleButton(discord.ui.View):
                 await interaction.response.send_message(embed=embed, ephemeral=True)
 
         except Exception as e:
-            await interaction.client.send_error_dm('Watch role button error', e, interaction)
             error_embed = discord.Embed(description=f'❌ Error: {e}', colour=discord.Colour(0xf24d4d))
             await interaction.response.send_message(embed=error_embed, ephemeral=True)
             print(f'Error toggling role: {e}')
+            raise
 
 
 class LogsPaginationView(discord.ui.View):
@@ -509,12 +509,12 @@ class WatchCog(commands.Cog):
 
         except Exception as e:
             print(f'Error starting watch: {e}')
-            await interaction.client.send_error_dm('Watch start error', e, interaction)
             error_embed = discord.Embed(description=f'❌ Error: {e}', colour=discord.Colour(0xf24d4d))
             if not interaction.response.is_done():
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
             else:
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
+            raise
 
     @watch_start.autocomplete('colour')
     async def colour_autocomplete(self, interaction: discord.Interaction, current: str) -> list[
@@ -610,9 +610,9 @@ class WatchCog(commands.Cog):
 
         except Exception as e:
             print(f'Error scheduling vote: {e}')
-            await self.bot.send_error_dm('Watch vote command error', e, interaction)
             error_embed = discord.Embed(description=f'❌ Error: {e}', colour=discord.Colour(0xf24d4d))
             await interaction.followup.send(embed=error_embed, ephemeral=True)
+            raise
 
     @watch_vote.autocomplete('colour')
     async def vote_colour_autocomplete(self, interaction: discord.Interaction, current: str) -> list[
@@ -755,9 +755,9 @@ class WatchCog(commands.Cog):
 
         except Exception as e:
             print(f'Error ending watch: {e}')
-            await self.bot.send_error_dm('Watch end command error', e, interaction)
             error_embed = discord.Embed(description=f'❌ Error: {e}', colour=discord.Colour(0xf24d4d))
             await interaction.followup.send(embed=error_embed, ephemeral=True)
+            raise
 
     @watch_end.autocomplete('watch')
     async def watch_autocomplete(self, interaction: discord.Interaction, current: str) -> list[
@@ -894,9 +894,9 @@ class WatchCog(commands.Cog):
 
         except Exception as e:
             print(f'Error fetching watch logs: {e}')
-            await self.bot.send_error_dm('Watch logs command error', e, interaction)
             error_embed = discord.Embed(description=f'❌ Error: {e}', colour=discord.Colour(0xf24d4d))
             await interaction.followup.send(embed=error_embed, ephemeral=True)
+            raise
 
     @watch_group.command(name='delete-log', description='Delete a specific watch log.')
     @app_commands.default_permissions(administrator=True)
@@ -945,9 +945,9 @@ class WatchCog(commands.Cog):
 
         except Exception as e:
             print(f'Error deleting watch log: {e}')
-            await self.bot.send_error_dm('Watch delete log command error', e, interaction)
             error_embed = discord.Embed(description=f'❌ Error: {e}', colour=discord.Colour(0xf24d4d))
             await interaction.followup.send(embed=error_embed, ephemeral=True)
+            raise
 
     @watch_delete_log.autocomplete('log')
     async def delete_log_autocomplete(self, interaction: discord.Interaction, current: str) -> list[
@@ -1038,9 +1038,9 @@ class WatchCog(commands.Cog):
 
         except Exception as e:
             print(f'Error in end all watches: {e}')
-            await self.bot.send_error_dm('Watch end all command error', e, interaction)
             error_embed = discord.Embed(description=f'❌ Error: {e}', colour=discord.Colour(0xf24d4d))
             await interaction.followup.send(embed=error_embed, ephemeral=True)
+            raise
 
     @tasks.loop(minutes=1)
     async def check_scheduled_votes(self):

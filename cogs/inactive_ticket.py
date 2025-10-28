@@ -96,7 +96,6 @@ class InactiveTicketCog(commands.Cog):
         except Exception as e:
             print(f'Error in inactive ticket command: {e}')
             # Send error DM to owner
-            await self.bot.send_error_dm('Inactive ticket command error', e, interaction)
 
             error_embed = discord.Embed(
                 description=f'Error <:Denied:1426930694633816248>: {e}',
@@ -107,6 +106,8 @@ class InactiveTicketCog(commands.Cog):
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
             else:
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
+
+            raise
 
 
 # Setup function (required for cogs)

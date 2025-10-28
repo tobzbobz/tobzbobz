@@ -64,7 +64,6 @@ async def start_web_server():
     await site.start()
     print('🌐 Health server started on port 8080')
 
-
 class Client(commands.Bot):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -293,6 +292,10 @@ class Client(commands.Bot):
 
         await super().close()
 
+    async def send_error_dm(self, title: str, error: Exception, interaction: discord.Interaction = None):
+        """Send error to owner - DEPRECATED, kept for compatibility"""
+        # Errors are now handled by LoggingCog, this is just for backward compatibility
+        pass
 
 handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
 intents = discord.Intents.default()
