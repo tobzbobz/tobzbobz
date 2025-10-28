@@ -1851,8 +1851,7 @@ class CallsignCog(commands.Cog):
             value="<@&1285474077556998196> will review your request. You'll be notified once it's been processed.",
             inline=False
         )
-        await interaction.edit_orignal_response(embed=success_embed, ephemeral=True)
-
+        await interaction.edit_original_response(content=None, embed=success_embed)
         # Delete the processing message
         try:
             await interaction.delete_original_response()
