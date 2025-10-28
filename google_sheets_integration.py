@@ -22,6 +22,19 @@ QUALIFICATIONS_ROLES = {
     1420021808060436702: "Qualified medical responder",  # Command only
 }
 
+# Rank Priority for Command sorting (lower number = higher priority)
+COMMAND_RANK_PRIORITY = {
+    "NC": 1,
+    "DNC": 2,
+    "ANC": 3,
+    "AC": 4,
+    "AAC": 5,
+    "DCO": 6,
+    "CO": 7,
+    "SSO": 8,
+    "SO": 9,
+}
+
 # Google Sheets Configuration
 SPREADSHEET_ID = "1Qtb2xmrnDljsgL1wB-Yh2kPWZak7URjIfYueDKGCJ24"
 
@@ -265,8 +278,9 @@ class GoogleSheetsManager:
 
                 print(f"✅ Added Non-Command callsign {full_callsign} to row {empty_row}")
 
+
             else:  # command
-                # Command: A, B, C, D, E
+                # Command: A, B, C, D, E, F
                 target_sheet = command_sheet
 
                 # Use existing row if found, otherwise find empty row
@@ -283,15 +297,19 @@ class GoogleSheetsManager:
                 # Determine strikes and qualifications
                 strikes_value = self.determine_strikes_value(member.roles)
                 if strikes_value is None:
-                    strikes_value = "Good Boy"  # Default for Command
+                    strikes_value = "Good Boy"
                 qualifications = self.determine_qualifications(member.roles, is_command=True)
 
+                # Get rank priority for sorting
+                rank_priority = COMMAND_RANK_PRIORITY.get(fenz_prefix, 99)  # Default to 99 if unknown
+
                 # Update specific cells
-                target_sheet.update_cell(empty_row, 1, full_callsign)  # A: Full callsign
-                target_sheet.update_cell(empty_row, 2, roblox_username)  # B: Roblox username
-                target_sheet.update_cell(empty_row, 3, qualifications)  # C: Qualifications dropdown
-                target_sheet.update_cell(empty_row, 4, strikes_value)  # D: Strikes dropdown
-                target_sheet.update_cell(empty_row, 5, str(discord_id))  # E: Discord ID
+                target_sheet.update_cell(empty_row, 1, full_callsign)
+                target_sheet.update_cell(empty_row, 2, roblox_username)
+                target_sheet.update_cell(empty_row, 3, qualifications)
+                target_sheet.update_cell(empty_row, 4, strikes_value)
+                target_sheet.update_cell(empty_row, 5, str(discord_id))
+                target_sheet.update_cell(empty_row, 6, rank_priority)  # ← ADD THIS: Column F
 
                 print(f"✅ Added Command callsign {full_callsign} to row {empty_row}")
 
@@ -303,6 +321,59 @@ class GoogleSheetsManager:
             traceback.print_exc()
             return False
 
+    def sort_worksheet_multi(self, worksheet, sort_specs: list):
+        """
+        Sort a worksheet by multiple columns
+        sort_specs: List of dicts with 'column' (1-based) and 'order' ('ASCENDING' or 'DESCENDING')
+        Example: [{'column': 8, 'order': 'ASCENDING'}, {'column': 3, 'order': 'ASCENDING'}]
+        """
+        try:
+            worksheet_id = worksheet.id
+
+            # Build sort specs for API
+            api_sort_specs = []
+            for spec in sort_specs:
+                api_sort_specs.append({
+                    'dimensionIndex': spec['column'] - 1,  # Convert to 0-based
+                    'sortOrder': spec['order']
+                })
+
+            sort_request = {
+                'sortRange': {
+                    'range': {
+                        'sheetId': worksheet_id,
+                        'startRowIndex': 1,  # Skip header row
+                    },
+                    'sortSpecs': api_sort_specs
+                }
+            }
+
+            self.spreadsheet.batch_update({'requests': [sort_request]})
+            print(f"✅ Sorted {worksheet.title}")
+            return True
+        except Exception as e:
+            print(f"❌ Error sorting worksheet: {e}")
+            return False
+
+    def detect_rank_mismatch(self, member_roles, current_fenz_prefix: str) -> tuple:
+        """
+        Check if user's current prefix matches their Discord roles
+        Returns: (has_mismatch: bool, correct_prefix: str, correct_rank_type: str)
+        """
+        rank_type, rank_data = self.determine_rank_type(member_roles)
+
+        if not rank_type:
+            return (False, None, None)
+
+        if rank_type == 'non-command':
+            _, correct_prefix, _ = rank_data
+        else:  # command
+            _, correct_prefix = rank_data
+
+        # Check if current prefix matches correct prefix
+        has_mismatch = (current_fenz_prefix != correct_prefix)
+
+        return (has_mismatch, correct_prefix, rank_type)
 
 # Create global instance
 sheets_manager = GoogleSheetsManager()

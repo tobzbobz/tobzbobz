@@ -13,6 +13,7 @@ import asyncio
 from database import db
 import json  # Still needed for JSON serialization in database
 from google_sheets_integration import sheets_manager  # ADD THIS LINE
+from google_sheets_integration import COMMAND_RANK_PRIORITY
 
 BLOXLINK_API_KEY = os.getenv('BLOXLINK_API_KEY')
 # Your Discord User ID
@@ -2050,7 +2051,10 @@ class CallsignCog(commands.Cog):
                     fenz_prefix = row[1] if len(row) > 1 else ''
                     callsign = row[2] if len(row) > 2 else ''
                     roblox_username = row[3] if len(row) > 3 else ''
+                    strikes = row[5] if len(row) > 5 else ''  # ← ADD THIS: Column F (index 5)
                     discord_id_str = row[6] if len(row) > 6 else ''
+                    rank_number = row[7] if len(row) > 7 else ''  # ← ADD THIS: Column H (index 7)
+                    qualifications = row[8] if len(row) > 8 else ''  # ← ADD THIS: Column I (index 8)
 
                     # Skip if missing essential data
                     if not callsign or not discord_id_str:
@@ -2144,6 +2148,8 @@ class CallsignCog(commands.Cog):
 
                     full_callsign = row[0] if len(row) > 0 else ''
                     roblox_username = row[1] if len(row) > 1 else ''
+                    qualifications = row[2] if len(row) > 2 else ''  # ← ADD THIS: Column C (index 2)
+                    strikes = row[3] if len(row) > 3 else ''  # ← ADD THIS: Column D (index 3)
                     discord_id_str = row[4] if len(row) > 4 else ''
 
                     # Skip if missing essential data
@@ -2172,6 +2178,8 @@ class CallsignCog(commands.Cog):
                         stats['errors'].append(
                             f"Skipping invalid format in Command row {i}: {full_callsign}")
                         continue
+
+                    rank_priority = COMMAND_RANK_PRIORITY.get(fenz_prefix, 99)
 
                     try:
                         discord_id = int(discord_id_str)
@@ -2272,6 +2280,143 @@ class CallsignCog(commands.Cog):
             # Remaining entries in db_entries are missing from sheets
             stats['missing_from_sheets'] = len(db_entries)
 
+            # Check for rank mismatches and fix them
+            print("Checking for rank mismatches...")
+            stats['rank_mismatches_fixed'] = 0
+
+            # Re-fetch all data to check for mismatches
+            non_command_data = non_command_sheet.get_all_values()
+            command_data = command_sheet.get_all_values()
+
+            # Check Non-Command sheet
+            for i, row in enumerate(non_command_data[1:], start=2):
+                if not row or all(cell == '' for cell in row):
+                    continue
+
+                try:
+                    discord_id_str = row[6] if len(row) > 6 else ''
+                    if not discord_id_str:
+                        continue
+
+                    discord_id = int(discord_id_str)
+                    member = await interaction.guild.fetch_member(discord_id)
+
+                    if not member:
+                        continue
+
+                    current_fenz_prefix = row[1] if len(row) > 1 else ''
+                    has_mismatch, correct_prefix, correct_rank_type = sheets_manager.detect_rank_mismatch(
+                        member.roles, current_fenz_prefix
+                    )
+
+                    if has_mismatch:
+                        # Update database
+                        async with db.pool.acquire() as conn:
+                            await conn.execute(
+                                'UPDATE callsigns SET fenz_prefix = $1, callsign = $2 WHERE discord_user_id = $3',
+                                correct_prefix, '###', discord_id
+                            )
+
+                        # If they need to move to Command sheet
+                        if correct_rank_type == 'command':
+                            # Delete from Non-Command
+                            sheets_manager.delete_row(non_command_sheet, i)
+
+                            # Add to Command sheet
+                            await sheets_manager.add_callsign_to_sheets(
+                                member=member,
+                                callsign='###',
+                                fenz_prefix=correct_prefix,
+                                roblox_username=row[3] if len(row) > 3 else '',
+                                discord_id=discord_id
+                            )
+                        else:
+                            # Update in Non-Command sheet
+                            non_command_sheet.update_cell(i, 2, correct_prefix)  # Update prefix
+                            non_command_sheet.update_cell(i, 3, '###')  # Set callsign to ###
+                            non_command_sheet.update_cell(i, 1, f"{correct_prefix}-###")  # Update full callsign
+
+                        stats['rank_mismatches_fixed'] += 1
+                        stats['errors'].append(
+                            f"Fixed rank mismatch for <@{discord_id}>: {current_fenz_prefix} → {correct_prefix}")
+
+                except Exception as e:
+                    stats['errors'].append(f"Error checking Non-Command mismatch row {i}: {str(e)}")
+
+            # Check Command sheet
+            for i, row in enumerate(command_data[1:], start=2):
+                if not row or all(cell == '' for cell in row):
+                    continue
+
+                try:
+                    discord_id_str = row[4] if len(row) > 4 else ''
+                    if not discord_id_str:
+                        continue
+
+                    discord_id = int(discord_id_str)
+                    member = await interaction.guild.fetch_member(discord_id)
+
+                    if not member:
+                        continue
+
+                    full_callsign = row[0] if len(row) > 0 else ''
+                    callsign_parts = full_callsign.split('-')
+                    current_fenz_prefix = callsign_parts[0] if callsign_parts else ''
+
+                    has_mismatch, correct_prefix, correct_rank_type = sheets_manager.detect_rank_mismatch(
+                        member.roles, current_fenz_prefix
+                    )
+
+                    if has_mismatch:
+                        # Update database
+                        async with db.pool.acquire() as conn:
+                            await conn.execute(
+                                'UPDATE callsigns SET fenz_prefix = $1, callsign = $2 WHERE discord_user_id = $3',
+                                correct_prefix, '###', discord_id
+                            )
+
+                        # If they need to move to Non-Command sheet
+                        if correct_rank_type == 'non-command':
+                            # Delete from Command
+                            sheets_manager.delete_row(command_sheet, i)
+
+                            # Add to Non-Command sheet
+                            await sheets_manager.add_callsign_to_sheets(
+                                member=member,
+                                callsign='###',
+                                fenz_prefix=correct_prefix,
+                                roblox_username=row[1] if len(row) > 1 else '',
+                                discord_id=discord_id
+                            )
+                        else:
+                            # Update in Command sheet
+                            command_sheet.update_cell(i, 1, f"{correct_prefix}-###")  # Update full callsign
+                            # Update rank priority
+                            rank_priority = COMMAND_RANK_PRIORITY.get(correct_prefix, 99)
+                            command_sheet.update_cell(i, 6, rank_priority)
+
+                        stats['rank_mismatches_fixed'] += 1
+                        stats['errors'].append(
+                            f"Fixed rank mismatch for <@{discord_id}>: {current_fenz_prefix} → {correct_prefix}")
+
+                except Exception as e:
+                    stats['errors'].append(f"Error checking Command mismatch row {i}: {str(e)}")
+
+            # Sort the worksheets
+            print("Sorting worksheets...")
+
+            # Non-Command: Sort by Rank# (Column H), then Callsign (Column C)
+            sheets_manager.sort_worksheet_multi(non_command_sheet, [
+                {'column': 8, 'order': 'ASCENDING'},  # Rank# first (SFF=1 at top)
+                {'column': 3, 'order': 'ASCENDING'}  # Then callsign (-1 at top)
+            ])
+
+            # Command: Sort by Rank Priority (Column F), then Callsign (Column C if exists)
+            sheets_manager.sort_worksheet_multi(command_sheet, [
+                {'column': 6, 'order': 'ASCENDING'},  # Rank priority (NC=1 at top)
+                {'column': 1, 'order': 'ASCENDING'}  # Then full callsign for ties
+            ])
+
             # Build result embed
             result_embed = discord.Embed(
                 title="Sync Complete ✅",
@@ -2285,6 +2430,7 @@ class CallsignCog(commands.Cog):
                       f"**Database Total (before):** {stats['db_total']}\n"
                       f"**Added to DB:** {stats['added_to_db']}\n"
                       f"**Updated in DB:** {stats['updated_in_db']}\n"
+                      f"**Rank Mismatches Fixed:** {stats['rank_mismatches_fixed']}\n"  # ← ADD THIS
                       f"**Missing from Sheets:** {stats['missing_from_sheets']}",
                 inline=False
             )
