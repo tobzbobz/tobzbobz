@@ -100,6 +100,7 @@ async def search_callsign_database(query: str, search_type: str) -> list:
         return [dict(row) for row in rows]
 
 
+
 async def add_callsign_to_database(callsign: str, discord_user_id: int, discord_username: str,
                                    roblox_user_id: str, roblox_username: str, fenz_prefix: str,
                                    hhstj_prefix: str, approved_by_id: int, approved_by_name: str):
@@ -311,6 +312,26 @@ class OverrideModal(discord.ui.Modal, title="Override with New Callsign"):
                 approved_by_name=interaction.user.display_name
             )
 
+            async with db.pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    'SELECT id FROM callsigns WHERE discord_user_id = $1',
+                    self.requester.id
+                )
+                callsign_id = row['id'] if row else None
+
+            # Also add to Google Sheets
+            try:
+                await sheets_manager.add_callsign_to_sheets(
+                    member=self.view.requester,
+                    callsign=self.new_callsign.value,
+                    fenz_prefix=self.view.fenz_prefix if self.view.fenz_prefix else '',
+                    roblox_username=self.view.roblox_username,
+                    discord_id=self.view.requester.id
+                )
+                print(f"✅ Synced callsign to Google Sheets")
+            except Exception as e:
+                print(f"⚠️ Failed to sync to Google Sheets: {e}")
+
             # Update nickname with NEW callsign
             nickname_parts = []
             if self.view.fenz_prefix:
@@ -379,7 +400,7 @@ class OverrideModal(discord.ui.Modal, title="Override with New Callsign"):
             embed.add_field(name='Approved at:', value=f'{discord.utils.format_dt(discord.utils.utcnow())}', inline=True)
 
             embed.timestamp = discord.utils.utcnow()
-            embed.set_footer(text=f"Overridden by {interaction.user.display_name}")
+            embed.set_footer(text=f"Overridden by {interaction.user.display_name} • {callsign_id}")
 
             # Delete the original message
             await interaction.message.delete()
@@ -597,6 +618,15 @@ class CounterOfferApprovalView(discord.ui.View):
 
             await interaction.response.defer()
 
+            # Check if callsign already exists
+            existing = await check_callsign_exists(self.callsign)
+            if existing and existing['discord_user_id'] != self.requester.id:
+                await interaction.followup.send(
+                    f"❌ Callsign `{self.fenz_prefix}-{self.callsign}` is already occupied by <@{existing['discord_user_id']}>. Please deny this request and offer an alternative callsign.",
+                    ephemeral=True
+                )
+                return
+
             try:
                 # Add to database
                 await add_callsign_to_database(
@@ -610,6 +640,26 @@ class CounterOfferApprovalView(discord.ui.View):
                     approved_by_id=interaction.user.id,
                     approved_by_name=interaction.user.display_name
                 )
+
+                async with db.pool.acquire() as conn:
+                    row = await conn.fetchrow(
+                        'SELECT id FROM callsigns WHERE discord_user_id = $1',
+                        self.requester.id
+                    )
+                    callsign_id = row['id'] if row else None
+
+                # Also add to Google Sheets
+                try:
+                    await sheets_manager.add_callsign_to_sheets(
+                        member=self.requester,
+                        callsign=callsign,
+                        fenz_prefix=self.fenz_prefix if self.fenz_prefix else '',
+                        roblox_username=self.roblox_username,
+                        discord_id=self.requester.id
+                    )
+                    print(f"✅ Synced callsign to Google Sheets")
+                except Exception as e:
+                    print(f"⚠️ Failed to sync to Google Sheets: {e}")
 
                 # Update nickname
                 nickname_parts = []
@@ -744,7 +794,7 @@ class CounterOfferApprovalView(discord.ui.View):
                                 inline=True)
 
                 embed.timestamp = discord.utils.utcnow()
-                embed.set_footer(text=f"Approved by {interaction.user.display_name}")
+                embed.set_footer(text=f"Approved by {interaction.user.display_name} • {callsign_id}")
 
                 embed.timestamp = discord.utils.utcnow()
 
@@ -1052,6 +1102,15 @@ class CallsignOffersView(discord.ui.View):
 
             await interaction.response.defer()
 
+            # Check if callsign already exists
+            existing = await check_callsign_exists(self.callsign)
+            if existing and existing['discord_user_id'] != self.requester.id:
+                await interaction.followup.send(
+                    f"❌ Callsign `{self.fenz_prefix}-{self.callsign}` is already occupied by <@{existing['discord_user_id']}>. Please deny this request and offer an alternative callsign.",
+                    ephemeral=True
+                )
+                return
+
             try:
                 # Add to database
                 await add_callsign_to_database(
@@ -1065,6 +1124,26 @@ class CallsignOffersView(discord.ui.View):
                     approved_by_id=self.staff_id,
                     approved_by_name=self.staff_name
                 )
+
+                async with db.pool.acquire() as conn:
+                    row = await conn.fetchrow(
+                        'SELECT id FROM callsigns WHERE discord_user_id = $1',
+                        self.requester.id
+                    )
+                    callsign_id = row['id'] if row else None
+
+                # Also add to Google Sheets
+                try:
+                    await sheets_manager.add_callsign_to_sheets(
+                        member=self.requester,
+                        callsign=callsign,
+                        fenz_prefix=self.fenz_prefix if self.fenz_prefix else '',
+                        roblox_username=self.roblox_username,
+                        discord_id=self.requester.id
+                    )
+                    print(f"✅ Synced callsign to Google Sheets")
+                except Exception as e:
+                    print(f"⚠️ Failed to sync to Google Sheets: {e}")
 
                 # Update nickname
                 nickname_parts = []
@@ -1205,7 +1284,7 @@ class CallsignOffersView(discord.ui.View):
                                 inline=True)
 
                 embed.timestamp = discord.utils.utcnow()
-                embed.set_footer(text=f"Approved by {interaction.user.display_name}")
+                embed.set_footer(text=f"Approved by {interaction.user.display_name} • {callsign_id}")
 
                 embed.timestamp = discord.utils.utcnow()
 
@@ -1272,6 +1351,15 @@ class CallsignRequestView(discord.ui.View):
 
         await interaction.response.defer()
 
+        # Check if callsign already exists
+        existing = await check_callsign_exists(self.callsign)
+        if existing and existing['discord_user_id'] != self.requester.id:
+            await interaction.followup.send(
+                f"❌ Callsign `{self.fenz_prefix}-{self.callsign}` is already occupied by <@{existing['discord_user_id']}>. Please deny this request and offer an alternative callsign.",
+                ephemeral=True
+            )
+            return
+
         try:
             # Add to database
             await add_callsign_to_database(
@@ -1286,7 +1374,26 @@ class CallsignRequestView(discord.ui.View):
                 approved_by_name=interaction.user.display_name
             )
 
-            # Update nickname
+            async with db.pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    'SELECT id FROM callsigns WHERE discord_user_id = $1',
+                    self.requester.id
+                )
+                callsign_id = row['id'] if row else None
+
+            try:
+                await sheets_manager.add_callsign_to_sheets(
+                    member=self.requester,
+                    callsign=self.callsign,
+                    fenz_prefix=self.fenz_prefix if self.fenz_prefix else '',
+                    roblox_username=self.roblox_username,
+                    discord_id=self.requester.id
+                )
+                print(f"✅ Synced callsign to Google Sheets")
+            except Exception as e:
+                print(f"⚠️ Failed to sync to Google Sheets: {e}")
+
+                # Update nickname
             nickname_parts = []
             if self.fenz_prefix:
                 nickname_parts.append(f"{self.fenz_prefix}-{self.callsign}")
@@ -1418,7 +1525,7 @@ class CallsignRequestView(discord.ui.View):
                             inline=True)
 
             embed.timestamp = discord.utils.utcnow()
-            embed.set_footer(text=f"Approved by {interaction.user.display_name}")
+            embed.set_footer(text=f"Approved by {interaction.user.display_name} • {callsign_id}")
 
             embed.timestamp = discord.utils.utcnow()
 
@@ -1482,6 +1589,26 @@ class CallsignRequestView(discord.ui.View):
                 approved_by_id=interaction.user.id,
                 approved_by_name=interaction.user.display_name
             )
+
+            async with db.pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    'SELECT id FROM callsigns WHERE discord_user_id = $1',
+                    self.requester.id
+                )
+                callsign_id = row['id'] if row else None
+
+            # Also add to Google Sheets
+            try:
+                await sheets_manager.add_callsign_to_sheets(
+                    member=self.requester,
+                    callsign=self.callsign,
+                    fenz_prefix=self.fenz_prefix if self.fenz_prefix else '',
+                    roblox_username=self.roblox_username,
+                    discord_id=self.requester.id
+                )
+                print(f"✅ Synced callsign to Google Sheets")
+            except Exception as e:
+                print(f"⚠️ Failed to sync to Google Sheets: {e}")
 
             # Update nickname (same logic as accept button)
             nickname_parts = []
@@ -1609,7 +1736,7 @@ class CallsignRequestView(discord.ui.View):
                             inline=True)
 
             embed.timestamp = discord.utils.utcnow()
-            embed.set_footer(text=f"Overridden by {interaction.user.display_name}")
+            embed.set_footer(text=f"Overridden by {interaction.user.display_name} • {callsign_id}")
 
             # Delete the original message
             await interaction.message.delete()
@@ -2029,13 +2156,21 @@ class CallsignCog(commands.Cog):
                         continue
 
                     # Extract callsign from full callsign (e.g., "SO-123" -> "123")
+                    # Extract callsign from full callsign (e.g., "SO-123" -> "123")
                     callsign_parts = full_callsign.split('-')
                     if len(callsign_parts) != 2:
-                        stats['errors'].append(f"Invalid callsign format in Command row {i}: {full_callsign}")
+                        # Skip entries without proper format (like standalone "DNC")
+                        stats['errors'].append(
+                            f"Skipping invalid format in Command row {i}: {full_callsign} (expected PREFIX-NUMBER)")
                         continue
 
                     fenz_prefix = callsign_parts[0]
                     callsign = callsign_parts[1]
+
+                    # Validate callsign is numeric
+                    if not callsign.isdigit():
+                        stats['errors'].append(f"Skipping non-numeric callsign in Command row {i}: {full_callsign}")
+                        continue
 
                     try:
                         discord_id = int(discord_id_str)
