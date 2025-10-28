@@ -735,7 +735,7 @@ class CounterOfferApprovalView(discord.ui.View):
 
                     embed.add_field(
                         name="FENZ Rank",
-                        value=f"{fenz_rank_name}" if fenz_rank_name else f"`{fenz_prefix}`",
+                        value=f"{fenz_rank_name}" if fenz_rank_name else f"`{self.fenz_prefix}`",
                         inline=True
                     )
 
@@ -1635,6 +1635,9 @@ class CallsignRequestView(discord.ui.View):
 class CallsignCog(commands.Cog):
     # Define command group as CLASS ATTRIBUTE (before __init__)
     callsign_group = app_commands.Group(name="callsign", description="Callsign management commands")
+
+    def __init__(self, bot):
+        self.bot=bot
 
     async def get_roblox_user_info(self, username: str):
         """Get Roblox user ID from username"""
