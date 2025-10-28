@@ -1856,6 +1856,317 @@ class CallsignCog(commands.Cog):
             pass  # If it fails, no big deal
         return
 
+    @callsign_group.command(name="sync", description="Sync callsigns between Google Sheets and database (Admin only)")
+    async def sync_callsigns(self, interaction: discord.Interaction):
+        """Sync callsigns between Google Sheets and database, treating sheets as source of truth"""
+
+        # Check if user has the specific sync role
+        SYNC_ROLE_ID = 1389550689113473024
+        if not any(role.id == SYNC_ROLE_ID for role in interaction.user.roles):
+            await interaction.response.send_message(
+                "You don't have permission to use this command <:Denied:1426930694633816248>",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            "Starting sync between Google Sheets and database... <a:Load:1430912797469970444>",
+            ephemeral=True
+        )
+
+        try:
+            # Authenticate with Google Sheets
+            if not sheets_manager.client:
+                auth_success = sheets_manager.authenticate()
+                if not auth_success:
+                    await interaction.edit_original_response(
+                        content="❌ Failed to authenticate with Google Sheets"
+                    )
+                    return
+
+            # Get both worksheets
+            non_command_sheet = sheets_manager.get_worksheet("Non-Command")
+            command_sheet = sheets_manager.get_worksheet("Command")
+
+            if not non_command_sheet or not command_sheet:
+                await interaction.edit_original_response(
+                    content="❌ Could not access worksheets"
+                )
+                return
+
+            # Track sync statistics
+            stats = {
+                'sheets_total': 0,
+                'db_total': 0,
+                'added_to_db': 0,
+                'updated_in_db': 0,
+                'missing_from_sheets': 0,
+                'errors': []
+            }
+
+            # Get all database entries
+            async with db.pool.acquire() as conn:
+                db_rows = await conn.fetch('SELECT * FROM callsigns')
+                db_entries = {row['discord_user_id']: dict(row) for row in db_rows}
+                stats['db_total'] = len(db_entries)
+
+            # Process Non-Command sheet
+            non_command_data = non_command_sheet.get_all_values()
+            for i, row in enumerate(non_command_data[1:], start=2):  # Skip header
+                if not row or all(cell == '' for cell in row):
+                    continue
+
+                try:
+                    # Non-Command columns: A=Full callsign, B=FENZ Prefix, C=Callsign, D=Roblox, F=Strikes, G=Discord ID, H=Rank#, I=Quals
+                    if len(row) < 7:  # Need at least up to column G
+                        continue
+
+                    full_callsign = row[0] if len(row) > 0 else ''
+                    fenz_prefix = row[1] if len(row) > 1 else ''
+                    callsign = row[2] if len(row) > 2 else ''
+                    roblox_username = row[3] if len(row) > 3 else ''
+                    discord_id_str = row[6] if len(row) > 6 else ''
+
+                    # Skip if missing essential data
+                    if not callsign or not discord_id_str:
+                        continue
+
+                    try:
+                        discord_id = int(discord_id_str)
+                    except ValueError:
+                        stats['errors'].append(f"Invalid Discord ID in Non-Command row {i}: {discord_id_str}")
+                        continue
+
+                    stats['sheets_total'] += 1
+
+                    # Check if exists in database
+                    if discord_id in db_entries:
+                        db_entry = db_entries[discord_id]
+
+                        # Check if needs updating (only update fields from sheets)
+                        needs_update = False
+                        updates = {}
+
+                        if db_entry['callsign'] != callsign:
+                            updates['callsign'] = callsign
+                            needs_update = True
+
+                        if db_entry['fenz_prefix'] != fenz_prefix:
+                            updates['fenz_prefix'] = fenz_prefix
+                            needs_update = True
+
+                        if roblox_username and db_entry['roblox_username'] != roblox_username:
+                            updates['roblox_username'] = roblox_username
+                            needs_update = True
+
+                        if needs_update:
+                            # Update database
+                            async with db.pool.acquire() as conn:
+                                set_clauses = []
+                                values = []
+                                param_num = 1
+
+                                for key, value in updates.items():
+                                    set_clauses.append(f"{key} = ${param_num}")
+                                    values.append(value)
+                                    param_num += 1
+
+                                values.append(discord_id)
+                                query = f"UPDATE callsigns SET {', '.join(set_clauses)} WHERE discord_user_id = ${param_num}"
+                                await conn.execute(query, *values)
+
+                            stats['updated_in_db'] += 1
+
+                        # Remove from tracking dict (so we know what's left)
+                        del db_entries[discord_id]
+
+                    else:
+                        # Add new entry to database
+                        async with db.pool.acquire() as conn:
+                            await conn.execute(
+                                '''INSERT INTO callsigns
+                                   (callsign, discord_user_id, discord_username, roblox_user_id, roblox_username,
+                                    fenz_prefix, hhstj_prefix, approved_by_id, approved_by_name, callsign_history)
+                                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+                                           $10) ON CONFLICT (callsign) DO NOTHING''',
+                                callsign,
+                                discord_id,
+                                '',  # Leave blank - will be filled when user interacts
+                                '',  # Leave blank
+                                roblox_username if roblox_username else '',
+                                fenz_prefix if fenz_prefix else '',
+                                '',  # Leave blank - not in sheets
+                                interaction.user.id,
+                                f"Synced from Sheets by {interaction.user.display_name}",
+                                '[]'
+                            )
+
+                        stats['added_to_db'] += 1
+
+                except Exception as e:
+                    stats['errors'].append(f"Error processing Non-Command row {i}: {str(e)}")
+
+            # Process Command sheet
+            command_data = command_sheet.get_all_values()
+            for i, row in enumerate(command_data[1:], start=2):  # Skip header
+                if not row or all(cell == '' for cell in row):
+                    continue
+
+                try:
+                    # Command columns: A=Full callsign, B=Roblox, C=Quals, D=Strikes, E=Discord ID
+                    if len(row) < 5:  # Need at least up to column E
+                        continue
+
+                    full_callsign = row[0] if len(row) > 0 else ''
+                    roblox_username = row[1] if len(row) > 1 else ''
+                    discord_id_str = row[4] if len(row) > 4 else ''
+
+                    # Skip if missing essential data
+                    if not full_callsign or not discord_id_str:
+                        continue
+
+                    # Extract callsign from full callsign (e.g., "SO-123" -> "123")
+                    callsign_parts = full_callsign.split('-')
+                    if len(callsign_parts) != 2:
+                        stats['errors'].append(f"Invalid callsign format in Command row {i}: {full_callsign}")
+                        continue
+
+                    fenz_prefix = callsign_parts[0]
+                    callsign = callsign_parts[1]
+
+                    try:
+                        discord_id = int(discord_id_str)
+                    except ValueError:
+                        stats['errors'].append(f"Invalid Discord ID in Command row {i}: {discord_id_str}")
+                        continue
+
+                    stats['sheets_total'] += 1
+
+                    # Check if exists in database
+                    if discord_id in db_entries:
+                        db_entry = db_entries[discord_id]
+
+                        # Check if needs updating
+                        needs_update = False
+                        updates = {}
+
+                        if db_entry['callsign'] != callsign:
+                            updates['callsign'] = callsign
+                            needs_update = True
+
+                        if db_entry['fenz_prefix'] != fenz_prefix:
+                            updates['fenz_prefix'] = fenz_prefix
+                            needs_update = True
+
+                        if roblox_username and db_entry['roblox_username'] != roblox_username:
+                            updates['roblox_username'] = roblox_username
+                            needs_update = True
+
+                        if needs_update:
+                            # Update database
+                            async with db.pool.acquire() as conn:
+                                set_clauses = []
+                                values = []
+                                param_num = 1
+
+                                for key, value in updates.items():
+                                    set_clauses.append(f"{key} = ${param_num}")
+                                    values.append(value)
+                                    param_num += 1
+
+                                values.append(discord_id)
+                                query = f"UPDATE callsigns SET {', '.join(set_clauses)} WHERE discord_user_id = ${param_num}"
+                                await conn.execute(query, *values)
+
+                            stats['updated_in_db'] += 1
+
+                        # Remove from tracking dict
+                        del db_entries[discord_id]
+
+                    else:
+                        # Add new entry to database
+                        async with db.pool.acquire() as conn:
+                            await conn.execute(
+                                '''INSERT INTO callsigns
+                                   (callsign, discord_user_id, discord_username, roblox_user_id, roblox_username,
+                                    fenz_prefix, hhstj_prefix, approved_by_id, approved_by_name, callsign_history)
+                                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+                                           $10) ON CONFLICT (callsign) DO NOTHING''',
+                                callsign,
+                                discord_id,
+                                '',  # Leave blank
+                                '',  # Leave blank
+                                roblox_username if roblox_username else '',
+                                fenz_prefix if fenz_prefix else '',
+                                '',  # Leave blank
+                                interaction.user.id,
+                                f"Synced from Sheets by {interaction.user.display_name}",
+                                '[]'
+                            )
+
+                        stats['added_to_db'] += 1
+
+                except Exception as e:
+                    stats['errors'].append(f"Error processing Command row {i}: {str(e)}")
+
+            # Remaining entries in db_entries are missing from sheets
+            stats['missing_from_sheets'] = len(db_entries)
+
+            # Build result embed
+            result_embed = discord.Embed(
+                title="Sync Complete ✅",
+                description="Two-way sync between Google Sheets and database completed.",
+                color=discord.Color.green()
+            )
+
+            result_embed.add_field(
+                name="📊 Statistics",
+                value=f"**Sheets Total:** {stats['sheets_total']}\n"
+                      f"**Database Total (before):** {stats['db_total']}\n"
+                      f"**Added to DB:** {stats['added_to_db']}\n"
+                      f"**Updated in DB:** {stats['updated_in_db']}\n"
+                      f"**Missing from Sheets:** {stats['missing_from_sheets']}",
+                inline=False
+            )
+
+            if stats['missing_from_sheets'] > 0:
+                missing_list = []
+                for discord_id, entry in list(db_entries.items())[:10]:  # Show first 10
+                    missing_list.append(f"• {entry['fenz_prefix']}-{entry['callsign']} (<@{discord_id}>)")
+
+                result_embed.add_field(
+                    name="⚠️ In Database but Not in Sheets",
+                    value='\n'.join(missing_list) +
+                          (f"\n*...and {stats['missing_from_sheets'] - 10} more*" if stats[
+                                                                                         'missing_from_sheets'] > 10 else ""),
+                    inline=False
+                )
+
+            if stats['errors']:
+                error_list = '\n'.join(stats['errors'][:5])  # Show first 5 errors
+                result_embed.add_field(
+                    name="❌ Errors",
+                    value=error_list +
+                          (f"\n*...and {len(stats['errors']) - 5} more errors*" if len(stats['errors']) > 5 else ""),
+                    inline=False
+                )
+
+            result_embed.timestamp = discord.utils.utcnow()
+            result_embed.set_footer(text=f"Synced by {interaction.user.display_name}")
+
+            await interaction.edit_original_response(content=None, embed=result_embed)
+
+        except Exception as e:
+            error_embed = discord.Embed(
+                title="Sync Failed ❌",
+                description=f"An error occurred during sync:\n```{str(e)}```",
+                color=discord.Color.red()
+            )
+            await interaction.edit_original_response(content=None, embed=error_embed)
+            print(f"Sync error: {e}")
+            import traceback
+            traceback.print_exc()
+
 async def setup(bot):
     """This function is called when the cog is loaded"""
     await bot.add_cog(CallsignCog(bot))
