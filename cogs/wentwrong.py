@@ -4,6 +4,9 @@ from discord import app_commands
 import json
 from datetime import datetime
 from dateutil import parser
+import pytz
+
+NZ_TZ = pytz.timezone('Pacific/Auckland')
 
 # Configuration for multiple guilds
 GUILD_CONFIGS = {
@@ -85,7 +88,7 @@ class WentWrongCog(commands.Cog):
     @app_commands.describe(
         vehicle_callsigns='The callsigns of the vehicles involved separated by a comma (e.g. HAM415. HAM411 and HAM4118).',
         driver_usernames='The username(s) of the drivers involved (e.g. MajorKarlsruhe, dancingskulls and 123eye_sonme).',
-        date_and_time='The date and time of incident (e.g., "Jan 20, 2025 3:30 PM")',
+        date_and_time='The date and time of incident (e.g., "Today at 3:30 PM, or yesterday 5:45 AM")',
         location='The location of the incident (e.g. Sandstone Road, Postal Code 210).',
         approx_speed='The approximate speed before the incident (e.g. 67km/h).',
         proof='Images or videos of the occurance (image/video/link). If you want to add more, add them after you send the command.'
@@ -124,6 +127,11 @@ class WentWrongCog(commands.Cog):
             # Parse the date and time string into a datetime object
             try:
                 parsed_datetime = parser.parse(date_and_time)
+
+                # If the parsed datetime is naive (no timezone), assume it's NZ time
+                if parsed_datetime.tzinfo is None:
+                    parsed_datetime = NZ_TZ.localize(parsed_datetime)
+
                 # Convert to Discord timestamp format
                 discord_timestamp = discord.utils.format_dt(parsed_datetime, style="F")
             except Exception as date_error:

@@ -1,5 +1,5 @@
 import discord
-from discord.ext import commands, tasks  # ← Add tasks here
+from discord.ext import commands, tasks
 from discord import app_commands
 from dotenv import load_dotenv
 
@@ -56,7 +56,6 @@ HIGH_COMMAND_RANKS = {
     1389157641799991347,  # DNC
     1285113945664917514,  # NC
 }
-
 
 # Rank hierarchy for sorting (highest to lowest)
 FENZ_RANK_HIERARCHY = [
@@ -192,24 +191,41 @@ class CallsignCog(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
-
-    def __init__(self, bot):
-        self.bot = bot
         self.sync_interval = 60  # 60 minutes
         # Start auto-sync on bot startup
         self.auto_sync_loop.start()
 
-    @tasks.loop(minutes=60)  # Use tasks.loop instead of asyncio
+    def cog_unload(self):
+        """Stop the auto-sync loop when cog is unloaded"""
+        self.auto_sync_loop.cancel()
+
+    @tasks.loop(minutes=60)
     async def auto_sync_loop(self):
         """Background task for automatic syncing"""
         for guild in self.bot.guilds:
             try:
-                # Your existing sync code here
                 async with db.pool.acquire() as conn:
                     callsigns = await conn.fetch('SELECT * FROM callsigns ORDER BY callsign')
-                # ... rest of sync logic
+
+                if callsigns:
+                    callsign_data = []
+                    for record in callsigns:
+                        callsign_data.append({
+                            'fenz_prefix': record['fenz_prefix'],
+                            'hhstj_prefix': record['hhstj_prefix'],
+                            'callsign': record['callsign'],
+                            'discord_user_id': record['discord_user_id'],
+                            'discord_username': record['discord_username'],
+                            'roblox_user_id': record['roblox_user_id'],
+                            'roblox_username': record['roblox_username']
+                        })
+
+                    callsign_data.sort(key=lambda x: get_rank_sort_key(x['fenz_prefix'], x['hhstj_prefix']))
+                    await sheets_manager.batch_update_callsigns(callsign_data)
+
+                    print(f"Auto-sync completed for guild {guild.name}: {len(callsigns)} callsigns synced")
             except Exception as e:
-                print(f'Error in auto-sync: {e}')
+                print(f'Error in auto-sync for guild {guild.name}: {e}')
 
     @auto_sync_loop.before_loop
     async def before_auto_sync(self):
@@ -273,17 +289,9 @@ class CallsignCog(commands.Cog):
     @app_commands.checks.has_permissions(administrator=True)
     async def sync_callsigns(
             self,
-            interaction: discord.Interaction,
-            auto_sync: bool = False,
-            interval_minutes: int = 60
+            interaction: discord.Interaction
     ):
-        """
-        Sync callsigns from database to Google Sheets and update Discord nicknames
-
-        Parameters:
-        - auto_sync: Enable automatic periodic syncing
-        - interval_minutes: How often to sync automatically (default: 60 minutes)
-        """
+        """Sync callsigns from database to Google Sheets and update Discord nicknames"""
         await interaction.response.defer(thinking=True)
 
         try:
@@ -311,9 +319,6 @@ class CallsignCog(commands.Cog):
             # Sort by rank hierarchy instead of alphabetically
             callsign_data.sort(key=lambda x: get_rank_sort_key(x['fenz_prefix'], x['hhstj_prefix']))
 
-            # Get existing sheet data to pull validation ranges
-            existing_data = await sheets_manager.get_all_callsigns()
-
             # Update Google Sheets
             success = await sheets_manager.batch_update_callsigns(callsign_data)
 
@@ -325,7 +330,6 @@ class CallsignCog(commands.Cog):
             updated_count = 0
             failed_updates = []
 
-            # In sync_callsigns method, around line 330-345
             for record in callsigns:
                 try:
                     member = interaction.guild.get_member(record['discord_user_id'])
@@ -344,7 +348,6 @@ class CallsignCog(commands.Cog):
                                 break
 
                         # If rank changed, update database and reset nickname
-                        # BUT: Don't reset if they're High Command and currently have no prefix (their choice)
                         if correct_fenz_prefix and correct_fenz_prefix != current_fenz_prefix:
                             # Skip reset for High Command members who chose no prefix
                             if not (is_high_command and current_fenz_prefix == ""):
@@ -354,7 +357,7 @@ class CallsignCog(commands.Cog):
                                         'UPDATE callsigns SET fenz_prefix = $1 WHERE discord_user_id = $2',
                                         correct_fenz_prefix, member.id
                                     )
-                                # Reset to basic format (no HHStJ prefix)
+                                # Reset to basic format
                                 new_nickname = f"{correct_fenz_prefix}-{record['callsign']}"
 
                                 # Update Google Sheets
@@ -386,7 +389,7 @@ class CallsignCog(commands.Cog):
                     failed_updates.append(f"{record.get('discord_username', 'Unknown')}: {str(e)}")
 
             response = f"✅ Successfully synced {len(callsigns)} callsigns to Google Sheets (sorted by rank hierarchy).\n"
-            response += f"🔖 Updated {updated_count} Discord nicknames.\n"
+            response += f"📖 Updated {updated_count} Discord nicknames.\n"
 
             if failed_updates:
                 response += f"\n⚠️ Failed to update {len(failed_updates)} nicknames:\n"
@@ -394,94 +397,10 @@ class CallsignCog(commands.Cog):
                 if len(failed_updates) > 10:
                     response += f"\n... and {len(failed_updates) - 10} more"
 
-            # Handle auto-sync setup
-            if auto_sync:
-                if not hasattr(self, 'auto_sync_task') or self.auto_sync_task.cancelled():
-                    self.sync_interval = interval_minutes
-                    self.auto_sync_task = self.bot.loop.create_task(self._auto_sync_loop(interaction.guild))
-                    response += f"\n\n🔄 Auto-sync enabled! Will sync every {interval_minutes} minutes."
-                else:
-                    response += f"\n\n⚠️ Auto-sync is already running. Use `/callsign sync_stop` to stop it first."
-
             await interaction.followup.send(response)
 
         except Exception as e:
             await interaction.followup.send(f"❌ Error during sync: {str(e)}")
-
-    async def _auto_sync_loop(self, guild: discord.Guild):
-        """Background task for automatic syncing"""
-        import asyncio
-
-        while True:
-            try:
-                await asyncio.sleep(self.sync_interval * 60)  # Convert minutes to seconds
-
-                # Perform sync
-                async with db.pool.acquire() as conn:
-                    callsigns = await conn.fetch('SELECT * FROM callsigns ORDER BY callsign')
-
-                if callsigns:
-                    callsign_data = []
-                    for record in callsigns:
-                        callsign_data.append({
-                            'fenz_prefix': record['fenz_prefix'],
-                            'hhstj_prefix': record['hhstj_prefix'],
-                            'callsign': record['callsign'],
-                            'discord_user_id': record['discord_user_id'],
-                            'discord_username': record['discord_username'],
-                            'roblox_user_id': record['roblox_user_id'],
-                            'roblox_username': record['roblox_username']
-                        })
-
-                    callsign_data.sort(key=lambda x: get_rank_sort_key(x['fenz_prefix'], x['hhstj_prefix']))
-                    await sheets_manager.batch_update_callsigns(callsign_data)
-
-                    # Update nicknames
-                    for record in callsigns:
-                        try:
-                            member = guild.get_member(record['discord_user_id'])
-                            if member:
-                                new_nickname = format_nickname(
-                                    record['fenz_prefix'],
-                                    record['callsign'],
-                                    record['hhstj_prefix'],
-                                    record['roblox_username']
-                                )
-                                if member.nick != new_nickname:
-                                    await member.edit(nick=new_nickname)
-                        except:
-                            pass
-
-                    print(f"Auto-sync completed: {len(callsigns)} callsigns synced")
-
-            except asyncio.CancelledError:
-                print("Auto-sync task cancelled")
-                break
-            except Exception as e:
-                print(f"Error in auto-sync: {e}")
-
-    @callsign_group.command(name="sync_stop", description="Stop automatic syncing")
-    @app_commands.checks.has_role(SYNC_ROLE_ID)
-    @app_commands.checks.has_permissions(administrator=True)
-    async def stop_auto_sync(self, interaction: discord.Interaction):
-        """Stop the automatic sync task"""
-        if hasattr(self, 'auto_sync_task') and not self.auto_sync_task.cancelled():
-            self.auto_sync_task.cancel()
-            await interaction.response.send_message("🛑 Auto-sync stopped.")
-        else:
-            await interaction.response.send_message("⚠️ Auto-sync is not currently running.")
-
-    @callsign_group.command(name="sync_status", description="Check auto-sync status")
-    @app_commands.checks.has_role(SYNC_ROLE_ID)
-    @app_commands.checks.has_permissions(administrator=True)
-    async def sync_status(self, interaction: discord.Interaction):
-        """Check if auto-sync is running"""
-        if hasattr(self, 'auto_sync_task') and not self.auto_sync_task.cancelled():
-            await interaction.response.send_message(
-                f"✅ Auto-sync is running (interval: {self.sync_interval} minutes)"
-            )
-        else:
-            await interaction.response.send_message("⚠️ Auto-sync is not currently running.")
 
     @callsign_group.command(name="assign", description="Assign a callsign to a user")
     @app_commands.checks.has_role(SYNC_ROLE_ID)
@@ -526,7 +445,7 @@ class CallsignCog(commands.Cog):
                 await interaction.followup.send("❌ Failed to fetch Roblox username.")
                 return
 
-            # After getting FENZ rank
+            # Get FENZ rank from user's roles
             fenz_prefix = None
             is_high_command = False
 
@@ -551,12 +470,15 @@ class CallsignCog(commands.Cog):
                 )
                 return
 
-                # FOR HIGH COMMAND - Send choice message
+            # FOR HIGH COMMAND - Send choice message
             if is_high_command:
+                rank_name = [name for role_id, (name, _) in FENZ_RANK_MAP.items()
+                             if any(r.id == role_id for r in user.roles)][0]
+
                 embed = discord.Embed(
                     title="🎖️ High Command Callsign Assignment",
                     description=f"{user.mention}, you are being assigned callsign **{callsign}**.\n\n"
-                                f"As a **{[name for role_id, (name, _) in FENZ_RANK_MAP.items() if any(r.id == role_id for r in user.roles)][0]}**, "
+                                f"As a **{rank_name}**, "
                                 f"you can choose whether to use your rank prefix or not.",
                     color=discord.Color.gold()
                 )
@@ -587,7 +509,8 @@ class CallsignCog(commands.Cog):
 
                 # Send ephemeral message to HIGH COMMAND member
                 try:
-                    await user.send(embed=embed, view=view)
+                    dm_message = await user.send(embed=embed, view=view)
+                    view.message = dm_message  # Store message reference
                     dm_sent = True
                 except discord.Forbidden:
                     dm_sent = False
@@ -600,41 +523,24 @@ class CallsignCog(commands.Cog):
                     )
                 else:
                     # Post in channel with ephemeral-style ping
-                    message = await interaction.channel.send(
+                    channel_message = await interaction.channel.send(
                         content=f"{user.mention}",
                         embed=embed,
                         view=view
                     )
-                    view.message = message
+                    view.message = channel_message  # Store message reference
 
                     await interaction.followup.send(
-                        f"📝 Posted callsign choice for {user.mention} in channel (DMs are disabled).",
+                        f"📌 Posted callsign choice for {user.mention} in channel (DMs are disabled).",
                         ephemeral=True
                     )
 
                 return  # Exit here - the view handles the rest
 
-                # FOR NON-HIGH COMMAND - Proceed normally with prefix
+            # FOR NON-HIGH COMMAND - Proceed normally with prefix
             await add_callsign_to_database(
                 callsign, user.id, str(user), roblox_id, roblox_username,
                 fenz_prefix, hhstj_prefix
-            )
-
-            # Update Discord nickname
-            new_nickname = format_nickname(fenz_prefix, callsign, hhstj_prefix, roblox_username)
-            try:
-                await user.edit(nick=new_nickname)
-            except discord.Forbidden:
-                await interaction.followup.send(
-                    f"⚠️ Callsign assigned but couldn't update nickname (lacking permissions). "
-                    f"Please manually set to: `{new_nickname}`"
-                )
-                return
-
-            await interaction.followup.send(
-                f"✅ Assigned callsign **{fenz_prefix}-{callsign}** to {user.mention}\n"
-                f"🏷️ Nickname updated to: `{new_nickname}`\n"
-                f"💡 Remember to run `/callsign sync` to update Google Sheets!"
             )
 
             # Update Discord nickname
@@ -690,7 +596,8 @@ class CallsignCog(commands.Cog):
             # Display results
             for result in results:
                 embed = discord.Embed(
-                    title=f"Callsign: {result['fenz_prefix']}-{result['callsign']}",
+                    title=f"Callsign: {result['fenz_prefix']}-{result['callsign']}" if result[
+                        'fenz_prefix'] else f"Callsign: {result['callsign']}",
                     color=discord.Color.blue()
                 )
 
@@ -708,7 +615,7 @@ class CallsignCog(commands.Cog):
 
                 embed.add_field(
                     name="FENZ Rank",
-                    value=result['fenz_prefix'],
+                    value=result['fenz_prefix'] if result['fenz_prefix'] else "None (High Command)",
                     inline=True
                 )
 
@@ -764,7 +671,8 @@ class CallsignCog(commands.Cog):
                     await interaction.followup.send("❌ No callsign found to remove.")
                     return
 
-                removed_callsign = f"{result['fenz_prefix']}-{result['callsign']}"
+                removed_callsign = f"{result['fenz_prefix']}-{result['callsign']}" if result['fenz_prefix'] else result[
+                    'callsign']
 
                 # Try to reset nickname if it's a member
                 if user:
@@ -796,6 +704,7 @@ class HighCommandPrefixChoice(discord.ui.View):
         self.roblox_id = roblox_id
         self.roblox_username = roblox_username
         self.choice_made = False
+        self.message = None  # Will be set after sending
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         # Only allow the high command member to respond
@@ -840,7 +749,7 @@ class HighCommandPrefixChoice(discord.ui.View):
         await interaction.followup.send(
             f"✅ You've chosen to use the prefix!\n"
             f"🏷️ Your callsign is: **{self.fenz_prefix}-{self.callsign}**\n"
-            f"📝 Nickname set to: `{new_nickname}`",
+            f"📌 Nickname set to: `{new_nickname}`",
             ephemeral=True
         )
 
@@ -888,7 +797,7 @@ class HighCommandPrefixChoice(discord.ui.View):
         await interaction.followup.send(
             f"✅ You've chosen NOT to use a prefix!\n"
             f"🔢 Your callsign is: **{self.callsign}**\n"
-            f"📝 Nickname set to: `{new_nickname}`",
+            f"📌 Nickname set to: `{new_nickname}`",
             ephemeral=True
         )
 
@@ -930,7 +839,7 @@ class HighCommandPrefixChoice(discord.ui.View):
         for item in self.children:
             item.disabled = True
 
-        if not self.choice_made:
+        if not self.choice_made and self.message:
             try:
                 # Edit the original message
                 await self.message.edit(
@@ -943,8 +852,9 @@ class HighCommandPrefixChoice(discord.ui.View):
                     f"⏰ Callsign assignment for {self.user.mention} timed out.",
                     ephemeral=True
                 )
-            except:
-                pass
+            except Exception as e:
+                print(f"Error in timeout handler: {e}")
+
 
 async def setup(bot):
     await bot.add_cog(CallsignCog(bot))

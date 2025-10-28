@@ -319,6 +319,7 @@ client = Client(command_prefix='!', intents=intents)
 
 @client.command(name='forcesync')
 @commands.is_owner()
+@app_commands.checks.has_permissions(administrator=True)
 async def force_sync(ctx):
     """Force sync all commands (owner only)"""
     await ctx.send("🔄 Force syncing commands...")
@@ -340,6 +341,7 @@ async def force_sync(ctx):
 
 @client.command(name='listcogs')
 @commands.is_owner()
+@app_commands.checks.has_permissions(administrator=True)
 async def list_cogs(ctx):
     """List all loaded cogs (owner only)"""
     loaded = "\n".join([f"• {cog}" for cog in client.loaded_cogs]) or "None"

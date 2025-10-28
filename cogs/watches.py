@@ -114,7 +114,7 @@ class VoteButton(discord.ui.View):
                 watch_role_id = guild_config.get('watch_role_id')
 
                 await interaction.response.edit_message(
-                    content=f'-# ||<@&{watch_role_id}> {interaction.user.mention} <@&1309021002675654700> <@&1365536209681514636>||' if watch_role_id else '',
+                    content=f'-# ||<@&{watch_role_id}> {interaction.user.mention} <@&1285474077556998196> <@&1365536209681514636>||' if watch_role_id else '',
                     embeds=[start_embed, voters_embed],
                     view=watch_view
                 )
@@ -473,7 +473,7 @@ class WatchCog(commands.Cog):
 
             view = WatchRoleButton(0)
             msg = await watch_channel.send(
-                content=f'-# ||<@&{watch_role_id}> {interaction.user.mention} <@&1309021002675654700> <@&1365536209681514636>||' if watch_role_id else '',
+                content=f'-# ||<@&{watch_role_id}> {interaction.user.mention} <@&1285474077556998196> <@&1365536209681514636>||' if watch_role_id else '',
                 embed=embed,
                 view=view
             )
@@ -724,7 +724,7 @@ class WatchCog(commands.Cog):
             watch_role_id = guild_config.get('watch_role_id')
 
             await message.edit(
-                content=f'-# ||<@&{watch_role_id}> {interaction.user.mention} <@&1309021002675654700> <@&1365536209681514636>||' if watch_role_id else '',
+                content=f'-# ||<@&{watch_role_id}> {interaction.user.mention} <@&1285474077556998196> <@&1365536209681514636>||' if watch_role_id else '',
                 embed=embed,
                 view=WatchRoleButton(int(watch))
             )
@@ -1187,7 +1187,7 @@ class WatchCog(commands.Cog):
             )
 
             msg = await watch_channel.send(
-                content=f"||<@&{vote_data['watch_role_id']}> <@{vote_data['user_id']}> <@&1309021002675654700> <@&1365536209681514636>||" if vote_data.get(
+                content=f"||<@&{vote_data['watch_role_id']}> <@{vote_data['user_id']}> <@&1285474077556998196> <@&1365536209681514636>||" if vote_data.get(
                     'watch_role_id') else '',
                 embed=embed,
                 view=view
@@ -1230,7 +1230,7 @@ class WatchCog(commands.Cog):
             watch_role_id = guild_config.get('watch_role_id')
 
             await message.edit(
-                content=f"||<@&{watch_role_id}> <@{vote_data['user_id']}> <@&1309021002675654700> <@&1365536209681514636>||" if watch_role_id else '',
+                content=f"||<@&{watch_role_id}> <@{vote_data['user_id']}> <@&1285474077556998196> <@&1365536209681514636>||" if watch_role_id else '',
                 embed=failed_embed,
                 view=view
             )
@@ -1551,7 +1551,7 @@ class WatchCog(commands.Cog):
                                    icon_url=interaction.user.display_avatar.url)
 
             await channel.send(
-                content=f'||<@&{watch_role_id}> <@&1309021002675654700> <@&1365536209681514636>||' if watch_role_id else '',
+                content=f'||<@&{watch_role_id}> <@&1285474077556998196> <@&1365536209681514636>||' if watch_role_id else '',
                 embed=boost_embed
             )
 
