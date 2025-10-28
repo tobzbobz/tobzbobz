@@ -29,8 +29,8 @@ COMMAND_RANK_PRIORITY = {
     "ANC": 3,
     "AC": 4,
     "AAC": 5,
-    "DCO": 6,
-    "CO": 7,
+    "CO": 6,
+    "DCO": 7,
     "SSO": 8,
     "SO": 9,
 }
@@ -68,6 +68,7 @@ class GoogleSheetsManager:
     def __init__(self):
         self.client = None
         self.spreadsheet = None
+        self._cached_validations = {}  # Cache for dropdown validations
 
     def authenticate(self):
         """Authenticate with Google Sheets API using environment variables"""
@@ -76,7 +77,7 @@ class GoogleSheetsManager:
             service_account_info = os.getenv('GOOGLE_SERVICE_ACCOUNT_JSON')
 
             if not service_account_info:
-                print("âŒ GOOGLE_SERVICE_ACCOUNT_JSON environment variable not set")
+                print("❌ GOOGLE_SERVICE_ACCOUNT_JSON environment variable not set")
                 return False
 
             # Parse the JSON string
@@ -90,13 +91,13 @@ class GoogleSheetsManager:
 
             self.client = gspread.authorize(creds)
             self.spreadsheet = self.client.open_by_key(SPREADSHEET_ID)
-            print("âœ… Google Sheets authenticated successfully")
+            print("✅ Google Sheets authenticated successfully")
             return True
         except json.JSONDecodeError as e:
-            print(f"âŒ Invalid JSON in GOOGLE_SERVICE_ACCOUNT_JSON: {e}")
+            print(f"❌ Invalid JSON in GOOGLE_SERVICE_ACCOUNT_JSON: {e}")
             return False
         except Exception as e:
-            print(f"âŒ Google Sheets authentication failed: {e}")
+            print(f"❌ Google Sheets authentication failed: {e}")
             return False
 
     def get_worksheet(self, sheet_name: str):
@@ -104,7 +105,7 @@ class GoogleSheetsManager:
         try:
             return self.spreadsheet.worksheet(sheet_name)
         except Exception as e:
-            print(f"âŒ Error getting worksheet '{sheet_name}': {e}")
+            print(f"❌ Error getting worksheet '{sheet_name}': {e}")
             return None
 
     def find_first_empty_row(self, worksheet) -> int:
@@ -121,7 +122,7 @@ class GoogleSheetsManager:
             # If no empty row found, return next row after last
             return len(all_values) + 1
         except Exception as e:
-            print(f"âŒ Error finding empty row: {e}")
+            print(f"❌ Error finding empty row: {e}")
             return 2  # Default to row 2 if error
 
     def find_row_by_discord_id(self, worksheet, discord_id: str, column: str) -> int:
@@ -130,20 +131,115 @@ class GoogleSheetsManager:
             cell = worksheet.find(str(discord_id), in_column=self._column_to_number(column))
             return cell.row if cell else None
         except Exception as e:
-            print(f"âŒ Error finding Discord ID: {e}")
+            print(f"❌ Error finding Discord ID: {e}")
             return None
 
     def _column_to_number(self, column: str) -> int:
         """Convert column letter to number (A=1, B=2, etc.)"""
         return ord(column.upper()) - ord('A') + 1
 
+    def _column_to_letter(self, column: int) -> str:
+        """Convert column number to letter (1=A, 2=B, etc.)"""
+        return chr(ord('A') + column - 1)
+
     def delete_row(self, worksheet, row_number: int):
         """Delete a specific row"""
         try:
             worksheet.delete_rows(row_number)
-            print(f"âœ… Deleted row {row_number} from {worksheet.title}")
+            print(f"✅ Deleted row {row_number} from {worksheet.title}")
         except Exception as e:
-            print(f"âŒ Error deleting row: {e}")
+            print(f"❌ Error deleting row: {e}")
+
+    def get_existing_data_validation(self, worksheet, row: int, column: int):
+        """
+        Get existing data validation rules from a cell to reuse them
+        Returns the validation options as a list, or None if no validation exists
+        """
+        try:
+            cache_key = f"{worksheet.title}_{column}"
+
+            # Return cached validation if available
+            if cache_key in self._cached_validations:
+                return self._cached_validations[cache_key]
+
+            worksheet_id = worksheet.id
+
+            # Get sheet metadata to find data validation rules
+            sheet_metadata = self.spreadsheet.fetch_sheet_metadata()
+
+            for sheet in sheet_metadata['sheets']:
+                if sheet['properties']['sheetId'] == worksheet_id:
+                    # Look for conditionalFormats or dataValidation in the sheet
+                    if 'conditionalFormats' in sheet:
+                        for rule in sheet['conditionalFormats']:
+                            if 'dataValidation' in rule:
+                                # Check if this rule applies to our column
+                                rule_range = rule.get('ranges', [{}])[0]
+                                rule_col = rule_range.get('startColumnIndex', -1)
+
+                                if rule_col == column - 1:  # Convert to 0-based
+                                    condition = rule['dataValidation'].get('condition', {})
+                                    if condition.get('type') == 'ONE_OF_LIST':
+                                        values = [v.get('userEnteredValue') for v in condition.get('values', [])]
+                                        self._cached_validations[cache_key] = values
+                                        return values
+
+            # If no validation found, try to get it from another row in the same column
+            # Look at row 2 (first data row after header)
+            try:
+                column_letter = self._column_to_letter(column)
+                cell_range = f"{column_letter}2"
+
+                # This is a workaround - we'll check if row 2 has validation
+                # If it does, we assume all rows in this column should have the same validation
+                print(f"ℹ️ No cached validation found for {worksheet.title} column {column}, checking row 2...")
+
+            except:
+                pass
+
+            return None
+
+        except Exception as e:
+            print(f"⚠️ Could not get existing data validation: {e}")
+            return None
+
+    def copy_data_validation_to_cell(self, worksheet, source_row: int, target_row: int, column: int):
+        """
+        Copy data validation from one cell to another in the same column
+        This preserves existing dropdown configurations
+        """
+        try:
+            worksheet_id = worksheet.id
+            column_letter = self._column_to_letter(column)
+
+            # Use copyPaste request to copy validation
+            copy_request = {
+                "copyPaste": {
+                    "source": {
+                        "sheetId": worksheet_id,
+                        "startRowIndex": source_row - 1,
+                        "endRowIndex": source_row,
+                        "startColumnIndex": column - 1,
+                        "endColumnIndex": column
+                    },
+                    "destination": {
+                        "sheetId": worksheet_id,
+                        "startRowIndex": target_row - 1,
+                        "endRowIndex": target_row,
+                        "startColumnIndex": column - 1,
+                        "endColumnIndex": column
+                    },
+                    "pasteType": "PASTE_DATA_VALIDATION"
+                }
+            }
+
+            self.spreadsheet.batch_update({"requests": [copy_request]})
+            print(f"✅ Copied validation to {column_letter}{target_row}")
+            return True
+
+        except Exception as e:
+            print(f"⚠️ Could not copy data validation: {e}")
+            return False
 
     def determine_rank_type(self, member_roles) -> tuple:
         """
@@ -184,6 +280,7 @@ class GoogleSheetsManager:
     def determine_qualifications(self, member_roles, is_command: bool = False) -> str:
         """
         Determine qualifications based on roles (can have multiple)
+        Returns comma-separated string of qualifications
         """
         qualifications = []
 
@@ -204,7 +301,7 @@ class GoogleSheetsManager:
     async def add_callsign_to_sheets(self, member, callsign: str, fenz_prefix: str,
                                      roblox_username: str, discord_id: int):
         """
-        Add or update callsign in Google Sheets
+        Add or update callsign in Google Sheets, preserving existing dropdown validation
         """
         try:
             if not self.client:
@@ -216,7 +313,7 @@ class GoogleSheetsManager:
             rank_type, rank_data = self.determine_rank_type(member.roles)
 
             if not rank_type:
-                print(f"âš ï¸ No FENZ rank found for {member.display_name}")
+                print(f"⚠️ No FENZ rank found for {member.display_name}")
                 return False
 
             # Get both worksheets
@@ -224,26 +321,22 @@ class GoogleSheetsManager:
             command_sheet = self.get_worksheet("Command")
 
             if not non_command_sheet or not command_sheet:
-                print("âŒ Could not access worksheets")
+                print("❌ Could not access worksheets")
                 return False
 
             # Search for existing entry in both sheets (Column G for Non-Command, Column E for Command)
             existing_non_command_row = self.find_row_by_discord_id(non_command_sheet, discord_id, 'G')
             existing_command_row = self.find_row_by_discord_id(command_sheet, discord_id, 'E')
 
-            # Only delete if it matches the new rank type (to handle rank transitions)
-            # If user is going from Non-Command to Command (or vice versa), delete old entry
-            # If user is staying in same category, we'll update the existing row instead of deleting
+            # Handle rank transitions
             if rank_type == 'non-command':
                 # Delete from Command sheet if exists (rank transition)
                 if existing_command_row:
                     self.delete_row(command_sheet, existing_command_row)
-                # Don't delete from Non-Command - we'll update that row
             elif rank_type == 'command':
                 # Delete from Non-Command sheet if exists (rank transition)
                 if existing_non_command_row:
                     self.delete_row(non_command_sheet, existing_non_command_row)
-                # Don't delete from Command - we'll update that row
 
             if rank_type == 'non-command':
                 # Non-Command: A, B, C, D, F, G, H, I
@@ -266,18 +359,24 @@ class GoogleSheetsManager:
                     strikes_value = "Clear"  # Default for Non-Command
                 qualifications = self.determine_qualifications(member.roles, is_command=False)
 
-                # Update specific cells
+                # Update cells with values
                 target_sheet.update_cell(empty_row, 1, full_callsign)  # A: Full callsign
                 target_sheet.update_cell(empty_row, 2, fenz_prefix)  # B: FENZ Prefix
                 target_sheet.update_cell(empty_row, 3, callsign)  # C: Callsign number
                 target_sheet.update_cell(empty_row, 4, roblox_username)  # D: Roblox username
-                target_sheet.update_cell(empty_row, 6, strikes_value)  # F: Strikes dropdown
+                target_sheet.update_cell(empty_row, 6, strikes_value)  # F: Strikes
                 target_sheet.update_cell(empty_row, 7, str(discord_id))  # G: Discord ID
                 target_sheet.update_cell(empty_row, 8, rank_number)  # H: Rank number
-                target_sheet.update_cell(empty_row, 9, qualifications)  # I: Qualifications dropdown
+                target_sheet.update_cell(empty_row, 9, qualifications)  # I: Qualifications
+
+                # Copy data validation from row 2 (template row) to preserve existing dropdowns
+                # Column F: Strikes dropdown
+                self.copy_data_validation_to_cell(target_sheet, source_row=2, target_row=empty_row, column=6)
+
+                # Column I: Qualifications dropdown
+                self.copy_data_validation_to_cell(target_sheet, source_row=2, target_row=empty_row, column=9)
 
                 print(f"✅ Added Non-Command callsign {full_callsign} to row {empty_row}")
-
 
             else:  # command
                 # Command: A, B, C, D, E, F
@@ -303,20 +402,27 @@ class GoogleSheetsManager:
                 # Get rank priority for sorting
                 rank_priority = COMMAND_RANK_PRIORITY.get(fenz_prefix, 99)  # Default to 99 if unknown
 
-                # Update specific cells
-                target_sheet.update_cell(empty_row, 1, full_callsign)
-                target_sheet.update_cell(empty_row, 2, roblox_username)
-                target_sheet.update_cell(empty_row, 3, qualifications)
-                target_sheet.update_cell(empty_row, 4, strikes_value)
-                target_sheet.update_cell(empty_row, 5, str(discord_id))
-                target_sheet.update_cell(empty_row, 6, rank_priority)  # ← ADD THIS: Column F
+                # Update cells with values
+                target_sheet.update_cell(empty_row, 1, full_callsign)  # A: Full callsign
+                target_sheet.update_cell(empty_row, 2, roblox_username)  # B: Roblox username
+                target_sheet.update_cell(empty_row, 3, qualifications)  # C: Qualifications
+                target_sheet.update_cell(empty_row, 4, strikes_value)  # D: Strikes
+                target_sheet.update_cell(empty_row, 5, str(discord_id))  # E: Discord ID
+                target_sheet.update_cell(empty_row, 6, rank_priority)  # F: Rank priority
+
+                # Copy data validation from row 2 (template row) to preserve existing dropdowns
+                # Column D: Strikes dropdown
+                self.copy_data_validation_to_cell(target_sheet, source_row=2, target_row=empty_row, column=4)
+
+                # Column C: Qualifications dropdown
+                self.copy_data_validation_to_cell(target_sheet, source_row=2, target_row=empty_row, column=3)
 
                 print(f"✅ Added Command callsign {full_callsign} to row {empty_row}")
 
             return True
 
         except Exception as e:
-            print(f"âŒ Error adding to Google Sheets: {e}")
+            print(f"❌ Error adding to Google Sheets: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -374,6 +480,7 @@ class GoogleSheetsManager:
         has_mismatch = (current_fenz_prefix != correct_prefix)
 
         return (has_mismatch, correct_prefix, rank_type)
+
 
 # Create global instance
 sheets_manager = GoogleSheetsManager()

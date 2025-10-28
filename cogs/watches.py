@@ -1,9 +1,12 @@
+from dotenv import load_dotenv
+load_dotenv()
 import discord
 from discord.ext import commands
 from discord import app_commands
 from discord.ext import tasks
 import asyncio
 import datetime
+import json
 
 # Import database
 from database import db, load_watches, load_scheduled_votes, load_completed_watches
@@ -727,6 +730,7 @@ class WatchCog(commands.Cog):
             )
 
             # Save to completed watches database
+            # Save to completed watches database
             await db.add_completed_watch(
                 message_id=int(watch),
                 guild_id=interaction.guild.id,
@@ -740,7 +744,10 @@ class WatchCog(commands.Cog):
                 ended_by=interaction.user.id,
                 attendees=attendees,
                 status='completed',
-                has_voters_embed=watch_data.get('has_voters_embed', False)
+                has_voters_embed=watch_data.get('has_voters_embed', False),
+                original_colour=watch_data.get('original_colour'),
+                original_station=watch_data.get('original_station'),
+                switch_history=json.dumps(watch_data.get('switch_history', []))
             )
 
             # Remove from active watches
@@ -870,6 +877,21 @@ class WatchCog(commands.Cog):
                             f"**Started:** <t:{started_at}:f> (<t:{started_at}:R>)\n"
                             f"**Ended:** <t:{ended_at}:f> (<t:{ended_at}:R>)"
                         )
+
+                    # Add switch history if exists
+                    switch_history = watch_data.get('switch_history', [])
+                    if switch_history:
+                        switches = []
+                        for switch in switch_history:
+                            switch_time = f"<t:{switch['timestamp']}:t>"
+                            changes = []
+                            if 'from_colour' in switch:
+                                changes.append(f"{switch['from_colour']}→{switch['to_colour']}")
+                            if 'from_station' in switch:
+                                changes.append(f"{switch['from_station']}→{switch['to_station']}")
+                            switches.append(f"{' & '.join(changes)} at {switch_time}")
+
+                        field_value += f"\n**Switches:** {', '.join(switches)}"
 
                     colour_emoji = {
                         'Yellow': '🟡',
@@ -1242,6 +1264,317 @@ class WatchCog(commands.Cog):
     def cog_unload(self):
         """Clean up when cog is unloaded"""
         self.check_scheduled_votes.cancel()
+
+    @watch_group.command(name='switch', description='Switch an active watch to a different colour/station.')
+    @app_commands.default_permissions(manage_nicknames=True)
+    @app_commands.describe(
+        watch='The active watch to switch.',
+        new_colour='New colour for the watch (optional).',
+        new_station='New station for the watch (optional).'
+    )
+    async def watch_switch(self, interaction: discord.Interaction, watch: str,
+                           new_colour: str = None, new_station: str = None):
+        try:
+            allowed_role_ids = [1285474077556998196, 1389550689113473024, 1365536209681514636]
+            user_roles = [role.id for role in interaction.user.roles]
+
+            if not any(role_id in user_roles for role_id in allowed_role_ids):
+                permission_embed = discord.Embed(
+                    description='❌ You do not have permission to use this command!',
+                    colour=discord.Colour(0xf24d4d)
+                )
+                await interaction.response.send_message(embed=permission_embed, ephemeral=True)
+                return
+
+            if new_colour is None and new_station is None:
+                error_embed = discord.Embed(
+                    description='❌ You must specify at least one parameter to switch (colour or station)!',
+                    colour=discord.Colour(0xf24d4d)
+                )
+                await interaction.response.send_message(embed=error_embed, ephemeral=True)
+                return
+
+            await interaction.response.defer(ephemeral=True)
+
+            if watch not in active_watches:
+                not_found_embed = discord.Embed(
+                    description='❌ Watch not found!',
+                    colour=discord.Colour(0xf24d4d)
+                )
+                await interaction.followup.send(embed=not_found_embed, ephemeral=True)
+                return
+
+            watch_data = active_watches[watch]
+            old_colour = watch_data['colour']
+            old_station = watch_data['station']
+
+            # Use old values if new ones not provided
+            final_colour = new_colour if new_colour else old_colour
+            final_station = new_station if new_station else old_station
+
+            # Check if target colour/station combo already exists
+            for msg_id, other_watch in active_watches.items():
+                if (msg_id != watch and
+                        other_watch.get('colour') == final_colour and
+                        other_watch.get('station') == final_station):
+                    colour_map = {
+                        'Yellow': discord.Colour.gold(),
+                        'Blue': discord.Colour.blue(),
+                        'Brown': discord.Colour(0x8B4513),
+                        'Red': discord.Colour.red()
+                    }
+                    embed_colour = colour_map.get(final_colour, discord.Colour.orange())
+
+                    conflict_embed = discord.Embed(
+                        description=f'❌ A {final_colour} Watch for `{final_station}` is already active! End it first before switching to this combination.',
+                        colour=embed_colour
+                    )
+                    await interaction.response.send_message(embed=conflict_embed, ephemeral=True)
+                    return
+
+            channel = interaction.guild.get_channel(watch_data['channel_id'])
+            if channel is None:
+                error_embed = discord.Embed(
+                    description='❌ Watch channel not found!',
+                    colour=discord.Colour(0xf24d4d)
+                )
+                await interaction.followup.send(embed=error_embed, ephemeral=True)
+                return
+
+            guild_config = get_guild_config(interaction.guild.id)
+            watch_channel_id = guild_config.get('watch_channel_id')
+
+            # Delete the original watch message
+            try:
+                original_message = await channel.fetch_message(int(watch))
+                await original_message.delete()
+            except discord.NotFound:
+                pass
+            except Exception as e:
+                print(f'Error deleting original watch message: {e}')
+
+            # Create new watch announcement
+            colour_map = {
+                'Yellow': discord.Colour.gold(),
+                'Blue': discord.Colour.blue(),
+                'Brown': discord.Colour(0x8B4513),
+                'Red': discord.Colour.red()
+            }
+            embed_colour = colour_map.get(final_colour, discord.Colour.orange())
+
+            embed = discord.Embed(title=f'🚨 {final_colour} Watch Announcement 🚨', colour=embed_colour)
+            embed.add_field(name='Station', value=f'`{final_station}`', inline=True)
+            embed.add_field(name='Time', value=f'<t:{watch_data["started_at"]}:R>', inline=True)
+            embed.add_field(name='Watch Leader', value=f'<@{watch_data["user_id"]}>', inline=True)
+            embed.add_field(name='‎', value='No need to vote just hop in!!\nIf you are joining, please join Fenz RTO 🙌',
+                            inline=False)
+
+            # Add switch information
+            switch_info = []
+            if new_colour and new_colour != old_colour:
+                switch_info.append(f'**Colour changed:** {old_colour} → {final_colour}')
+            if new_station and new_station != old_station:
+                switch_info.append(f'**Station changed:** {old_station} → {final_station}')
+
+            if switch_info:
+                embed.add_field(name='⚠️ Watch Updated', value='\n'.join(switch_info), inline=False)
+
+            embed.add_field(name='‎', value='**Select the below reaction role to be notified of any future watches!**',
+                            inline=False)
+            embed.set_image(
+                url='https://cdn.discordapp.com/attachments/1425867714160758896/1426932258694238258/image.png?ex=68f4eeb9&is=68f39d39&hm=b69f7f8bad7dcd7c7bde4dab731ca7e23e27d32d864cad9fc7224dcbb0648840')
+            embed.set_thumbnail(url='https://cdn.discordapp.com/emojis/1389200656090533970.webp?size=128')
+            embed.set_author(name=f'Switched by {interaction.user.display_name}',
+                             icon_url=interaction.user.display_avatar.url)
+
+            view = WatchRoleButton(0)
+
+            # Only ping specific roles for switch
+            msg = await channel.send(
+                content=f'-# ||<@&1285474077556998196> <@&1365536209681514636>||',
+                embed=embed,
+                view=view
+            )
+
+            view.message_id = msg.id
+
+            # Update database with switch information
+            switch_timestamp = int(discord.utils.utcnow().timestamp())
+            import json
+
+            # Get existing switch history
+            switch_history = watch_data.get('switch_history', [])
+            if isinstance(switch_history, str):
+                switch_history = json.loads(switch_history) if switch_history else []
+
+            # Add new switch entry
+            switch_entry = {
+                'timestamp': switch_timestamp,
+                'switched_by': interaction.user.id,
+                'switched_by_name': interaction.user.display_name
+            }
+            if new_colour:
+                switch_entry['from_colour'] = old_colour
+                switch_entry['to_colour'] = final_colour
+            if new_station:
+                switch_entry['from_station'] = old_station
+                switch_entry['to_station'] = final_station
+
+            switch_history.append(switch_entry)
+
+            # Update active watch with new message ID and switch data
+            await db.remove_active_watch(int(watch))
+            await db.add_active_watch(
+                message_id=msg.id,
+                guild_id=interaction.guild.id,
+                channel_id=channel.id,
+                user_id=watch_data['user_id'],
+                user_name=watch_data['user_name'],
+                colour=final_colour,
+                station=final_station,
+                started_at=watch_data['started_at'],
+                has_voters_embed=watch_data.get('has_voters_embed', False),
+                original_colour=watch_data.get('original_colour', old_colour),
+                original_station=watch_data.get('original_station', old_station),
+                switch_history=json.dumps(switch_history)
+            )
+
+            # Update in-memory cache
+            del active_watches[watch]
+            active_watches[str(msg.id)] = {
+                'user_id': watch_data['user_id'],
+                'user_name': watch_data['user_name'],
+                'channel_id': channel.id,
+                'colour': final_colour,
+                'station': final_station,
+                'started_at': watch_data['started_at'],
+                'has_voters_embed': watch_data.get('has_voters_embed', False),
+                'original_colour': watch_data.get('original_colour', old_colour),
+                'original_station': watch_data.get('original_station', old_station),
+                'switch_history': switch_history
+            }
+
+            success_embed = discord.Embed(
+                description=f'✅ Watch switched successfully!\n' + '\n'.join(switch_info),
+                colour=discord.Colour(0x2ecc71)
+            )
+            await interaction.followup.send(embed=success_embed, ephemeral=True)
+
+        except Exception as e:
+            print(f'Error switching watch: {e}')
+            error_embed = discord.Embed(description=f'❌ Error: {e}', colour=discord.Colour(0xf24d4d))
+            await interaction.followup.send(embed=error_embed, ephemeral=True)
+            raise
+
+    @watch_switch.autocomplete('watch')
+    async def switch_watch_autocomplete(self, interaction: discord.Interaction, current: str) -> list[
+        app_commands.Choice[str]]:
+        choices = []
+        for msg_id, data in active_watches.items():
+            label = f"{data['colour']} Watch - {data['station']} (by {data.get('user_name', 'Unknown')})"
+            choices.append(app_commands.Choice(name=label, value=msg_id))
+        return [choice for choice in choices if current.lower() in choice.name.lower()][:25]
+
+    @watch_switch.autocomplete('new_colour')
+    async def switch_colour_autocomplete(self, interaction: discord.Interaction, current: str) -> list[
+        app_commands.Choice[str]]:
+        colours = ['Yellow', 'Blue', 'Brown', 'Red']
+        return [app_commands.Choice(name=colour, value=colour) for colour in colours if
+                current.lower() in colour.lower()]
+
+    @watch_switch.autocomplete('new_station')
+    async def switch_station_autocomplete(self, interaction: discord.Interaction, current: str) -> list[
+        app_commands.Choice[str]]:
+        stations = ['Station 1', 'Station 2']
+        return [app_commands.Choice(name=station, value=station) for station in stations if
+                current.lower() in station.lower()]
+
+    @watch_group.command(name='low', description='Boost an active watch to encourage more people to join!')
+    @app_commands.default_permissions(manage_nicknames=True)
+    @app_commands.describe(watch='The active watch to boost.')
+    async def watch_boost(self, interaction: discord.Interaction, watch: str):
+        try:
+            allowed_role_ids = [1285474077556998196, 1389550689113473024, 1365536209681514636]
+            user_roles = [role.id for role in interaction.user.roles]
+
+            if not any(role_id in user_roles for role_id in allowed_role_ids):
+                permission_embed = discord.Embed(
+                    description='❌ You do not have permission to use this command!',
+                    colour=discord.Colour(0xf24d4d)
+                )
+                await interaction.response.send_message(embed=permission_embed, ephemeral=True)
+                return
+
+            await interaction.response.defer(ephemeral=True)
+
+            if watch not in active_watches:
+                not_found_embed = discord.Embed(
+                    description='❌ Watch not found!',
+                    colour=discord.Colour(0xf24d4d)
+                )
+                await interaction.followup.send(embed=not_found_embed, ephemeral=True)
+                return
+
+            watch_data = active_watches[watch]
+            channel = interaction.guild.get_channel(watch_data['channel_id'])
+
+            if channel is None:
+                error_embed = discord.Embed(
+                    description='❌ Watch channel not found!',
+                    colour=discord.Colour(0xf24d4d)
+                )
+                await interaction.followup.send(embed=error_embed, ephemeral=True)
+                return
+
+            guild_config = get_guild_config(interaction.guild.id)
+            watch_role_id = guild_config.get('watch_role_id')
+
+            colour_map = {
+                'Yellow': discord.Colour.gold(),
+                'Blue': discord.Colour.blue(),
+                'Brown': discord.Colour(0x8B4513),
+                'Red': discord.Colour.red()
+            }
+            embed_colour = colour_map.get(watch_data['colour'], discord.Colour.orange())
+
+            boost_embed = discord.Embed(
+                title=f"🚨 {watch_data['colour']} Watch Boost - Join Now! 🚨",
+                description=f"A **{watch_data['colour']} Watch** is currently active at **{watch_data['station']}**!\n\nWe need more people to join! If you're available, hop in now!",
+                colour=embed_colour
+            )
+            boost_embed.add_field(name='Station', value=f"`{watch_data['station']}`", inline=True)
+            boost_embed.add_field(name='Watch Leader', value=f"<@{watch_data['user_id']}>", inline=True)
+            boost_embed.add_field(name='Started', value=f"<t:{watch_data['started_at']}:R>", inline=True)
+            boost_embed.add_field(name='❎', value='Join Fenz RTO and help out! 🙌', inline=False)
+            boost_embed.set_thumbnail(url='https://cdn.discordapp.com/emojis/1389200656090533970.webp?size=128')
+            boost_embed.set_footer(text=f'Boosted by {interaction.user.display_name}',
+                                   icon_url=interaction.user.display_avatar.url)
+
+            await channel.send(
+                content=f'||<@&{watch_role_id}> <@&1309021002675654700> <@&1365536209681514636>||' if watch_role_id else '',
+                embed=boost_embed
+            )
+
+            success_embed = discord.Embed(
+                description=f'✅ Watch boosted successfully in {channel.mention}!',
+                colour=discord.Colour(0x2ecc71)
+            )
+            await interaction.followup.send(embed=success_embed, ephemeral=True)
+
+        except Exception as e:
+            print(f'Error boosting watch: {e}')
+            error_embed = discord.Embed(description=f'❌ Error: {e}', colour=discord.Colour(0xf24d4d))
+            await interaction.followup.send(embed=error_embed, ephemeral=True)
+            raise
+
+    @watch_boost.autocomplete('watch')
+    async def boost_watch_autocomplete(self, interaction: discord.Interaction, current: str) -> list[
+        app_commands.Choice[str]]:
+        choices = []
+        for msg_id, data in active_watches.items():
+            label = f"{data['colour']} Watch - {data['station']} (by {data.get('user_name', 'Unknown')})"
+            choices.append(app_commands.Choice(name=label, value=msg_id))
+        return [choice for choice in choices if current.lower() in choice.name.lower()][:25]
 
 
 async def setup(bot):

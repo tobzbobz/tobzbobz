@@ -1,3 +1,5 @@
+from dotenv import load_dotenv
+load_dotenv()
 import os
 import asyncpg
 from typing import Optional, Dict, List, Any
@@ -176,22 +178,36 @@ class Database:
             rows = await conn.fetch(query, *params)
             return [dict(row) for row in rows]
 
-    # === ACTIVE WATCHES (FENZ Watch System) ===
+    # Replace the existing methods in your Database class with these updated versions
+
     async def add_active_watch(self, message_id: int, guild_id: int, channel_id: int,
                                user_id: int, user_name: str, colour: str, station: str,
-                               started_at: int, has_voters_embed: bool = False):
-        """Add an active watch"""
+                               started_at: int, has_voters_embed: bool = False,
+                               original_colour: str = None, original_station: str = None,
+                               switch_history: str = None):
+        """Add an active watch with switch tracking support"""
         async with self.pool.acquire() as conn:
             try:
+                # Set defaults for new fields
+                if original_colour is None:
+                    original_colour = colour
+                if original_station is None:
+                    original_station = station
+                if switch_history is None:
+                    switch_history = '[]'
+
                 await conn.execute(
                     '''INSERT INTO active_watches
                        (message_id, guild_id, channel_id, user_id, user_name, colour, station, started_at,
-                        has_voters_embed)
-                       VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8), $9)
-                       ON CONFLICT (message_id) DO UPDATE SET
-                       guild_id = $2, channel_id = $3, user_id = $4, user_name = $5,
-                       colour = $6, station = $7, started_at = to_timestamp($8), has_voters_embed = $9''',
-                    message_id, guild_id, channel_id, user_id, user_name, colour, station, started_at, has_voters_embed
+                        has_voters_embed, original_colour, original_station, switch_history)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8), $9, $10, $11,
+                               $12::jsonb) ON CONFLICT (message_id) DO
+                    UPDATE SET
+                        guild_id = $2, channel_id = $3, user_id = $4, user_name = $5,
+                        colour = $6, station = $7, started_at = to_timestamp($8), has_voters_embed = $9,
+                        original_colour = $10, original_station = $11, switch_history = $12::jsonb''',
+                    message_id, guild_id, channel_id, user_id, user_name, colour, station, started_at,
+                    has_voters_embed, original_colour, original_station, switch_history
                 )
                 return True
             except Exception as e:
@@ -199,7 +215,7 @@ class Database:
                 return False
 
     async def get_active_watches(self, guild_id: int = None) -> Dict:
-        """Get all active watches (returns dict with message_id as key for compatibility)"""
+        """Get all active watches with switch history (returns dict with message_id as key for compatibility)"""
         async with self.pool.acquire() as conn:
             if guild_id:
                 rows = await conn.fetch('SELECT * FROM active_watches WHERE guild_id = $1', guild_id)
@@ -208,6 +224,11 @@ class Database:
 
             watches = {}
             for row in rows:
+                import json
+                switch_history = row.get('switch_history', [])
+                if isinstance(switch_history, str):
+                    switch_history = json.loads(switch_history)
+
                 watches[str(row['message_id'])] = {
                     'user_id': row['user_id'],
                     'user_name': row['user_name'],
@@ -215,7 +236,10 @@ class Database:
                     'colour': row['colour'],
                     'station': row['station'],
                     'started_at': int(row['started_at'].timestamp()),
-                    'has_voters_embed': row['has_voters_embed']
+                    'has_voters_embed': row['has_voters_embed'],
+                    'original_colour': row.get('original_colour'),
+                    'original_station': row.get('original_station'),
+                    'switch_history': switch_history
                 }
             return watches
 
@@ -283,39 +307,8 @@ class Database:
             return result != 'DELETE 0'
 
     # === COMPLETED WATCHES ===
-    async def add_completed_watch(self, message_id: int, guild_id: int, channel_id: int,
-                                  user_id: int, user_name: str, colour: str, station: str,
-                                  started_at: int, ended_at: int, ended_by: int = None,
-                                  attendees: int = None, status: str = 'completed',
-                                  reason: str = None, votes_received: int = None,
-                                  votes_required: int = None, has_voters_embed: bool = False):
-        """Add a completed watch"""
-        async with self.pool.acquire() as conn:
-            try:
-                await conn.execute(
-                    '''INSERT INTO completed_watches
-                       (message_id, guild_id, channel_id, user_id, user_name, colour, station,
-                        started_at, ended_at, ended_by, attendees, status, reason,
-                        votes_received, votes_required, has_voters_embed)
-                       VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8), to_timestamp($9),
-                               $10, $11, $12, $13, $14, $15, $16)
-                       ON CONFLICT (message_id) DO UPDATE SET
-                       guild_id = $2, channel_id = $3, user_id = $4, user_name = $5,
-                       colour = $6, station = $7, started_at = to_timestamp($8),
-                       ended_at = to_timestamp($9), ended_by = $10, attendees = $11,
-                       status = $12, reason = $13, votes_received = $14,
-                       votes_required = $15, has_voters_embed = $16''',
-                    message_id, guild_id, channel_id, user_id, user_name, colour, station,
-                    started_at, ended_at, ended_by, attendees, status, reason,
-                    votes_received, votes_required, has_voters_embed
-                )
-                return True
-            except Exception as e:
-                print(f'❌ Error adding completed watch: {e}')
-                return False
-
     async def get_completed_watches(self, guild_id: int = None, limit: int = 500) -> Dict:
-        """Get completed watches (returns dict with message_id as key for compatibility)"""
+        """Get completed watches with switch history (returns dict with message_id as key for compatibility)"""
         async with self.pool.acquire() as conn:
             if guild_id:
                 rows = await conn.fetch(
@@ -330,9 +323,15 @@ class Database:
 
             watches = {}
             for row in rows:
+                import json
+                switch_history = row.get('switch_history', [])
+                if isinstance(switch_history, str):
+                    switch_history = json.loads(switch_history)
+
                 watches[str(row['message_id'])] = {
                     'user_id': row['user_id'],
                     'user_name': row['user_name'],
+                    'channel_id': row.get('channel_id'),
                     'colour': row['colour'],
                     'station': row['station'],
                     'started_at': int(row['started_at'].timestamp()),
@@ -341,10 +340,55 @@ class Database:
                     'attendees': row['attendees'],
                     'status': row['status'],
                     'reason': row['reason'],
-                    'votes_received': row['votes_received'],
-                    'votes_required': row['votes_required']
+                    'votes_received': row.get('votes_received'),
+                    'votes_required': row.get('votes_required'),
+                    'original_colour': row.get('original_colour'),
+                    'original_station': row.get('original_station'),
+                    'switch_history': switch_history
                 }
             return watches
+
+
+    async def add_completed_watch(self, message_id: int, guild_id: int, channel_id: int,
+                                  user_id: int, user_name: str, colour: str, station: str,
+                                  started_at: int, ended_at: int, ended_by: int = None,
+                                  attendees: int = None, status: str = 'completed',
+                                  reason: str = None, votes_received: int = None,
+                                  votes_required: int = None, has_voters_embed: bool = False,
+                                  original_colour: str = None, original_station: str = None,
+                                  switch_history: str = None):
+        """Add a completed watch with switch tracking support"""
+        async with self.pool.acquire() as conn:
+            try:
+                # Set defaults
+                if switch_history is None:
+                    switch_history = '[]'
+
+                await conn.execute(
+                    '''INSERT INTO completed_watches
+                       (message_id, guild_id, channel_id, user_id, user_name, colour, station,
+                        started_at, ended_at, ended_by, attendees, status, reason,
+                        votes_received, votes_required, has_voters_embed,
+                        original_colour, original_station, switch_history)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8), to_timestamp($9),
+                               $10, $11, $12, $13, $14, $15, $16, $17, $18, $19::jsonb) ON CONFLICT (message_id) DO
+                    UPDATE SET
+                        guild_id = $2, channel_id = $3, user_id = $4, user_name = $5,
+                        colour = $6, station = $7, started_at = to_timestamp($8),
+                        ended_at = to_timestamp($9), ended_by = $10, attendees = $11,
+                        status = $12, reason = $13, votes_received = $14,
+                        votes_required = $15, has_voters_embed = $16,
+                        original_colour = $17, original_station = $18, switch_history = $19::jsonb''',
+                    message_id, guild_id, channel_id, user_id, user_name, colour, station,
+                    started_at, ended_at, ended_by, attendees, status, reason,
+                    votes_received, votes_required, has_voters_embed,
+                    original_colour, original_station, switch_history
+                )
+                return True
+            except Exception as e:
+                print(f'❌ Error adding completed watch: {e}')
+                return False
+
 
     async def delete_completed_watch(self, message_id: int):
         """Delete a completed watch"""
@@ -407,3 +451,44 @@ async def save_completed_watches(watches: dict):
     # The watches should be saved individually using db.add_completed_watch()
     # This remains as a no-op since we save in real-time now
     pass
+
+
+async def update_watch_switch(self, message_id: int, new_colour: str, new_station: str,
+                              old_colour: str, old_station: str, switch_timestamp: int):
+    """Update watch with switch information"""
+    async with aiosqlite.connect(self.db_path) as db:
+        # Get current switch history
+        cursor = await db.execute(
+            'SELECT switch_history, original_colour, original_station FROM active_watches WHERE message_id = ?',
+            (message_id,)
+        )
+        row = await cursor.fetchone()
+
+        if row:
+            import json
+            switch_history = json.loads(row[0]) if row[0] else []
+            original_colour = row[1] or old_colour
+            original_station = row[2] or old_station
+
+            # Add new switch entry
+            switch_entry = {
+                'timestamp': switch_timestamp,
+                'from_colour': old_colour,
+                'to_colour': new_colour,
+                'from_station': old_station,
+                'to_station': new_station
+            }
+            switch_history.append(switch_entry)
+
+            # Update the watch
+            await db.execute('''
+                             UPDATE active_watches
+                             SET colour           = ?,
+                                 station          = ?,
+                                 switch_history   = ?,
+                                 original_colour  = ?,
+                                 original_station = ?
+                             WHERE message_id = ?
+                             ''', (new_colour, new_station, json.dumps(switch_history),
+                                   original_colour, original_station, message_id))
+            await db.commit()
