@@ -622,7 +622,7 @@ class CounterOfferApprovalView(discord.ui.View):
             existing = await check_callsign_exists(callsign)
             if existing and existing['discord_user_id'] != self.requester.id:
                 await interaction.followup.send(
-                    f"❌ Callsign `{self.fenz_prefix}-{self.callsign}` is already occupied by <@{existing['discord_user_id']}>. Please deny this request and offer an alternative callsign.",
+                    f"❌ Callsign `{self.fenz_prefix}-{self.callsign}` is already occupied by <@{existing['discord_user_id']}>. Please click deny on this request and offer an alternative callsign.",
                     ephemeral=True
                 )
                 return
@@ -1106,7 +1106,7 @@ class CallsignOffersView(discord.ui.View):
             existing = await check_callsign_exists(callsign)
             if existing and existing['discord_user_id'] != self.requester.id:
                 await interaction.followup.send(
-                    f"❌ Callsign `{self.fenz_prefix}-{self.callsign}` is already occupied by <@{existing['discord_user_id']}>. Please deny this request and offer an alternative callsign.",
+                    f"❌ Callsign `{self.fenz_prefix}-{self.callsign}` is already occupied by <@{existing['discord_user_id']}>. Please click deny on this request and offer an alternative callsign.",
                     ephemeral=True
                 )
                 return
@@ -1355,7 +1355,7 @@ class CallsignRequestView(discord.ui.View):
         existing = await check_callsign_exists(callsign)
         if existing and existing['discord_user_id'] != self.requester.id:
             await interaction.followup.send(
-                f"❌ Callsign `{self.fenz_prefix}-{self.callsign}` is already occupied by <@{existing['discord_user_id']}>. Please deny this request and offer an alternative callsign.",
+                f"❌ Callsign `{self.fenz_prefix}-{self.callsign}` is already occupied by <@{existing['discord_user_id']}>. Please click deny on this request and offer an alternative callsign.",
                 ephemeral=True
             )
             return
@@ -1979,11 +1979,6 @@ class CallsignCog(commands.Cog):
             inline=False
         )
         await interaction.edit_original_response(content=None, embed=success_embed)
-        # Delete the processing message
-        try:
-            await interaction.delete_original_response()
-        except:
-            pass  # If it fails, no big deal
         return
 
     @callsign_group.command(name="sync", description="Sync callsigns between Google Sheets and database (Admin only)")
@@ -2155,21 +2150,27 @@ class CallsignCog(commands.Cog):
                     if not full_callsign or not discord_id_str:
                         continue
 
-                    # Extract callsign from full callsign (e.g., "SO-123" -> "123")
-                    # Extract callsign from full callsign (e.g., "SO-123" -> "123")
+                    # Extract callsign from full callsign (e.g., "SO-123" -> "123" OR just "DNC" -> "DNC")
                     callsign_parts = full_callsign.split('-')
-                    if len(callsign_parts) != 2:
-                        # Skip entries without proper format (like standalone "DNC")
+
+                    # Check if it's a standalone prefix (DNC, ANC, NC) or prefix-number format
+                    if len(callsign_parts) == 1:
+                        # Standalone prefix (e.g., "DNC", "ANC", "NC")
+                        fenz_prefix = callsign_parts[0]
+                        callsign = ''  # No callsign number for top ranks
+                    elif len(callsign_parts) == 2:
+                        # Normal format (e.g., "SO-123")
+                        fenz_prefix = callsign_parts[0]
+                        callsign = callsign_parts[1]
+
+                        # Validate callsign is numeric
+                        if not callsign.isdigit():
+                            stats['errors'].append(f"Skipping non-numeric callsign in Command row {i}: {full_callsign}")
+                            continue
+                    else:
+                        # Invalid format
                         stats['errors'].append(
-                            f"Skipping invalid format in Command row {i}: {full_callsign} (expected PREFIX-NUMBER)")
-                        continue
-
-                    fenz_prefix = callsign_parts[0]
-                    callsign = callsign_parts[1]
-
-                    # Validate callsign is numeric
-                    if not callsign.isdigit():
-                        stats['errors'].append(f"Skipping non-numeric callsign in Command row {i}: {full_callsign}")
+                            f"Skipping invalid format in Command row {i}: {full_callsign}")
                         continue
 
                     try:
@@ -2246,6 +2247,27 @@ class CallsignCog(commands.Cog):
 
                 except Exception as e:
                     stats['errors'].append(f"Error processing Command row {i}: {str(e)}")
+
+            # After processing both sheets, add missing entries back to sheets
+            for discord_id, entry in db_entries.items():
+                try:
+                    # Fetch the member to get their roles
+                    member = await interaction.guild.fetch_member(discord_id)
+
+                    if member:
+                        # Use the sheets_manager to add them
+                        await sheets_manager.add_callsign_to_sheets(
+                            member=member,
+                            callsign=entry['callsign'],
+                            fenz_prefix=entry['fenz_prefix'] if entry['fenz_prefix'] else '',
+                            roblox_username=entry['roblox_username'],
+                            discord_id=discord_id
+                        )
+                        stats['added_to_sheets'] = stats.get('added_to_sheets', 0) + 1
+                    else:
+                        stats['errors'].append(f"Could not fetch member {discord_id}")
+                except Exception as e:
+                    stats['errors'].append(f"Error adding {discord_id} to sheets: {str(e)}")
 
             # Remaining entries in db_entries are missing from sheets
             stats['missing_from_sheets'] = len(db_entries)
