@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 import asyncio
 from database import db
 import json  # Still needed for JSON serialization in database
+from google_sheets_integration import sheets_manager  # ADD THIS LINE
 
 BLOXLINK_API_KEY = os.getenv('BLOXLINK_API_KEY')
 # Your Discord User ID
