@@ -532,7 +532,7 @@ class GoogleSheetsManager:
             for data in callsign_data:
                 fenz_prefix = data['fenz_prefix']
                 discord_id = str(data['discord_user_id'])
-                is_command = any(fenz_prefix == prefix for _, (_, prefix) in COMMAND_RANKS.items())
+                is_command = data.get('is_command', False)  # Use the flag from callsign data
 
                 if is_command:
                     # Remove from delete list (user still exists)

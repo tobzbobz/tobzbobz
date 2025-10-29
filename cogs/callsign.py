@@ -250,14 +250,18 @@ class CallsignCog(commands.Cog):
                 if callsigns:
                     callsign_data = []
                     for record in callsigns:
+                        is_command_rank = record['fenz_prefix'] in [prefix for _, (_, prefix) in COMMAND_RANKS.items()] if \
+                        record['fenz_prefix'] else False
+
                         callsign_data.append({
-                            'fenz_prefix': record['fenz_prefix'],
-                            'hhstj_prefix': record['hhstj_prefix'],
+                            'fenz_prefix': record['fenz_prefix'] or '',  # Ensure not None
+                            'hhstj_prefix': record['hhstj_prefix'] or '',
                             'callsign': record['callsign'],
                             'discord_user_id': record['discord_user_id'],
                             'discord_username': record['discord_username'],
                             'roblox_user_id': record['roblox_user_id'],
-                            'roblox_username': record['roblox_username']
+                            'roblox_username': record['roblox_username'],
+                            'is_command': is_command_rank
                         })
 
                     callsign_data.sort(key=lambda x: get_rank_sort_key(x['fenz_prefix'], x['hhstj_prefix']))
@@ -343,14 +347,19 @@ class CallsignCog(commands.Cog):
             # Prepare data for sheets - sort by rank hierarchy
             callsign_data = []
             for record in callsigns:
+                # Determine if command based on FENZ prefix
+                is_command_rank = record['fenz_prefix'] in [prefix for _, (_, prefix) in COMMAND_RANKS.items()] if record[
+                    'fenz_prefix'] else False
+
                 callsign_data.append({
-                    'fenz_prefix': record['fenz_prefix'],
-                    'hhstj_prefix': record['hhstj_prefix'],
+                    'fenz_prefix': record['fenz_prefix'] or '',  # Ensure not None
+                    'hhstj_prefix': record['hhstj_prefix'] or '',
                     'callsign': record['callsign'],
                     'discord_user_id': record['discord_user_id'],
                     'discord_username': record['discord_username'],
                     'roblox_user_id': record['roblox_user_id'],
-                    'roblox_username': record['roblox_username']
+                    'roblox_username': record['roblox_username'],
+                    'is_command': is_command_rank
                 })
 
             # Sort by rank hierarchy
