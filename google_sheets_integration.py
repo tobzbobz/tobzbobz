@@ -483,8 +483,7 @@ class GoogleSheetsManager:
 
     async def batch_update_callsigns(self, callsign_data: list):
         """
-        Batch update all callsigns to Google Sheets using efficient batch operations
-        callsign_data: List of dicts with callsign info
+        Smart batch update - only updates what changed
         """
         try:
             if not self.client:
@@ -492,7 +491,6 @@ class GoogleSheetsManager:
                 if not auth_success:
                     return False
 
-            # Get both worksheets
             non_command_sheet = self.get_worksheet("Non-Command")
             command_sheet = self.get_worksheet("Command")
 
@@ -500,89 +498,157 @@ class GoogleSheetsManager:
                 print("❌ Could not access worksheets")
                 return False
 
-            # Clear existing data (keep headers)
-            print("🗑️ Clearing existing data...")
+            # Get existing data from sheets
+            print("📖 Reading existing sheet data...")
+            existing_non_command = non_command_sheet.get_all_values()
+            existing_command = command_sheet.get_all_values()
 
-            # Clear Non-Command sheet (starting from row 2)
-            non_command_values = non_command_sheet.get_all_values()
-            if len(non_command_values) > 1:
-                non_command_sheet.delete_rows(2, len(non_command_values))
+            # Build maps of existing data (Discord ID -> row data)
+            existing_nc_map = {}
+            for i, row in enumerate(existing_non_command[1:], start=2):  # Start at row 2
+                if row and len(row) >= 7 and row[6]:  # Discord ID in column G
+                    existing_nc_map[row[6]] = {
+                        'row': i,
+                        'data': row
+                    }
 
-            # Clear Command sheet (starting from row 2)
-            command_values = command_sheet.get_all_values()
-            if len(command_values) > 1:
-                command_sheet.delete_rows(2, len(command_values))
+            existing_cmd_map = {}
+            for i, row in enumerate(existing_command[1:], start=2):
+                if row and len(row) >= 5 and row[4]:  # Discord ID in column E
+                    existing_cmd_map[row[4]] = {
+                        'row': i,
+                        'data': row
+                    }
 
-            print("✅ Sheets cleared, preparing batch data...")
+            # Track what needs updating
+            nc_updates = []  # Rows to update
+            nc_new = []  # New rows to add
+            cmd_updates = []
+            cmd_new = []
+            nc_deletes = set(existing_nc_map.keys())  # Will remove as we find them
+            cmd_deletes = set(existing_cmd_map.keys())
 
-            # Separate data into command and non-command
-            command_rows = []
-            non_command_rows = []
-
+            # Process callsign data
             for data in callsign_data:
                 fenz_prefix = data['fenz_prefix']
-
-                # Check if it's a command rank
+                discord_id = str(data['discord_user_id'])
                 is_command = any(fenz_prefix == prefix for _, (_, prefix) in COMMAND_RANKS.items())
 
                 if is_command:
+                    # Remove from delete list (user still exists)
+                    cmd_deletes.discard(discord_id)
+                    nc_deletes.discard(discord_id)  # Remove from NC if they transitioned
+
                     full_callsign = f"{fenz_prefix}-{data['callsign']}" if fenz_prefix else data['callsign']
                     rank_priority = COMMAND_RANK_PRIORITY.get(fenz_prefix, 99)
 
-                    command_rows.append([
+                    new_row = [
                         full_callsign,
                         data['roblox_username'],
                         "No additional qualifications",
                         "Good Boy",
-                        str(data['discord_user_id']),
+                        discord_id,
                         rank_priority
-                    ])
-                else:
+                    ]
+
+                    # Check if exists and needs update
+                    if discord_id in existing_cmd_map:
+                        existing = existing_cmd_map[discord_id]['data']
+                        # Compare relevant fields (skip strikes/qualifications - manual edits)
+                        if (existing[0] != new_row[0] or  # Callsign
+                                existing[1] != new_row[1] or  # Roblox username
+                                existing[4] != new_row[4] or  # Discord ID
+                                existing[5] != str(new_row[5])):  # Rank priority
+
+                            # Preserve manual edits for strikes (col D) and qualifications (col C)
+                            new_row[2] = existing[2] if len(existing) > 2 else new_row[2]
+                            new_row[3] = existing[3] if len(existing) > 3 else new_row[3]
+
+                            cmd_updates.append({
+                                'row': existing_cmd_map[discord_id]['row'],
+                                'data': new_row
+                            })
+                    elif discord_id in existing_nc_map:
+                        # Rank transition: NC -> Command
+                        nc_deletes.add(discord_id)
+                        cmd_new.append(new_row)
+                    else:
+                        # Completely new
+                        cmd_new.append(new_row)
+
+                else:  # Non-command
+                    nc_deletes.discard(discord_id)
+                    cmd_deletes.discard(discord_id)
+
                     full_callsign = f"{fenz_prefix}-{data['callsign']}"
-                    rank_number = 3
-                    for role_id, (_, prefix, num) in NON_COMMAND_RANKS.items():
-                        if prefix == fenz_prefix:
-                            rank_number = num
-                            break
+                    rank_number = next((num for _, (_, prefix, num) in NON_COMMAND_RANKS.items()
+                                        if prefix == fenz_prefix), 3)
 
-                    non_command_rows.append([
-                        full_callsign,
-                        fenz_prefix,
-                        data['callsign'],
-                        data['roblox_username'],
-                        "",
-                        "Clear",
-                        str(data['discord_user_id']),
-                        rank_number,
-                        "No additional qualifications"
-                    ])
+                    new_row = [
+                        full_callsign, fenz_prefix, data['callsign'], data['roblox_username'],
+                        "", "Clear", discord_id, rank_number, "No additional qualifications"
+                    ]
 
-            # BATCH UPDATE: Write all rows at once
-            if command_rows:
-                print(f"📝 Writing {len(command_rows)} command callsigns...")
-                command_sheet.update('A2', command_rows, value_input_option='RAW')
+                    if discord_id in existing_nc_map:
+                        existing = existing_nc_map[discord_id]['data']
+                        if (existing[0] != new_row[0] or existing[1] != new_row[1] or
+                                existing[2] != new_row[2] or existing[3] != new_row[3] or
+                                existing[6] != new_row[6] or existing[7] != str(new_row[7])):
+                            # Preserve strikes and qualifications
+                            new_row[5] = existing[5] if len(existing) > 5 else new_row[5]
+                            new_row[8] = existing[8] if len(existing) > 8 else new_row[8]
 
-                # BATCHED VALIDATION COPY - Single API call for all rows
-                print("📋 Copying validations for command sheet (batched)...")
-                self.batch_copy_validations(
-                    command_sheet,
-                    source_row=2,
-                    target_rows=range(2, 2 + len(command_rows)),
-                    columns=[3, 4]  # Columns C and D
-                )
+                            nc_updates.append({
+                                'row': existing_nc_map[discord_id]['row'],
+                                'data': new_row
+                            })
+                    elif discord_id in existing_cmd_map:
+                        # Rank transition: Command -> NC
+                        cmd_deletes.add(discord_id)
+                        nc_new.append(new_row)
+                    else:
+                        nc_new.append(new_row)
 
-            if non_command_rows:
-                print(f"📝 Writing {len(non_command_rows)} non-command callsigns...")
-                non_command_sheet.update('A2', non_command_rows, value_input_option='RAW')
+            # Execute updates
+            print(f"📝 Updates: {len(nc_updates)} NC, {len(cmd_updates)} CMD")
+            print(f"➕ New: {len(nc_new)} NC, {len(cmd_new)} CMD")
+            print(f"🗑️ Delete: {len(nc_deletes)} NC, {len(cmd_deletes)} CMD")
 
-                # BATCHED VALIDATION COPY - Single API call for all rows
-                print("📋 Copying validations for non-command sheet (batched)...")
-                self.batch_copy_validations(
-                    non_command_sheet,
-                    source_row=2,
-                    target_rows=range(2, 2 + len(non_command_rows)),
-                    columns=[6, 9]  # Columns F and I
-                )
+            # Delete removed users (from bottom to top to preserve row numbers)
+            for discord_id in sorted(nc_deletes, key=lambda x: existing_nc_map[x]['row'], reverse=True):
+                non_command_sheet.delete_rows(existing_nc_map[discord_id]['row'])
+
+            for discord_id in sorted(cmd_deletes, key=lambda x: existing_cmd_map[x]['row'], reverse=True):
+                command_sheet.delete_rows(existing_cmd_map[discord_id]['row'])
+
+            # Update existing rows
+            for update in nc_updates:
+                for col_idx, value in enumerate(update['data'], start=1):
+                    if col_idx == 5:  # Skip empty column E
+                        continue
+                    non_command_sheet.update_cell(update['row'], col_idx, value)
+
+            for update in cmd_updates:
+                for col_idx, value in enumerate(update['data'], start=1):
+                    command_sheet.update_cell(update['row'], col_idx, value)
+
+            # Add new rows
+            if nc_new:
+                start_row = len(existing_non_command) + 1
+                non_command_sheet.update(f'A{start_row}', nc_new, value_input_option='RAW')
+                # Copy validations from row 2 for new rows
+                for i in range(len(nc_new)):
+                    row_num = start_row + i
+                    self.copy_data_validation_to_cell(non_command_sheet, 2, row_num, 6)
+                    self.copy_data_validation_to_cell(non_command_sheet, 2, row_num, 9)
+
+            if cmd_new:
+                start_row = len(existing_command) + 1
+                command_sheet.update(f'A{start_row}', cmd_new, value_input_option='RAW')
+                for i in range(len(cmd_new)):
+                    row_num = start_row + i
+                    self.copy_data_validation_to_cell(command_sheet, 2, row_num, 3)
+                    self.copy_data_validation_to_cell(command_sheet, 2, row_num, 4)
 
             # Sort both sheets
             print("📊 Sorting sheets...")
@@ -594,11 +660,11 @@ class GoogleSheetsManager:
                 {'column': 6, 'order': 'ASCENDING'}
             ])
 
-            print(f"✅ Batch update complete: {len(callsign_data)} callsigns synced")
+            print(f"✅ Smart update complete!")
             return True
 
         except Exception as e:
-            print(f"❌ Error in batch update: {e}")
+            print(f"❌ Error in smart update: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -656,7 +722,43 @@ class GoogleSheetsManager:
         except Exception as e:
             print(f"⚠️ Could not batch copy data validation: {e}")
             return False
-    
+
+
+    def apply_validations_directly(self, worksheet, rows: range, column: int, validation_values: list):
+        """
+        Apply data validation rules directly to a range of cells
+        More efficient than copying cell-by-cell
+        """
+        try:
+            worksheet_id = worksheet.id
+
+            validation_rule = {
+                "setDataValidation": {
+                    "range": {
+                        "sheetId": worksheet_id,
+                        "startRowIndex": min(rows) - 1,
+                        "endRowIndex": max(rows),
+                        "startColumnIndex": column - 1,
+                        "endColumnIndex": column
+                    },
+                    "rule": {
+                        "condition": {
+                            "type": "ONE_OF_LIST",
+                            "values": [{"userEnteredValue": val} for val in validation_values]
+                        },
+                        "showCustomUi": True,
+                        "strict": True
+                    }
+                }
+            }
+
+            self.spreadsheet.batch_update({"requests": [validation_rule]})
+            return True
+
+        except Exception as e:
+            print(f"⚠️ Could not apply validation: {e}")
+            return False
+
     async def get_all_callsigns(self):
         """
         Get all existing callsigns from both sheets

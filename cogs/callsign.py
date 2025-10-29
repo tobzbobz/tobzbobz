@@ -327,10 +327,7 @@ class CallsignCog(commands.Cog):
     @callsign_group.command(name="sync", description="Sync callsigns between database and Google Sheets")
     @app_commands.checks.has_role(SYNC_ROLE_ID)
     @app_commands.checks.has_permissions(administrator=True)
-    async def sync_callsigns(
-            self,
-            interaction: discord.Interaction
-    ):
+    async def sync_callsigns(self, interaction: discord.Interaction):
         """Sync callsigns from database to Google Sheets and update Discord nicknames"""
         await interaction.response.defer(thinking=True)
 
@@ -356,7 +353,7 @@ class CallsignCog(commands.Cog):
                     'roblox_username': record['roblox_username']
                 })
 
-            # Sort by rank hierarchy instead of alphabetically
+            # Sort by rank hierarchy
             callsign_data.sort(key=lambda x: get_rank_sort_key(x['fenz_prefix'], x['hhstj_prefix']))
 
             # Update Google Sheets
@@ -374,10 +371,33 @@ class CallsignCog(commands.Cog):
                 try:
                     member = interaction.guild.get_member(record['discord_user_id'])
                     if member:
-                        # Check if member is High Command
-                        is_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
+                        # Check if member has high command roles
+                        is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
+                        is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
+
+                        # Calculate what the nickname SHOULD be
+                        expected_nickname = format_nickname(
+                            record['fenz_prefix'],
+                            record['callsign'],
+                            record['hhstj_prefix'],
+                            record['roblox_username'],
+                            is_fenz_high_command,
+                            is_hhstj_high_command
+                        )
+
+                        # Check if current nickname already contains all the correct components
+                        current_nick = member.nick or member.name
+                        has_fenz = f"{record['fenz_prefix']}-{record['callsign']}" in current_nick if record[
+                            'fenz_prefix'] else record['callsign'] in current_nick
+                        has_hhstj = record['hhstj_prefix'] in current_nick if record['hhstj_prefix'] else True
+                        has_roblox = record['roblox_username'] in current_nick
+
+                        # Skip if all components are already present
+                        if has_fenz and has_hhstj and has_roblox:
+                            continue
 
                         # Check for rank mismatch
+                        is_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
                         current_fenz_prefix = record['fenz_prefix']
                         correct_fenz_prefix = None
 
@@ -387,22 +407,15 @@ class CallsignCog(commands.Cog):
                                 correct_fenz_prefix = prefix
                                 break
 
-                        # If rank changed, update database and reset nickname
+                        # If rank changed, update database and nickname
                         if correct_fenz_prefix and correct_fenz_prefix != current_fenz_prefix:
-                            # Skip reset for High Command members who chose no prefix
                             if not (is_high_command and current_fenz_prefix == ""):
-                                # Update database with new prefix
                                 async with db.pool.acquire() as conn:
                                     await conn.execute(
                                         'UPDATE callsigns SET fenz_prefix = $1 WHERE discord_user_id = $2',
                                         correct_fenz_prefix, member.id
                                     )
-                                # Check if member has high command roles
-                                is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
-                                is_hhstj_high_command = any(
-                                    role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
 
-                                # When creating new_nickname:
                                 new_nickname = format_nickname(
                                     correct_fenz_prefix,
                                     record['callsign'],
@@ -412,42 +425,20 @@ class CallsignCog(commands.Cog):
                                     is_hhstj_high_command
                                 )
 
-                                # Update Google Sheets
                                 await sheets_manager.add_callsign_to_sheets(
                                     member, record['callsign'], correct_fenz_prefix,
                                     record['roblox_username'], member.id
                                 )
                             else:
-                                # Normal nickname update (preserve their choice)
-                                is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
-                                is_hhstj_high_command = any(
-                                    role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
-
-                                new_nickname = format_nickname(
-                                    record['fenz_prefix'],
-                                    record['callsign'],
-                                    record['hhstj_prefix'],
-                                    record['roblox_username'],
-                                    is_fenz_high_command,
-                                    is_hhstj_high_command
-                                )
+                                new_nickname = expected_nickname
                         else:
-                            # Normal nickname update (preserve their choice)
-                            is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
-                            is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
+                            new_nickname = expected_nickname
 
-                            new_nickname = format_nickname(
-                                record['fenz_prefix'],
-                                record['callsign'],
-                                record['hhstj_prefix'],
-                                record['roblox_username'],
-                                is_fenz_high_command,
-                                is_hhstj_high_command
-                            )
-
+                        # Only update if nickname is different
                         if member.nick != new_nickname:
                             await member.edit(nick=new_nickname)
                             updated_count += 1
+
                 except Exception as e:
                     failed_updates.append(f"{record.get('discord_username', 'Unknown')}: {str(e)}")
 
