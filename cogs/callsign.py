@@ -162,7 +162,7 @@ def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_u
         nickname_parts.append(hhstj_prefix)
 
         # Add FENZ callsign
-        if fenz_prefix:
+        if fenz_prefix and fenz_prefix != "":
             nickname_parts.append(f"{fenz_prefix}-{callsign}")
         elif callsign:
             nickname_parts.append(callsign)
@@ -173,7 +173,7 @@ def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_u
     else:
         # Standard format: FENZ first
         # Add FENZ callsign
-        if fenz_prefix:
+        if fenz_prefix and fenz_prefix != "":
             nickname_parts.append(f"{fenz_prefix}-{callsign}")
         elif callsign:
             nickname_parts.append(callsign)
