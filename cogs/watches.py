@@ -1226,6 +1226,17 @@ class WatchCog(commands.Cog):
             )
             self.vote_timeout_tasks[str(msg.id)] = timeout_task
 
+            active_watches[str(msg.id)] = {
+                'user_id': interaction.user.id,
+                'user_name': interaction.user.display_name,
+                'channel_id': watch_channel.id,
+                'colour': colour,
+                'station': station,
+                'started_at': int(interaction.created_at.timestamp()),
+                'has_voters_embed': False,
+                'related_messages': [msg.id]
+            }
+
         except Exception as e:
             print(f'Error sending scheduled vote: {e}')
 

@@ -111,8 +111,8 @@ class CaseLogCog(commands.Cog):
         )
 
         embed.add_field(
-            name="‎ ",
-            value=f"*Logged by {interaction.user.display_name}*",
+            name="‎",
+            value=f"*Logged by {interaction.user}*",
             inline=False
         )
 
@@ -145,7 +145,7 @@ class CaseLogCog(commands.Cog):
         if proof_urls:
             urls = [url.strip() for url in proof_urls.split(',') if url.strip()]
             if urls:
-                proof_content += "\n**URLs:**\n" + "\n".join(f"• {url}" for url in urls)
+                proof_content += join(f"{url}" for url in urls)
                 has_proof = True
 
         # Add attachment if provided
@@ -155,7 +155,7 @@ class CaseLogCog(commands.Cog):
                 if has_proof:
                     await thread.send(proof_content)
                 await thread.send(
-                    f"**Attachment:**\n{attachment.filename}",
+                    f"**Proof:**",
                     file=file
                 )
                 has_proof = True
