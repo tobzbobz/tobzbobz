@@ -529,81 +529,69 @@ class GoogleSheetsManager:
                     full_callsign = f"{fenz_prefix}-{data['callsign']}" if fenz_prefix else data['callsign']
                     rank_priority = COMMAND_RANK_PRIORITY.get(fenz_prefix, 99)
 
-                    # Command row: A, B, C, D, E, F
                     command_rows.append([
-                        full_callsign,  # A: Full callsign
-                        data['roblox_username'],  # B: Roblox username
-                        "No additional qualifications",  # C: Qualifications
-                        "Good Boy",  # D: Strikes
-                        str(data['discord_user_id']),  # E: Discord ID
-                        rank_priority  # F: Rank priority
+                        full_callsign,
+                        data['roblox_username'],
+                        "No additional qualifications",
+                        "Good Boy",
+                        str(data['discord_user_id']),
+                        rank_priority
                     ])
                 else:
                     full_callsign = f"{fenz_prefix}-{data['callsign']}"
-
-                    # Get rank number
                     rank_number = 3
                     for role_id, (_, prefix, num) in NON_COMMAND_RANKS.items():
                         if prefix == fenz_prefix:
                             rank_number = num
                             break
 
-                    # Non-Command row: A, B, C, D, E (empty), F, G, H, I
                     non_command_rows.append([
-                        full_callsign,  # A: Full callsign
-                        fenz_prefix,  # B: FENZ Prefix
-                        data['callsign'],  # C: Callsign number
-                        data['roblox_username'],  # D: Roblox username
-                        "",  # E: Empty column
-                        "Clear",  # F: Strikes
-                        str(data['discord_user_id']),  # G: Discord ID
-                        rank_number,  # H: Rank number
-                        "No additional qualifications"  # I: Qualifications
+                        full_callsign,
+                        fenz_prefix,
+                        data['callsign'],
+                        data['roblox_username'],
+                        "",
+                        "Clear",
+                        str(data['discord_user_id']),
+                        rank_number,
+                        "No additional qualifications"
                     ])
 
             # BATCH UPDATE: Write all rows at once
             if command_rows:
                 print(f"📝 Writing {len(command_rows)} command callsigns...")
-                command_sheet.update(
-                    'A2',  # Start from row 2 (after header)
-                    command_rows,
-                    value_input_option='RAW'
-                )
+                command_sheet.update('A2', command_rows, value_input_option='RAW')
 
-                # Copy validations for all rows at once
-                print("📋 Copying validations for command sheet...")
-                for i in range(len(command_rows)):
-                    row_num = i + 2  # +2 because we start at row 2
-                    self.copy_data_validation_to_cell(command_sheet, source_row=2, target_row=row_num, column=3)
-                    self.copy_data_validation_to_cell(command_sheet, source_row=2, target_row=row_num, column=4)
+                # BATCHED VALIDATION COPY - Single API call for all rows
+                print("📋 Copying validations for command sheet (batched)...")
+                self.batch_copy_validations(
+                    command_sheet,
+                    source_row=2,
+                    target_rows=range(2, 2 + len(command_rows)),
+                    columns=[3, 4]  # Columns C and D
+                )
 
             if non_command_rows:
                 print(f"📝 Writing {len(non_command_rows)} non-command callsigns...")
-                non_command_sheet.update(
-                    'A2',  # Start from row 2 (after header)
-                    non_command_rows,
-                    value_input_option='RAW'
-                )
+                non_command_sheet.update('A2', non_command_rows, value_input_option='RAW')
 
-                # Copy validations for all rows at once
-                print("📋 Copying validations for non-command sheet...")
-                for i in range(len(non_command_rows)):
-                    row_num = i + 2
-                    self.copy_data_validation_to_cell(non_command_sheet, source_row=2, target_row=row_num, column=6)
-                    self.copy_data_validation_to_cell(non_command_sheet, source_row=2, target_row=row_num, column=9)
+                # BATCHED VALIDATION COPY - Single API call for all rows
+                print("📋 Copying validations for non-command sheet (batched)...")
+                self.batch_copy_validations(
+                    non_command_sheet,
+                    source_row=2,
+                    target_rows=range(2, 2 + len(non_command_rows)),
+                    columns=[6, 9]  # Columns F and I
+                )
 
             # Sort both sheets
             print("📊 Sorting sheets...")
-
-            # Sort Non-Command by rank number (H), then callsign (C)
             self.sort_worksheet_multi(non_command_sheet, [
-                {'column': 8, 'order': 'ASCENDING'},  # H: Rank number
-                {'column': 3, 'order': 'ASCENDING'}  # C: Callsign
+                {'column': 8, 'order': 'ASCENDING'},
+                {'column': 3, 'order': 'ASCENDING'}
             ])
-
-            # Sort Command by rank priority (F)
             self.sort_worksheet_multi(command_sheet, [
-                {'column': 6, 'order': 'ASCENDING'}  # F: Rank priority
+                {'column': 6, 'order': 'ASCENDING'}
             ])
 
             print(f"✅ Batch update complete: {len(callsign_data)} callsigns synced")
@@ -615,6 +603,60 @@ class GoogleSheetsManager:
             traceback.print_exc()
             return False
 
+    def batch_copy_validations(self, worksheet, source_row: int, target_rows: range, columns: list):
+        """
+        Copy data validations from source row to multiple target rows in a single batch request
+        This dramatically reduces API calls and avoids rate limits
+
+        Args:
+            worksheet: The worksheet to update
+            source_row: Row to copy validation from (usually row 2)
+            target_rows: Range of rows to copy to (e.g., range(2, 50))
+            columns: List of column numbers to copy validations for (e.g., [3, 4])
+        """
+        try:
+            worksheet_id = worksheet.id
+            requests = []
+
+            for column in columns:
+                for target_row in target_rows:
+                    # Skip if copying to itself
+                    if target_row == source_row:
+                        continue
+
+                    requests.append({
+                        "copyPaste": {
+                            "source": {
+                                "sheetId": worksheet_id,
+                                "startRowIndex": source_row - 1,
+                                "endRowIndex": source_row,
+                                "startColumnIndex": column - 1,
+                                "endColumnIndex": column
+                            },
+                            "destination": {
+                                "sheetId": worksheet_id,
+                                "startRowIndex": target_row - 1,
+                                "endRowIndex": target_row,
+                                "startColumnIndex": column - 1,
+                                "endColumnIndex": column
+                            },
+                            "pasteType": "PASTE_DATA_VALIDATION"
+                        }
+                    })
+
+            # Execute all requests in a single batch (limit to 100 requests per batch)
+            batch_size = 100
+            for i in range(0, len(requests), batch_size):
+                batch = requests[i:i + batch_size]
+                self.spreadsheet.batch_update({"requests": batch})
+                print(f"✅ Copied validations (batch {i // batch_size + 1}/{(len(requests) - 1) // batch_size + 1})")
+
+            return True
+
+        except Exception as e:
+            print(f"⚠️ Could not batch copy data validation: {e}")
+            return False
+    
     async def get_all_callsigns(self):
         """
         Get all existing callsigns from both sheets
