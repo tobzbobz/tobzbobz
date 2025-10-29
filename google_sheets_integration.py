@@ -502,6 +502,7 @@ class GoogleSheetsManager:
     async def batch_update_callsigns(self, callsign_data: list):
         """
         Smart batch update - only updates what changed
+        Uses batch API to avoid rate limits
         """
         try:
             if not self.client:
@@ -644,50 +645,68 @@ class GoogleSheetsManager:
             # Delete removed users (from bottom to top to preserve row numbers)
             for discord_id in sorted(nc_deletes, key=lambda x: existing_nc_map[x]['row'], reverse=True):
                 non_command_sheet.delete_rows(existing_nc_map[discord_id]['row'])
+                await asyncio.sleep(0.3)  # Rate limit deletes
 
             for discord_id in sorted(cmd_deletes, key=lambda x: existing_cmd_map[x]['row'], reverse=True):
                 command_sheet.delete_rows(existing_cmd_map[discord_id]['row'])
+                await asyncio.sleep(0.3)  # Rate limit deletes
 
-            # Update existing rows
-            for update in nc_updates:
-                for col_idx, value in enumerate(update['data'], start=1):
-                    if col_idx == 5:  # Skip empty column E
-                        continue
-                    non_command_sheet.update_cell(update['row'], col_idx, value)
+            # ===== BATCH UPDATE EXISTING ROWS (Non-Command) =====
+            if nc_updates:
+                batch_data = []
+                for update in nc_updates:
+                    batch_data.append({
+                        'range': f'A{update["row"]}:I{update["row"]}',
+                        'values': [update['data']]
+                    })
 
-            # Update existing rows (batch by row instead of cell-by-cell)
-            for update in nc_updates:
-                row_data = update['data']
-                # Update entire row at once
-                non_command_sheet.update(f'A{update["row"]}:I{update["row"]}', [row_data], value_input_option='RAW')
+                # Update in chunks of 50 to stay within limits
+                chunk_size = 50
+                for i in range(0, len(batch_data), chunk_size):
+                    chunk = batch_data[i:i + chunk_size]
+                    non_command_sheet.batch_update(chunk, value_input_option='RAW')
+                    print(f"✅ Updated {len(chunk)} NC rows")
+                    if i + chunk_size < len(batch_data):
+                        await asyncio.sleep(1)  # Delay between chunks
 
-            for update in cmd_updates:
-                row_data = update['data']
-                # Update entire row at once
-                command_sheet.update(f'A{update["row"]}:F{update["row"]}', [row_data], value_input_option='RAW')
+            # ===== BATCH UPDATE EXISTING ROWS (Command) =====
+            if cmd_updates:
+                batch_data = []
+                for update in cmd_updates:
+                    batch_data.append({
+                        'range': f'A{update["row"]}:F{update["row"]}',
+                        'values': [update['data']]
+                    })
 
-            for update in cmd_updates:
-                row_data = update['data']
-                command_sheet.update(f'A{update["row"]}:F{update["row"]}', [row_data], value_input_option='RAW')
-                time.sleep(0.1)  # 100ms delay between rows
+                # Update in chunks of 50
+                chunk_size = 50
+                for i in range(0, len(batch_data), chunk_size):
+                    chunk = batch_data[i:i + chunk_size]
+                    command_sheet.batch_update(chunk, value_input_option='RAW')
+                    print(f"✅ Updated {len(chunk)} CMD rows")
+                    if i + chunk_size < len(batch_data):
+                        await asyncio.sleep(1)  # Delay between chunks
 
-            # Add new rows
+            # ===== ADD NEW ROWS (existing code is fine for this) =====
             if nc_new:
                 start_row = len(existing_non_command) + 1
                 non_command_sheet.update(f'A{start_row}', nc_new, value_input_option='RAW')
-                # Copy validations from row 2 for new rows
+                # Copy validations
                 for i in range(len(nc_new)):
                     row_num = start_row + i
                     self.copy_data_validation_to_cell(non_command_sheet, 2, row_num, 6)
                     self.copy_data_validation_to_cell(non_command_sheet, 2, row_num, 9)
+                    await asyncio.sleep(0.2)  # Rate limit validation copies
 
             if cmd_new:
                 start_row = len(existing_command) + 1
                 command_sheet.update(f'A{start_row}', cmd_new, value_input_option='RAW')
+                # Copy validations
                 for i in range(len(cmd_new)):
                     row_num = start_row + i
                     self.copy_data_validation_to_cell(command_sheet, 2, row_num, 3)
                     self.copy_data_validation_to_cell(command_sheet, 2, row_num, 4)
+                    await asyncio.sleep(0.2)  # Rate limit validation copies
 
             # Sort both sheets
             print("📊 Sorting sheets...")
