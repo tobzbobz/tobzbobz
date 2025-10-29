@@ -1845,7 +1845,7 @@ class WatchCog(commands.Cog):
             if dry_run:
                 embed.set_footer(text="This was a dry run. Run without dry_run=True to apply changes.")
 
-            await interaction.followup.send(embed=embed)
+            await interaction.followup.send(embed=embed, ephemeral=True)
 
         except Exception as e:
             await interaction.followup.send(

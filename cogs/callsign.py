@@ -394,16 +394,10 @@ class CallsignCog(commands.Cog):
                             is_hhstj_high_command
                         )
 
-                        # Check if current nickname already contains all the correct components
+                        # Check if current nickname matches expected format exactly
                         current_nick = member.nick or member.name
-                        has_fenz = f"{record['fenz_prefix']}-{record['callsign']}" in current_nick if record[
-                            'fenz_prefix'] else record['callsign'] in current_nick
-                        has_hhstj = record['hhstj_prefix'] in current_nick if record['hhstj_prefix'] else True
-                        has_roblox = record['roblox_username'] in current_nick
-
-                        # Skip if all components are already present
-                        if has_fenz and has_hhstj and has_roblox:
-                            continue
+                        if current_nick == expected_nickname:
+                            continue  # Nickname is already correct
 
                         # Check for rank mismatch
                         is_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
@@ -416,30 +410,59 @@ class CallsignCog(commands.Cog):
                                 correct_fenz_prefix = prefix
                                 break
 
-                        # If rank changed, update database and nickname
-                        if correct_fenz_prefix and correct_fenz_prefix != current_fenz_prefix:
-                            if not (is_high_command and current_fenz_prefix == ""):
-                                async with db.pool.acquire() as conn:
-                                    await conn.execute(
-                                        'UPDATE callsigns SET fenz_prefix = $1 WHERE discord_user_id = $2',
-                                        correct_fenz_prefix, member.id
-                                    )
+                        # Get correct HHStJ rank from current roles
+                        current_hhstj_prefix = None
+                        for role_id, (rank_name, prefix) in HHSTJ_RANK_MAP.items():
+                            if any(role.id == role_id for role in member.roles):
+                                current_hhstj_prefix = prefix
+                                break
 
-                                new_nickname = format_nickname(
-                                    correct_fenz_prefix,
-                                    record['callsign'],
-                                    record['hhstj_prefix'],
-                                    record['roblox_username'],
-                                    is_fenz_high_command,
-                                    is_hhstj_high_command
+                        # Update HHStJ prefix in database if changed
+                        if current_hhstj_prefix != record['hhstj_prefix']:
+                            async with db.pool.acquire() as conn:
+                                await conn.execute(
+                                    'UPDATE callsigns SET hhstj_prefix = $1 WHERE discord_user_id = $2',
+                                    current_hhstj_prefix, member.id
                                 )
+                            record['hhstj_prefix'] = current_hhstj_prefix  # Update record for nickname generation
 
+                        # Determine if any ranks changed
+                        fenz_changed = correct_fenz_prefix and correct_fenz_prefix != current_fenz_prefix
+                        hhstj_changed = current_hhstj_prefix != record['hhstj_prefix']
+
+                        # Update FENZ prefix if changed (unless high command chose no prefix)
+                        if fenz_changed and not (is_high_command and current_fenz_prefix == ""):
+                            async with db.pool.acquire() as conn:
+                                await conn.execute(
+                                    'UPDATE callsigns SET fenz_prefix = $1 WHERE discord_user_id = $2',
+                                    correct_fenz_prefix, member.id
+                                )
+                            current_fenz_prefix = correct_fenz_prefix
+
+                        # Calculate the correct nickname with updated prefixes
+                        new_nickname = format_nickname(
+                            current_fenz_prefix,
+                            record['callsign'],
+                            record['hhstj_prefix'],  # This has the updated HHStJ value
+                            record['roblox_username'],
+                            is_fenz_high_command,
+                            is_hhstj_high_command
+                        )
+
+                        # Only update if nickname is different from current
+                        if member.nick != new_nickname:
+                            await member.edit(nick=new_nickname)
+                            updated_count += 1
+
+                            # Update sheets if ranks changed
+                            if fenz_changed or hhstj_changed:
                                 await sheets_manager.add_callsign_to_sheets(
-                                    member, record['callsign'], correct_fenz_prefix,
+                                    member, record['callsign'], current_fenz_prefix,
                                     record['roblox_username'], member.id
                                 )
                             else:
                                 new_nickname = expected_nickname
+
                         else:
                             new_nickname = expected_nickname
 
@@ -460,7 +483,7 @@ class CallsignCog(commands.Cog):
                 if len(failed_updates) > 10:
                     response += f"\n... and {len(failed_updates) - 10} more"
 
-            await interaction.followup.send(response)
+            await interaction.followup.send(response, ephemeral=True)
 
         except Exception as e:
             await interaction.followup.send(f"<:Denied:1426930694633816248> Error during sync: {str(e)}")
@@ -631,7 +654,8 @@ class CallsignCog(commands.Cog):
             await interaction.followup.send(
                 f"<:Accepted:1426930333789585509> Assigned callsign **{fenz_prefix}-{callsign}** to {user.mention}\n"
                 f"🏷️ Nickname updated to: `{new_nickname}`\n"
-                f"💡 Remember to run `/callsign sync` to update Google Sheets!"
+                f"💡 Remember to run `/callsign sync` to update Google Sheets!",
+                ephemeral=True
             )
 
         except Exception as e:
@@ -707,7 +731,7 @@ class CallsignCog(commands.Cog):
                         inline=False
                     )
 
-                await interaction.followup.send(embed=embed)
+                await interaction.followup.send(embed=embed, ephemeral=True)
 
         except Exception as e:
             await interaction.followup.send(f"<:Denied:1426930694633816248> Error looking up callsign: {str(e)}")

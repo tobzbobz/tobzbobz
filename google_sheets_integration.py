@@ -4,6 +4,23 @@ import os
 import json
 import time
 
+HHSTJ_RANK_MAP = {
+    1389113026900394064: ("First Responder", "FR"),
+    1389112936517079230: ("Emergency Medical Technician", "EMT"),
+    1389112844364021871: ("Graduate Paramedic", "GPARA"),
+    1389112803712827473: ("Paramedic", "PARA"),
+    1389112753142366298: ("Extended Care Paramedic", "ECP"),
+    1389112689267314790: ("Critical Care Paramedic", "CCP"),
+    1389112601815941240: ("Doctor", "DR"),
+    1389112470211264552: ("Watch Operations Manager", "WOM-MIKE30"),
+    1403314606839037983: ("Area Operations Manager", "AOM-OSCAR32"),
+    1403314387602767932: ("District Operations Support Manager", "DOSM-OSCAR31"),
+    1403312277876248626: ("District Operations Manager", "DOM-OSCAR30"),
+    1389111474949062726: ("Assistant National Operations Manager", "ANOM-OSCAR3"),
+    1389111326571499590: ("Deputy National Operations Manager", "DNOM-OSCAR2"),
+    1389110819190472775: ("National Operations Manager", "NOM-OSCAR1"),
+}
+
 # Strikes Mapping (Column F for Non-Command, Column D for Command)
 STRIKES_ROLES = {
     1432540488312950805: "Under Investigation",
