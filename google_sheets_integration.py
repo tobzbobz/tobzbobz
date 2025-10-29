@@ -845,6 +845,70 @@ class GoogleSheetsManager:
             print(f"❌ Error getting callsigns: {e}")
             return []
 
+    async def get_all_callsigns_from_sheets(self):
+        """
+        Get all callsigns from both sheets (Non-Command and Command)
+        Returns: list of dicts with callsign data from sheets
+        """
+        try:
+            if not self.client:
+                auth_success = self.authenticate()
+                if not auth_success:
+                    return []
+
+            all_callsigns = []
+
+            # Get Non-Command sheet data
+            non_command_sheet = self.get_worksheet("Non-Command")
+            if non_command_sheet:
+                non_command_data = non_command_sheet.get_all_values()
+                for row in non_command_data[1:]:  # Skip header
+                    if row and len(row) >= 7 and row[6]:  # Check Discord ID exists (column G)
+                        all_callsigns.append({
+                            'fenz_prefix': row[1] if len(row) > 1 else '',  # Column B
+                            'hhstj_prefix': '',  # Non-command sheet doesn't have HHStJ
+                            'callsign': row[2] if len(row) > 2 else '',  # Column C
+                            'roblox_username': row[3] if len(row) > 3 else '',  # Column D
+                            'discord_user_id': int(row[6]),  # Column G
+                            'discord_username': '',  # Not in sheet
+                            'roblox_user_id': '',  # Not in sheet
+                            'is_command': False,
+                            'sheet': 'Non-Command'
+                        })
+
+            # Get Command sheet data
+            command_sheet = self.get_worksheet("Command")
+            if command_sheet:
+                command_data = command_sheet.get_all_values()
+                for row in command_data[1:]:  # Skip header
+                    if row and len(row) >= 5 and row[4]:  # Check Discord ID exists (column E)
+                        # Extract prefix from full callsign (column A)
+                        full_callsign = row[0] if len(row) > 0 else ''
+                        if '-' in full_callsign:
+                            fenz_prefix, callsign = full_callsign.split('-', 1)
+                        else:
+                            fenz_prefix = ''
+                            callsign = full_callsign
+
+                        all_callsigns.append({
+                            'fenz_prefix': fenz_prefix,
+                            'hhstj_prefix': '',  # Not stored in sheet
+                            'callsign': callsign,
+                            'roblox_username': row[1] if len(row) > 1 else '',  # Column B
+                            'discord_user_id': int(row[4]),  # Column E
+                            'discord_username': '',  # Not in sheet
+                            'roblox_user_id': '',  # Not in sheet
+                            'is_command': True,
+                            'sheet': 'Command'
+                        })
+
+            return all_callsigns
+
+        except Exception as e:
+            print(f"❌ Error getting callsigns from sheets: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
 
 # Create global instance
 sheets_manager = GoogleSheetsManager()

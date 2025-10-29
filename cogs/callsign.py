@@ -332,27 +332,76 @@ class CallsignCog(commands.Cog):
     @app_commands.checks.has_role(SYNC_ROLE_ID)
     @app_commands.checks.has_permissions(administrator=True)
     async def sync_callsigns(self, interaction: discord.Interaction):
-        """Sync callsigns from database to Google Sheets and update Discord nicknames"""
+        """Bidirectional sync: database ↔ Google Sheets and update Discord nicknames"""
         await interaction.response.defer(thinking=True)
 
         try:
             # Get all callsigns from database
             async with db.pool.acquire() as conn:
-                callsigns = await conn.fetch('SELECT * FROM callsigns ORDER BY callsign')
+                db_callsigns = await conn.fetch('SELECT * FROM callsigns ORDER BY callsign')
 
-            if not callsigns:
-                await interaction.followup.send("No callsigns found in database.")
-                return
+            # Get all callsigns from sheets
+            sheet_callsigns = await sheets_manager.get_all_callsigns_from_sheets()
+
+            # Create lookup maps
+            db_map = {record['discord_user_id']: dict(record) for record in db_callsigns}
+            sheet_map = {cs['discord_user_id']: cs for cs in sheet_callsigns}
+
+            # Track additions from sheets → database
+            added_from_sheets = 0
+            missing_in_sheets = []
+
+            # Find entries in sheets but not in database
+            for discord_id, sheet_data in sheet_map.items():
+                if discord_id not in db_map:
+                    # Entry exists in sheet but not database - need more info to add it
+                    member = interaction.guild.get_member(discord_id)
+                    if member:
+                        # Get Roblox info
+                        bloxlink_data = await self.get_bloxlink_data(member.id, interaction.guild.id)
+                        if bloxlink_data:
+                            roblox_id = bloxlink_data['id']
+                            roblox_username = await self.get_roblox_user_from_id(roblox_id)
+
+                            if roblox_username:
+                                # Get HHStJ rank from roles
+                                hhstj_prefix = None
+                                for role_id, (rank_name, prefix) in HHSTJ_RANK_MAP.items():
+                                    if any(role.id == role_id for role in member.roles):
+                                        hhstj_prefix = prefix
+                                        break
+
+                                # Add to database
+                                await add_callsign_to_database(
+                                    sheet_data['callsign'],
+                                    discord_id,
+                                    str(member),
+                                    roblox_id,
+                                    roblox_username,
+                                    sheet_data['fenz_prefix'],
+                                    hhstj_prefix or ''
+                                )
+                                added_from_sheets += 1
+                    else:
+                        missing_in_sheets.append(
+                            f"Discord ID {discord_id} (callsign {sheet_data['callsign']}) - user not in server")
+
+            # Re-fetch database after additions
+            if added_from_sheets > 0:
+                async with db.pool.acquire() as conn:
+                    db_callsigns = await conn.fetch('SELECT * FROM callsigns ORDER BY callsign')
 
             # Prepare data for sheets - sort by rank hierarchy
             callsign_data = []
-            for record in callsigns:
+            for record in db_callsigns:
+                record = dict(record)  # Convert to mutable dict
+
                 # Determine if command based on FENZ prefix
-                is_command_rank = record['fenz_prefix'] in [prefix for _, (_, prefix) in COMMAND_RANKS.items()] if record[
-                    'fenz_prefix'] else False
+                is_command_rank = record['fenz_prefix'] in [prefix for _, (_, prefix) in COMMAND_RANKS.items()] if \
+                record['fenz_prefix'] else False
 
                 callsign_data.append({
-                    'fenz_prefix': record['fenz_prefix'] or '',  # Ensure not None
+                    'fenz_prefix': record['fenz_prefix'] or '',
                     'hhstj_prefix': record['hhstj_prefix'] or '',
                     'callsign': record['callsign'],
                     'discord_user_id': record['discord_user_id'],
@@ -376,35 +425,21 @@ class CallsignCog(commands.Cog):
             updated_count = 0
             failed_updates = []
 
-            for record in callsigns:
+            for record in db_callsigns:
                 try:
+                    record = dict(record)  # Convert to mutable dict
                     member = interaction.guild.get_member(record['discord_user_id'])
+
                     if member:
                         # Check if member has high command roles
                         is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
                         is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
-
-                        # Calculate what the nickname SHOULD be
-                        expected_nickname = format_nickname(
-                            record['fenz_prefix'],
-                            record['callsign'],
-                            record['hhstj_prefix'],
-                            record['roblox_username'],
-                            is_fenz_high_command,
-                            is_hhstj_high_command
-                        )
-
-                        # Check if current nickname matches expected format exactly
-                        current_nick = member.nick or member.name
-                        if current_nick == expected_nickname:
-                            continue  # Nickname is already correct
-
-                        # Check for rank mismatch
                         is_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
+
                         current_fenz_prefix = record['fenz_prefix']
                         correct_fenz_prefix = None
 
-                        # Get correct rank from current roles
+                        # Get correct FENZ rank from current roles
                         for role_id, (rank_name, prefix) in FENZ_RANK_MAP.items():
                             if any(role.id == role_id for role in member.roles):
                                 correct_fenz_prefix = prefix
@@ -424,7 +459,7 @@ class CallsignCog(commands.Cog):
                                     'UPDATE callsigns SET hhstj_prefix = $1 WHERE discord_user_id = $2',
                                     current_hhstj_prefix, member.id
                                 )
-                            record['hhstj_prefix'] = current_hhstj_prefix  # Update record for nickname generation
+                            record['hhstj_prefix'] = current_hhstj_prefix
 
                         # Determine if any ranks changed
                         fenz_changed = correct_fenz_prefix and correct_fenz_prefix != current_fenz_prefix
@@ -443,7 +478,7 @@ class CallsignCog(commands.Cog):
                         new_nickname = format_nickname(
                             current_fenz_prefix,
                             record['callsign'],
-                            record['hhstj_prefix'],  # This has the updated HHStJ value
+                            record['hhstj_prefix'],
                             record['roblox_username'],
                             is_fenz_high_command,
                             is_hhstj_high_command
@@ -451,31 +486,36 @@ class CallsignCog(commands.Cog):
 
                         # Only update if nickname is different from current
                         if member.nick != new_nickname:
-                            await member.edit(nick=new_nickname)
-                            updated_count += 1
+                            try:
+                                await member.edit(nick=new_nickname)
+                                updated_count += 1
 
-                            # Update sheets if ranks changed
-                            if fenz_changed or hhstj_changed:
-                                await sheets_manager.add_callsign_to_sheets(
-                                    member, record['callsign'], current_fenz_prefix,
-                                    record['roblox_username'], member.id
-                                )
-                            else:
-                                new_nickname = expected_nickname
-
-                        else:
-                            new_nickname = expected_nickname
-
-                        # Only update if nickname is different
-                        if member.nick != new_nickname:
-                            await member.edit(nick=new_nickname)
-                            updated_count += 1
+                                # Update sheets if ranks changed
+                                if fenz_changed or hhstj_changed:
+                                    await sheets_manager.add_callsign_to_sheets(
+                                        member, record['callsign'], current_fenz_prefix,
+                                        record['roblox_username'], member.id
+                                    )
+                            except discord.Forbidden:
+                                failed_updates.append(
+                                    f"{record.get('discord_username', 'Unknown')}: Missing permissions")
 
                 except Exception as e:
                     failed_updates.append(f"{record.get('discord_username', 'Unknown')}: {str(e)}")
 
-            response = f"<:Accepted:1426930333789585509> Successfully synced {len(callsigns)} callsigns to Google Sheets (sorted by rank hierarchy).\n"
-            response += f"📖 Updated {updated_count} Discord nicknames.\n"
+            # Build response
+            response = f"<:Accepted:1426930333789585509> **Bidirectional Sync Complete!**\n"
+            response += f"📊 Synced {len(db_callsigns)} callsigns to Google Sheets (sorted by rank hierarchy)\n"
+            response += f"📖 Updated {updated_count} Discord nicknames\n"
+
+            if added_from_sheets > 0:
+                response += f"➕ Added {added_from_sheets} callsigns from sheets to database\n"
+
+            if missing_in_sheets:
+                response += f"\n⚠️ Found {len(missing_in_sheets)} entries in sheets with missing user data:\n"
+                response += "\n".join(f"- {msg}" for msg in missing_in_sheets[:5])
+                if len(missing_in_sheets) > 5:
+                    response += f"\n... and {len(missing_in_sheets) - 5} more"
 
             if failed_updates:
                 response += f"\n⚠️ Failed to update {len(failed_updates)} nicknames:\n"
@@ -487,6 +527,8 @@ class CallsignCog(commands.Cog):
 
         except Exception as e:
             await interaction.followup.send(f"<:Denied:1426930694633816248> Error during sync: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
     @callsign_group.command(name="assign", description="Assign a callsign to a user")
     @app_commands.checks.has_role(SYNC_ROLE_ID)
