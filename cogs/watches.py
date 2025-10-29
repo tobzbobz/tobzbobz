@@ -490,7 +490,7 @@ class WatchCog(commands.Cog):
                 colour=colour,
                 station=station,
                 started_at=int(interaction.created_at.timestamp()),
-                has_voters_embed=False
+                has_voters_embed=False,
                 related_messages = [msg.id]  # ADD THIS - track all related messages
             )
 
@@ -502,7 +502,7 @@ class WatchCog(commands.Cog):
                 'colour': colour,
                 'station': station,
                 'started_at': int(interaction.created_at.timestamp()),
-                'has_voters_embed': False
+                'has_voters_embed': False,
                 'related_messages': [msg.id]  # ADD THIS
             }
 

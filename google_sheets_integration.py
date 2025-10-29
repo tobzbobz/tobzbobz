@@ -555,26 +555,35 @@ class GoogleSheetsManager:
                     if discord_id in existing_cmd_map:
                         existing = existing_cmd_map[discord_id]['data']
                         # Compare relevant fields (skip strikes/qualifications - manual edits)
-                        if (existing[0] != new_row[0] or  # Callsign
-                                existing[1] != new_row[1] or  # Roblox username
-                                existing[4] != new_row[4] or  # Discord ID
-                                existing[5] != str(new_row[5])):  # Rank priority
+                        # Check if exists and needs update
+                        if discord_id in existing_cmd_map:
+                            existing = existing_cmd_map[discord_id]['data']
 
-                            # Preserve manual edits for strikes (col D) and qualifications (col C)
-                            new_row[2] = existing[2] if len(existing) > 2 else new_row[2]
-                            new_row[3] = existing[3] if len(existing) > 3 else new_row[3]
+                            # Ensure existing row has at least 6 columns, pad with empty strings if needed
+                            while len(existing) < 6:
+                                existing.append('')
 
-                            cmd_updates.append({
-                                'row': existing_cmd_map[discord_id]['row'],
-                                'data': new_row
-                            })
-                    elif discord_id in existing_nc_map:
-                        # Rank transition: NC -> Command
-                        nc_deletes.add(discord_id)
-                        cmd_new.append(new_row)
-                    else:
-                        # Completely new
-                        cmd_new.append(new_row)
+                            # Compare relevant fields (skip strikes/qualifications - manual edits)
+                            if (existing[0] != new_row[0] or  # Callsign
+                                    existing[1] != new_row[1] or  # Roblox username
+                                    existing[4] != new_row[4] or  # Discord ID
+                                    str(existing[5]) != str(new_row[5])):  # Rank priority
+
+                                # Preserve manual edits for strikes (col D) and qualifications (col C)
+                                new_row[2] = existing[2] if len(existing) > 2 else new_row[2]
+                                new_row[3] = existing[3] if len(existing) > 3 else new_row[3]
+
+                                cmd_updates.append({
+                                    'row': existing_cmd_map[discord_id]['row'],
+                                    'data': new_row
+                                })
+                        elif discord_id in existing_nc_map:
+                            # Rank transition: NC -> Command
+                            nc_deletes.add(discord_id)
+                            cmd_new.append(new_row)
+                        else:
+                            # Completely new
+                            cmd_new.append(new_row)
 
                 else:  # Non-command
                     nc_deletes.discard(discord_id)
