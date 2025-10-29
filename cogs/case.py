@@ -45,7 +45,6 @@ def has_case_log_permission():
 class CaseLogCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        bot.tree.add_command(self.case_group)
 
     case_group = app_commands.Group(name="case", description="Case management commands")
 

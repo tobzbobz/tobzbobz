@@ -2,6 +2,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import os
 import json
+import time
 
 # Strikes Mapping (Column F for Non-Command, Column D for Command)
 STRIKES_ROLES = {
@@ -637,9 +638,21 @@ class GoogleSheetsManager:
                         continue
                     non_command_sheet.update_cell(update['row'], col_idx, value)
 
+            # Update existing rows (batch by row instead of cell-by-cell)
+            for update in nc_updates:
+                row_data = update['data']
+                # Update entire row at once
+                non_command_sheet.update(f'A{update["row"]}:I{update["row"]}', [row_data], value_input_option='RAW')
+
             for update in cmd_updates:
-                for col_idx, value in enumerate(update['data'], start=1):
-                    command_sheet.update_cell(update['row'], col_idx, value)
+                row_data = update['data']
+                # Update entire row at once
+                command_sheet.update(f'A{update["row"]}:F{update["row"]}', [row_data], value_input_option='RAW')
+
+            for update in cmd_updates:
+                row_data = update['data']
+                command_sheet.update(f'A{update["row"]}:F{update["row"]}', [row_data], value_input_option='RAW')
+                time.sleep(0.1)  # 100ms delay between rows
 
             # Add new rows
             if nc_new:
