@@ -483,7 +483,7 @@ class GoogleSheetsManager:
 
     async def batch_update_callsigns(self, callsign_data: list):
         """
-        Batch update all callsigns to Google Sheets
+        Batch update all callsigns to Google Sheets using efficient batch operations
         callsign_data: List of dicts with callsign info
         """
         try:
@@ -513,62 +513,84 @@ class GoogleSheetsManager:
             if len(command_values) > 1:
                 command_sheet.delete_rows(2, len(command_values))
 
-            print("✅ Sheets cleared, adding callsigns...")
+            print("✅ Sheets cleared, preparing batch data...")
 
-            # Process each callsign
+            # Separate data into command and non-command
+            command_rows = []
+            non_command_rows = []
+
             for data in callsign_data:
-                # Determine rank type from prefix
                 fenz_prefix = data['fenz_prefix']
 
                 # Check if it's a command rank
                 is_command = any(fenz_prefix == prefix for _, (_, prefix) in COMMAND_RANKS.items())
 
                 if is_command:
-                    # Add to Command sheet
-                    empty_row = self.find_first_empty_row(command_sheet)
                     full_callsign = f"{fenz_prefix}-{data['callsign']}" if fenz_prefix else data['callsign']
-
                     rank_priority = COMMAND_RANK_PRIORITY.get(fenz_prefix, 99)
 
-                    # Update cells
-                    command_sheet.update_cell(empty_row, 1, full_callsign)  # A: Full callsign
-                    command_sheet.update_cell(empty_row, 2, data['roblox_username'])  # B: Roblox username
-                    command_sheet.update_cell(empty_row, 3,
-                                              "No additional qualifications")  # C: Qualifications (default)
-                    command_sheet.update_cell(empty_row, 4, "Good Boy")  # D: Strikes (default)
-                    command_sheet.update_cell(empty_row, 5, str(data['discord_user_id']))  # E: Discord ID
-                    command_sheet.update_cell(empty_row, 6, rank_priority)  # F: Rank priority
-
-                    # Copy validations
-                    self.copy_data_validation_to_cell(command_sheet, source_row=2, target_row=empty_row, column=3)
-                    self.copy_data_validation_to_cell(command_sheet, source_row=2, target_row=empty_row, column=4)
-
+                    # Command row: A, B, C, D, E, F
+                    command_rows.append([
+                        full_callsign,  # A: Full callsign
+                        data['roblox_username'],  # B: Roblox username
+                        "No additional qualifications",  # C: Qualifications
+                        "Good Boy",  # D: Strikes
+                        str(data['discord_user_id']),  # E: Discord ID
+                        rank_priority  # F: Rank priority
+                    ])
                 else:
-                    # Add to Non-Command sheet
-                    empty_row = self.find_first_empty_row(non_command_sheet)
                     full_callsign = f"{fenz_prefix}-{data['callsign']}"
 
-                    # Get rank number (default to 3 if not found)
+                    # Get rank number
                     rank_number = 3
                     for role_id, (_, prefix, num) in NON_COMMAND_RANKS.items():
                         if prefix == fenz_prefix:
                             rank_number = num
                             break
 
-                    # Update cells
-                    non_command_sheet.update_cell(empty_row, 1, full_callsign)  # A: Full callsign
-                    non_command_sheet.update_cell(empty_row, 2, fenz_prefix)  # B: FENZ Prefix
-                    non_command_sheet.update_cell(empty_row, 3, data['callsign'])  # C: Callsign number
-                    non_command_sheet.update_cell(empty_row, 4, data['roblox_username'])  # D: Roblox username
-                    non_command_sheet.update_cell(empty_row, 6, "Clear")  # F: Strikes (default)
-                    non_command_sheet.update_cell(empty_row, 7, str(data['discord_user_id']))  # G: Discord ID
-                    non_command_sheet.update_cell(empty_row, 8, rank_number)  # H: Rank number
-                    non_command_sheet.update_cell(empty_row, 9,
-                                                  "No additional qualifications")  # I: Qualifications (default)
+                    # Non-Command row: A, B, C, D, E (empty), F, G, H, I
+                    non_command_rows.append([
+                        full_callsign,  # A: Full callsign
+                        fenz_prefix,  # B: FENZ Prefix
+                        data['callsign'],  # C: Callsign number
+                        data['roblox_username'],  # D: Roblox username
+                        "",  # E: Empty column
+                        "Clear",  # F: Strikes
+                        str(data['discord_user_id']),  # G: Discord ID
+                        rank_number,  # H: Rank number
+                        "No additional qualifications"  # I: Qualifications
+                    ])
 
-                    # Copy validations
-                    self.copy_data_validation_to_cell(non_command_sheet, source_row=2, target_row=empty_row, column=6)
-                    self.copy_data_validation_to_cell(non_command_sheet, source_row=2, target_row=empty_row, column=9)
+            # BATCH UPDATE: Write all rows at once
+            if command_rows:
+                print(f"📝 Writing {len(command_rows)} command callsigns...")
+                command_sheet.update(
+                    'A2',  # Start from row 2 (after header)
+                    command_rows,
+                    value_input_option='RAW'
+                )
+
+                # Copy validations for all rows at once
+                print("📋 Copying validations for command sheet...")
+                for i in range(len(command_rows)):
+                    row_num = i + 2  # +2 because we start at row 2
+                    self.copy_data_validation_to_cell(command_sheet, source_row=2, target_row=row_num, column=3)
+                    self.copy_data_validation_to_cell(command_sheet, source_row=2, target_row=row_num, column=4)
+
+            if non_command_rows:
+                print(f"📝 Writing {len(non_command_rows)} non-command callsigns...")
+                non_command_sheet.update(
+                    'A2',  # Start from row 2 (after header)
+                    non_command_rows,
+                    value_input_option='RAW'
+                )
+
+                # Copy validations for all rows at once
+                print("📋 Copying validations for non-command sheet...")
+                for i in range(len(non_command_rows)):
+                    row_num = i + 2
+                    self.copy_data_validation_to_cell(non_command_sheet, source_row=2, target_row=row_num, column=6)
+                    self.copy_data_validation_to_cell(non_command_sheet, source_row=2, target_row=row_num, column=9)
 
             # Sort both sheets
             print("📊 Sorting sheets...")
