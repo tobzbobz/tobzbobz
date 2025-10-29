@@ -57,6 +57,16 @@ HIGH_COMMAND_RANKS = {
     1285113945664917514,  # NC
 }
 
+HHSTJ_HIGH_COMMAND_RANKS = {
+    1389110819190472775,  # NOM-OSCAR1
+    1389111326571499590,  # DNOM-OSCAR2
+    1389111474949062726,  # ANOM-OSCAR3
+    1403312277876248626,  # DOM-OSCAR30
+    1403314387602767932,  # DOSM-OSCAR31
+    1403314606839037983,  # AOM-OSCAR32
+    1389112470211264552,  # WOM-MIKE30
+}
+
 # Rank hierarchy for sorting (highest to lowest)
 FENZ_RANK_HIERARCHY = [
     "NC", "DNC", "ANC", "AC", "AAC", "CO", "DCO", "SSO", "SO", "SFF", "QFF", "RFF"
@@ -133,27 +143,48 @@ async def add_callsign_to_database(callsign: str, discord_user_id: int, discord_
         )
 
 
-def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_username: str) -> str:
+def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_username: str,
+                    has_fenz_high_command: bool = False, has_hhstj_high_command: bool = False) -> str:
     """
-    Format nickname in standard format: {FENZ prefix}-### | {StJ Prefix} | {roblox username}
-    Returns the formatted nickname, with fallbacks if too long
+    Format nickname in standard format
+    Priority: If HHStJ high command WITHOUT FENZ high command, format as:
+    {HHStJ prefix} | {FENZ}-{callsign} | {Roblox username}
+
+    Otherwise: {FENZ prefix}-{callsign} | {HHStJ prefix} | {Roblox username}
     """
     nickname_parts = []
 
-    # Add FENZ callsign (handle empty prefix for high command)
-    if fenz_prefix:
-        nickname_parts.append(f"{fenz_prefix}-{callsign}")
-    elif callsign:
-        # High command without prefix - just the number
-        nickname_parts.append(callsign)
+    # Check if HHStJ high command takes priority (has HHStJ HC but NOT FENZ HC)
+    hhstj_priority = has_hhstj_high_command and not has_fenz_high_command
 
-    # Add HHStJ prefix if available (only if it doesn't already contain a dash)
-    if hhstj_prefix and "-" not in hhstj_prefix:
+    if hhstj_priority and hhstj_prefix:
+        # HHStJ high command priority format
         nickname_parts.append(hhstj_prefix)
 
-    # Always add Roblox username
-    if roblox_username:
-        nickname_parts.append(roblox_username)
+        # Add FENZ callsign
+        if fenz_prefix:
+            nickname_parts.append(f"{fenz_prefix}-{callsign}")
+        elif callsign:
+            nickname_parts.append(callsign)
+
+        # Add Roblox username
+        if roblox_username:
+            nickname_parts.append(roblox_username)
+    else:
+        # Standard format: FENZ first
+        # Add FENZ callsign
+        if fenz_prefix:
+            nickname_parts.append(f"{fenz_prefix}-{callsign}")
+        elif callsign:
+            nickname_parts.append(callsign)
+
+        # Add HHStJ prefix if available (only if it doesn't already contain a dash)
+        if hhstj_prefix and "-" not in hhstj_prefix:
+            nickname_parts.append(hhstj_prefix)
+
+        # Add Roblox username
+        if roblox_username:
+            nickname_parts.append(roblox_username)
 
     # Standard format with pipes
     new_nickname = " | ".join(nickname_parts)
@@ -162,29 +193,38 @@ def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_u
     if len(new_nickname) <= 32:
         return new_nickname
 
-    # Fallback 1: Remove HHStJ prefix
-    fallback_parts = []
-    if fenz_prefix:
-        fallback_parts.append(f"{fenz_prefix}-{callsign}")
-    elif callsign:
-        fallback_parts.append(callsign)
-    if roblox_username:
-        fallback_parts.append(roblox_username)
+    # Fallback 1: Remove one prefix based on priority
+    if hhstj_priority:
+        # Remove FENZ prefix if too long
+        fallback_parts = [hhstj_prefix] if hhstj_prefix else []
+        if callsign:
+            fallback_parts.append(callsign)
+        if roblox_username:
+            fallback_parts.append(roblox_username)
+    else:
+        # Remove HHStJ prefix if too long (standard behavior)
+        fallback_parts = []
+        if fenz_prefix:
+            fallback_parts.append(f"{fenz_prefix}-{callsign}")
+        elif callsign:
+            fallback_parts.append(callsign)
+        if roblox_username:
+            fallback_parts.append(roblox_username)
 
     fallback_nickname = " | ".join(fallback_parts)
-
     if len(fallback_nickname) <= 32:
         return fallback_nickname
 
-    # Fallback 2: Just FENZ callsign
-    if fenz_prefix:
+    # Fallback 2: Just primary callsign
+    if hhstj_priority and hhstj_prefix:
+        return hhstj_prefix
+    elif fenz_prefix:
         return f"{fenz_prefix}-{callsign}"
     elif callsign:
         return callsign
 
     # Last resort: truncate
     return new_nickname[:32]
-
 
 class CallsignCog(commands.Cog):
     callsign_group = app_commands.Group(name="callsign", description="Callsign management commands")
@@ -357,8 +397,20 @@ class CallsignCog(commands.Cog):
                                         'UPDATE callsigns SET fenz_prefix = $1 WHERE discord_user_id = $2',
                                         correct_fenz_prefix, member.id
                                     )
-                                # Reset to basic format
-                                new_nickname = f"{correct_fenz_prefix}-{record['callsign']}"
+                                # Check if member has high command roles
+                                is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
+                                is_hhstj_high_command = any(
+                                    role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
+
+                                # When creating new_nickname:
+                                new_nickname = format_nickname(
+                                    correct_fenz_prefix,
+                                    record['callsign'],
+                                    record['hhstj_prefix'],
+                                    record['roblox_username'],
+                                    is_fenz_high_command,
+                                    is_hhstj_high_command
+                                )
 
                                 # Update Google Sheets
                                 await sheets_manager.add_callsign_to_sheets(
@@ -367,19 +419,30 @@ class CallsignCog(commands.Cog):
                                 )
                             else:
                                 # Normal nickname update (preserve their choice)
+                                is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
+                                is_hhstj_high_command = any(
+                                    role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
+
                                 new_nickname = format_nickname(
                                     record['fenz_prefix'],
                                     record['callsign'],
                                     record['hhstj_prefix'],
-                                    record['roblox_username']
+                                    record['roblox_username'],
+                                    is_fenz_high_command,
+                                    is_hhstj_high_command
                                 )
                         else:
-                            # Normal nickname update
+                            # Normal nickname update (preserve their choice)
+                            is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
+                            is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
+
                             new_nickname = format_nickname(
                                 record['fenz_prefix'],
                                 record['callsign'],
                                 record['hhstj_prefix'],
-                                record['roblox_username']
+                                record['roblox_username'],
+                                is_fenz_high_command,
+                                is_hhstj_high_command
                             )
 
                         if member.nick != new_nickname:
@@ -543,8 +606,19 @@ class CallsignCog(commands.Cog):
                 fenz_prefix, hhstj_prefix
             )
 
+            # Check for high command
+            is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in user.roles)
+            is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in user.roles)
+
             # Update Discord nickname
-            new_nickname = format_nickname(fenz_prefix, callsign, hhstj_prefix, roblox_username)
+            new_nickname = format_nickname(
+                fenz_prefix,
+                callsign,
+                hhstj_prefix,
+                roblox_username,
+                is_fenz_high_command,
+                is_hhstj_high_command
+            )
             try:
                 await user.edit(nick=new_nickname)
             except discord.Forbidden:
@@ -727,8 +801,19 @@ class HighCommandPrefixChoice(discord.ui.View):
             self.fenz_prefix, self.hhstj_prefix
         )
 
-        # Update Discord nickname WITH prefix
-        new_nickname = format_nickname(self.fenz_prefix, self.callsign, self.hhstj_prefix, self.roblox_username)
+        # In with_prefix_button:
+        is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in self.user.roles)
+        is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in self.user.roles)
+
+        new_nickname = format_nickname(
+            self.fenz_prefix,
+            self.callsign,
+            self.hhstj_prefix,
+            self.roblox_username,
+            is_fenz_high_command,
+            is_hhstj_high_command
+        )
+
         try:
             await self.user.edit(nick=new_nickname)
         except discord.Forbidden:
@@ -776,7 +861,18 @@ class HighCommandPrefixChoice(discord.ui.View):
         )
 
         # Update Discord nickname WITHOUT prefix
-        new_nickname = format_nickname("", self.callsign, self.hhstj_prefix, self.roblox_username)
+        # In without_prefix_button:
+        is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in self.user.roles)
+        is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in self.user.roles)
+
+        new_nickname = format_nickname(
+            "",
+            self.callsign,
+            self.hhstj_prefix,
+            self.roblox_username,
+            is_fenz_high_command,
+            is_hhstj_high_command
+        )
         try:
             await self.user.edit(nick=new_nickname)
         except discord.Forbidden:
