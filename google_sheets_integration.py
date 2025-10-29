@@ -481,6 +481,165 @@ class GoogleSheetsManager:
 
         return (has_mismatch, correct_prefix, rank_type)
 
+    async def batch_update_callsigns(self, callsign_data: list):
+        """
+        Batch update all callsigns to Google Sheets
+        callsign_data: List of dicts with callsign info
+        """
+        try:
+            if not self.client:
+                auth_success = self.authenticate()
+                if not auth_success:
+                    return False
+
+            # Get both worksheets
+            non_command_sheet = self.get_worksheet("Non-Command")
+            command_sheet = self.get_worksheet("Command")
+
+            if not non_command_sheet or not command_sheet:
+                print("❌ Could not access worksheets")
+                return False
+
+            # Clear existing data (keep headers)
+            print("🗑️ Clearing existing data...")
+
+            # Clear Non-Command sheet (starting from row 2)
+            non_command_values = non_command_sheet.get_all_values()
+            if len(non_command_values) > 1:
+                non_command_sheet.delete_rows(2, len(non_command_values))
+
+            # Clear Command sheet (starting from row 2)
+            command_values = command_sheet.get_all_values()
+            if len(command_values) > 1:
+                command_sheet.delete_rows(2, len(command_values))
+
+            print("✅ Sheets cleared, adding callsigns...")
+
+            # Process each callsign
+            for data in callsign_data:
+                # Determine rank type from prefix
+                fenz_prefix = data['fenz_prefix']
+
+                # Check if it's a command rank
+                is_command = any(fenz_prefix == prefix for _, (_, prefix) in COMMAND_RANKS.items())
+
+                if is_command:
+                    # Add to Command sheet
+                    empty_row = self.find_first_empty_row(command_sheet)
+                    full_callsign = f"{fenz_prefix}-{data['callsign']}" if fenz_prefix else data['callsign']
+
+                    rank_priority = COMMAND_RANK_PRIORITY.get(fenz_prefix, 99)
+
+                    # Update cells
+                    command_sheet.update_cell(empty_row, 1, full_callsign)  # A: Full callsign
+                    command_sheet.update_cell(empty_row, 2, data['roblox_username'])  # B: Roblox username
+                    command_sheet.update_cell(empty_row, 3,
+                                              "No additional qualifications")  # C: Qualifications (default)
+                    command_sheet.update_cell(empty_row, 4, "Good Boy")  # D: Strikes (default)
+                    command_sheet.update_cell(empty_row, 5, str(data['discord_user_id']))  # E: Discord ID
+                    command_sheet.update_cell(empty_row, 6, rank_priority)  # F: Rank priority
+
+                    # Copy validations
+                    self.copy_data_validation_to_cell(command_sheet, source_row=2, target_row=empty_row, column=3)
+                    self.copy_data_validation_to_cell(command_sheet, source_row=2, target_row=empty_row, column=4)
+
+                else:
+                    # Add to Non-Command sheet
+                    empty_row = self.find_first_empty_row(non_command_sheet)
+                    full_callsign = f"{fenz_prefix}-{data['callsign']}"
+
+                    # Get rank number (default to 3 if not found)
+                    rank_number = 3
+                    for role_id, (_, prefix, num) in NON_COMMAND_RANKS.items():
+                        if prefix == fenz_prefix:
+                            rank_number = num
+                            break
+
+                    # Update cells
+                    non_command_sheet.update_cell(empty_row, 1, full_callsign)  # A: Full callsign
+                    non_command_sheet.update_cell(empty_row, 2, fenz_prefix)  # B: FENZ Prefix
+                    non_command_sheet.update_cell(empty_row, 3, data['callsign'])  # C: Callsign number
+                    non_command_sheet.update_cell(empty_row, 4, data['roblox_username'])  # D: Roblox username
+                    non_command_sheet.update_cell(empty_row, 6, "Clear")  # F: Strikes (default)
+                    non_command_sheet.update_cell(empty_row, 7, str(data['discord_user_id']))  # G: Discord ID
+                    non_command_sheet.update_cell(empty_row, 8, rank_number)  # H: Rank number
+                    non_command_sheet.update_cell(empty_row, 9,
+                                                  "No additional qualifications")  # I: Qualifications (default)
+
+                    # Copy validations
+                    self.copy_data_validation_to_cell(non_command_sheet, source_row=2, target_row=empty_row, column=6)
+                    self.copy_data_validation_to_cell(non_command_sheet, source_row=2, target_row=empty_row, column=9)
+
+            # Sort both sheets
+            print("📊 Sorting sheets...")
+
+            # Sort Non-Command by rank number (H), then callsign (C)
+            self.sort_worksheet_multi(non_command_sheet, [
+                {'column': 8, 'order': 'ASCENDING'},  # H: Rank number
+                {'column': 3, 'order': 'ASCENDING'}  # C: Callsign
+            ])
+
+            # Sort Command by rank priority (F)
+            self.sort_worksheet_multi(command_sheet, [
+                {'column': 6, 'order': 'ASCENDING'}  # F: Rank priority
+            ])
+
+            print(f"✅ Batch update complete: {len(callsign_data)} callsigns synced")
+            return True
+
+        except Exception as e:
+            print(f"❌ Error in batch update: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    async def get_all_callsigns(self):
+        """
+        Get all existing callsigns from both sheets
+        Returns: list of dicts with callsign data
+        """
+        try:
+            if not self.client:
+                auth_success = self.authenticate()
+                if not auth_success:
+                    return []
+
+            all_callsigns = []
+
+            # Get Non-Command sheet data
+            non_command_sheet = self.get_worksheet("Non-Command")
+            if non_command_sheet:
+                non_command_data = non_command_sheet.get_all_values()
+                for row in non_command_data[1:]:  # Skip header
+                    if row and len(row) >= 7 and row[6]:  # Check Discord ID exists
+                        all_callsigns.append({
+                            'full_callsign': row[0],
+                            'fenz_prefix': row[1],
+                            'callsign': row[2],
+                            'roblox_username': row[3],
+                            'discord_user_id': row[6],
+                            'sheet': 'Non-Command'
+                        })
+
+            # Get Command sheet data
+            command_sheet = self.get_worksheet("Command")
+            if command_sheet:
+                command_data = command_sheet.get_all_values()
+                for row in command_data[1:]:  # Skip header
+                    if row and len(row) >= 5 and row[4]:  # Check Discord ID exists
+                        all_callsigns.append({
+                            'full_callsign': row[0],
+                            'roblox_username': row[1],
+                            'discord_user_id': row[4],
+                            'sheet': 'Command'
+                        })
+
+            return all_callsigns
+
+        except Exception as e:
+            print(f"❌ Error getting callsigns: {e}")
+            return []
+
 
 # Create global instance
 sheets_manager = GoogleSheetsManager()

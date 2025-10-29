@@ -323,7 +323,7 @@ class CallsignCog(commands.Cog):
             success = await sheets_manager.batch_update_callsigns(callsign_data)
 
             if not success:
-                await interaction.followup.send("❌ Failed to sync to Google Sheets.")
+                await interaction.followup.send("<:Denied:1426930694633816248> Failed to sync to Google Sheets.")
                 return
 
             # Update Discord nicknames for users with callsigns
@@ -388,7 +388,7 @@ class CallsignCog(commands.Cog):
                 except Exception as e:
                     failed_updates.append(f"{record.get('discord_username', 'Unknown')}: {str(e)}")
 
-            response = f"✅ Successfully synced {len(callsigns)} callsigns to Google Sheets (sorted by rank hierarchy).\n"
+            response = f"<:Accepted:1426930333789585509> Successfully synced {len(callsigns)} callsigns to Google Sheets (sorted by rank hierarchy).\n"
             response += f"📖 Updated {updated_count} Discord nicknames.\n"
 
             if failed_updates:
@@ -400,7 +400,7 @@ class CallsignCog(commands.Cog):
             await interaction.followup.send(response)
 
         except Exception as e:
-            await interaction.followup.send(f"❌ Error during sync: {str(e)}")
+            await interaction.followup.send(f"<:Denied:1426930694633816248> Error during sync: {str(e)}")
 
     @callsign_group.command(name="assign", description="Assign a callsign to a user")
     @app_commands.checks.has_role(SYNC_ROLE_ID)
@@ -418,14 +418,14 @@ class CallsignCog(commands.Cog):
         try:
             # Validate callsign format (should be just the number)
             if not callsign.isdigit() or len(callsign) != 3:
-                await interaction.followup.send("❌ Callsign must be a 3-digit number (e.g., 001, 142)")
+                await interaction.followup.send("<:Denied:1426930694633816248> Callsign must be a 3-digit number (e.g., 001, 142)")
                 return
 
             # Check if callsign already exists
             existing = await check_callsign_exists(callsign)
             if existing and existing['discord_user_id'] != user.id:
                 await interaction.followup.send(
-                    f"❌ Callsign {callsign} is already assigned to <@{existing['discord_user_id']}>"
+                    f"<:Denied:1426930694633816248> Callsign {callsign} is already assigned to <@{existing['discord_user_id']}>"
                 )
                 return
 
@@ -433,7 +433,7 @@ class CallsignCog(commands.Cog):
             bloxlink_data = await self.get_bloxlink_data(user.id, interaction.guild.id)
             if not bloxlink_data:
                 await interaction.followup.send(
-                    f"❌ Could not find Roblox account for {user.mention}. "
+                    f"<:Denied:1426930694633816248> Could not find Roblox account for {user.mention}. "
                     "Please verify their Bloxlink connection."
                 )
                 return
@@ -442,7 +442,7 @@ class CallsignCog(commands.Cog):
             roblox_username = await self.get_roblox_user_from_id(roblox_id)
 
             if not roblox_username:
-                await interaction.followup.send("❌ Failed to fetch Roblox username.")
+                await interaction.followup.send("<:Denied:1426930694633816248> Failed to fetch Roblox username.")
                 return
 
             # Get FENZ rank from user's roles
@@ -466,7 +466,7 @@ class CallsignCog(commands.Cog):
 
             if not fenz_prefix:
                 await interaction.followup.send(
-                    f"❌ {user.mention} does not have a valid FENZ rank role."
+                    f"<:Denied:1426930694633816248> {user.mention} does not have a valid FENZ rank role."
                 )
                 return
 
@@ -555,13 +555,13 @@ class CallsignCog(commands.Cog):
                 return
 
             await interaction.followup.send(
-                f"✅ Assigned callsign **{fenz_prefix}-{callsign}** to {user.mention}\n"
+                f"<:Accepted:1426930333789585509> Assigned callsign **{fenz_prefix}-{callsign}** to {user.mention}\n"
                 f"🏷️ Nickname updated to: `{new_nickname}`\n"
                 f"💡 Remember to run `/callsign sync` to update Google Sheets!"
             )
 
         except Exception as e:
-            await interaction.followup.send(f"❌ Error assigning callsign: {str(e)}")
+            await interaction.followup.send(f"<:Denied:1426930694633816248> Error assigning callsign: {str(e)}")
 
     @callsign_group.command(name="lookup", description="Look up a callsign")
     @app_commands.checks.has_role(1309021002675654700)
@@ -586,11 +586,11 @@ class CallsignCog(commands.Cog):
                 # Search by Discord user
                 results = await self.search_callsign_database(str(user.id), 'discord_id')
             else:
-                await interaction.followup.send("❌ Please provide either a callsign or a user.")
+                await interaction.followup.send("<:Denied:1426930694633816248> Please provide either a callsign or a user.")
                 return
 
             if not results:
-                await interaction.followup.send("❌ No callsign found.")
+                await interaction.followup.send("<:Denied:1426930694633816248> No callsign found.")
                 return
 
             # Display results
@@ -636,7 +636,7 @@ class CallsignCog(commands.Cog):
                 await interaction.followup.send(embed=embed)
 
         except Exception as e:
-            await interaction.followup.send(f"❌ Error looking up callsign: {str(e)}")
+            await interaction.followup.send(f"<:Denied:1426930694633816248> Error looking up callsign: {str(e)}")
 
     @callsign_group.command(name="remove", description="Remove a callsign assignment")
     @app_commands.checks.has_role(SYNC_ROLE_ID)
@@ -652,7 +652,7 @@ class CallsignCog(commands.Cog):
 
         try:
             if not callsign and not user:
-                await interaction.followup.send("❌ Please provide either a callsign or a user.")
+                await interaction.followup.send("<:Denied:1426930694633816248> Please provide either a callsign or a user.")
                 return
 
             async with db.pool.acquire() as conn:
@@ -668,7 +668,7 @@ class CallsignCog(commands.Cog):
                     )
 
                 if not result:
-                    await interaction.followup.send("❌ No callsign found to remove.")
+                    await interaction.followup.send("<:Denied:1426930694633816248> No callsign found to remove.")
                     return
 
                 removed_callsign = f"{result['fenz_prefix']}-{result['callsign']}" if result['fenz_prefix'] else result[
@@ -682,12 +682,12 @@ class CallsignCog(commands.Cog):
                         pass
 
                 await interaction.followup.send(
-                    f"✅ Removed callsign **{removed_callsign}**\n"
+                    f"<:Accepted:1426930333789585509> Removed callsign **{removed_callsign}**\n"
                     f"💡 Remember to run `/callsign sync` to update Google Sheets!"
                 )
 
         except Exception as e:
-            await interaction.followup.send(f"❌ Error removing callsign: {str(e)}")
+            await interaction.followup.send(f"<:Denied:1426930694633816248> Error removing callsign: {str(e)}")
 
 
 class HighCommandPrefixChoice(discord.ui.View):
@@ -710,7 +710,7 @@ class HighCommandPrefixChoice(discord.ui.View):
         # Only allow the high command member to respond
         if interaction.user.id != self.user.id:
             await interaction.response.send_message(
-                "❌ Only the person being assigned the callsign can make this choice!",
+                "<:Denied:1426930694633816248> Only the person being assigned the callsign can make this choice!",
                 ephemeral=True
             )
             return False
@@ -747,7 +747,7 @@ class HighCommandPrefixChoice(discord.ui.View):
 
         # Send confirmation to high command member
         await interaction.followup.send(
-            f"✅ You've chosen to use the prefix!\n"
+            f"<:Accepted:1426930333789585509> You've chosen to use the prefix!\n"
             f"🏷️ Your callsign is: **{self.fenz_prefix}-{self.callsign}**\n"
             f"📌 Nickname set to: `{new_nickname}`",
             ephemeral=True
@@ -755,7 +755,7 @@ class HighCommandPrefixChoice(discord.ui.View):
 
         # Send confirmation to admin who assigned it
         await self.original_interaction.followup.send(
-            f"✅ {self.user.mention} chose to use prefix: **{self.fenz_prefix}-{self.callsign}**\n"
+            f"<:Accepted:1426930333789585509> {self.user.mention} chose to use prefix: **{self.fenz_prefix}-{self.callsign}**\n"
             f"🏷️ Nickname updated to: `{new_nickname}`\n"
             f"💡 Callsign synced to database and Google Sheets!",
             ephemeral=True
@@ -795,7 +795,7 @@ class HighCommandPrefixChoice(discord.ui.View):
 
         # Send confirmation to high command member
         await interaction.followup.send(
-            f"✅ You've chosen NOT to use a prefix!\n"
+            f"<:Accepted:1426930333789585509> You've chosen NOT to use a prefix!\n"
             f"🔢 Your callsign is: **{self.callsign}**\n"
             f"📌 Nickname set to: `{new_nickname}`",
             ephemeral=True
@@ -803,7 +803,7 @@ class HighCommandPrefixChoice(discord.ui.View):
 
         # Send confirmation to admin who assigned it
         await self.original_interaction.followup.send(
-            f"✅ {self.user.mention} chose NO prefix: **{self.callsign}**\n"
+            f"<:Accepted:1426930333789585509> {self.user.mention} chose NO prefix: **{self.callsign}**\n"
             f"🏷️ Nickname updated to: `{new_nickname}`\n"
             f"💡 Callsign synced to database and Google Sheets!",
             ephemeral=True
@@ -812,7 +812,7 @@ class HighCommandPrefixChoice(discord.ui.View):
         self.choice_made = True
         self.stop()
 
-    @discord.ui.button(label='Cancel', style=discord.ButtonStyle.danger, emoji='❌')
+    @discord.ui.button(label='Cancel', style=discord.ButtonStyle.danger, emoji='<:Denied:1426930694633816248>')
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
 
@@ -822,12 +822,12 @@ class HighCommandPrefixChoice(discord.ui.View):
         await interaction.message.edit(view=self)
 
         await interaction.followup.send(
-            "❌ Callsign assignment cancelled.",
+            "<:Denied:1426930694633816248> Callsign assignment cancelled.",
             ephemeral=True
         )
 
         await self.original_interaction.followup.send(
-            f"❌ {self.user.mention} cancelled the callsign assignment.",
+            f"<:Denied:1426930694633816248> {self.user.mention} cancelled the callsign assignment.",
             ephemeral=True
         )
 

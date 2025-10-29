@@ -17,7 +17,7 @@ class Database:
     async def connect(self):
         """Connect to the database"""
         if not self.database_url:
-            print('❌ Cannot connect: DATABASE_URL not set')
+            print('<:Denied:1426930694633816248> Cannot connect: DATABASE_URL not set')
             return False
 
         try:
@@ -27,10 +27,10 @@ class Database:
                 max_size=10,
                 command_timeout=60
             )
-            print('✅ Connected to Supabase database')
+            print('<:Accepted:1426930333789585509> Connected to Supabase database')
             return True
         except Exception as e:
-            print(f'❌ Failed to connect to database: {e}')
+            print(f'<:Denied:1426930694633816248> Failed to connect to database: {e}')
             return False
 
     async def close(self):
@@ -68,7 +68,7 @@ class Database:
                 )
                 return True
             except Exception as e:
-                print(f'❌ Error setting callsign: {e}')
+                print(f'<:Denied:1426930694633816248> Error setting callsign: {e}')
                 return False
 
     async def get_callsign(self, guild_id: int, user_id: int) -> Optional[str]:
@@ -112,7 +112,7 @@ class Database:
                 )
                 return True
             except Exception as e:
-                print(f'❌ Error setting config: {e}')
+                print(f'<:Denied:1426930694633816248> Error setting config: {e}')
                 return False
 
     async def get_setting(self, guild_id: int, key: str, default=None):
@@ -148,7 +148,7 @@ class Database:
                 )
                 return True
             except Exception as e:
-                print(f'❌ Error logging action: {e}')
+                print(f'<:Denied:1426930694633816248> Error logging action: {e}')
                 return False
 
     async def get_recent_logs(self, guild_id: int, action_type: str = None, user_id: int = None,
@@ -184,35 +184,24 @@ class Database:
                                user_id: int, user_name: str, colour: str, station: str,
                                started_at: int, has_voters_embed: bool = False,
                                original_colour: str = None, original_station: str = None,
-                               switch_history: str = None):
-        """Add an active watch with switch tracking support"""
+                               switch_history: str = None, related_messages: list = None):
+        """Add an active watch to the database"""
         async with self.pool.acquire() as conn:
-            try:
-                # Set defaults for new fields
-                if original_colour is None:
-                    original_colour = colour
-                if original_station is None:
-                    original_station = station
-                if switch_history is None:
-                    switch_history = '[]'
-
-                await conn.execute(
-                    '''INSERT INTO active_watches
-                       (message_id, guild_id, channel_id, user_id, user_name, colour, station, started_at,
-                        has_voters_embed, original_colour, original_station, switch_history)
-                       VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8), $9, $10, $11,
-                               $12::jsonb) ON CONFLICT (message_id) DO
-                    UPDATE SET
-                        guild_id = $2, channel_id = $3, user_id = $4, user_name = $5,
-                        colour = $6, station = $7, started_at = to_timestamp($8), has_voters_embed = $9,
-                        original_colour = $10, original_station = $11, switch_history = $12::jsonb''',
-                    message_id, guild_id, channel_id, user_id, user_name, colour, station, started_at,
-                    has_voters_embed, original_colour, original_station, switch_history
-                )
-                return True
-            except Exception as e:
-                print(f'❌ Error adding active watch: {e}')
-                return False
+            await conn.execute(
+                '''INSERT INTO active_watches
+                   (message_id, guild_id, channel_id, user_id, user_name, colour, station,
+                    started_at, has_voters_embed, original_colour, original_station,
+                    switch_history, related_messages)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT (message_id) DO
+                UPDATE SET
+                    colour = EXCLUDED.colour,
+                    station = EXCLUDED.station,
+                    switch_history = EXCLUDED.switch_history,
+                    related_messages = EXCLUDED.related_messages''',
+                message_id, guild_id, channel_id, user_id, user_name, colour, station,
+                started_at, has_voters_embed, original_colour, original_station,
+                switch_history, related_messages or [message_id]  # Default to just the main message
+            )
 
     async def get_active_watches(self, guild_id: int = None) -> Dict:
         """Get all active watches with switch history (returns dict with message_id as key for compatibility)"""
@@ -273,7 +262,7 @@ class Database:
                 )
                 return True
             except Exception as e:
-                print(f'❌ Error adding scheduled vote: {e}')
+                print(f'<:Denied:1426930694633816248> Error adding scheduled vote: {e}')
                 return False
 
     async def get_scheduled_votes(self) -> Dict:
@@ -386,7 +375,7 @@ class Database:
                 )
                 return True
             except Exception as e:
-                print(f'❌ Error adding completed watch: {e}')
+                print(f'<:Denied:1426930694633816248> Error adding completed watch: {e}')
                 return False
 
 
@@ -415,9 +404,25 @@ async def ensure_database_connected():
 # These maintain the same interface as the old JSON system but use the database
 
 async def load_watches():
-    """Load active watches (now from database)"""
-    return await db.get_active_watches()
-
+    """Load all active watches from database"""
+    async with db.pool.acquire() as conn:
+        rows = await conn.fetch('SELECT * FROM active_watches')
+        watches = {}
+        for row in rows:
+            watches[str(row['message_id'])] = {
+                'user_id': row['user_id'],
+                'user_name': row['user_name'],
+                'channel_id': row['channel_id'],
+                'colour': row['colour'],
+                'station': row['station'],
+                'started_at': row['started_at'],
+                'has_voters_embed': row.get('has_voters_embed', False),
+                'original_colour': row.get('original_colour'),
+                'original_station': row.get('original_station'),
+                'switch_history': json.loads(row['switch_history']) if row.get('switch_history') else [],
+                'related_messages': row.get('related_messages', [row['message_id']])  # ADD THIS
+            }
+        return watches
 
 async def save_watches(watches: dict):
     """Save active watches - now saves to database instead of no-op"""
@@ -492,3 +497,12 @@ async def update_watch_switch(self, message_id: int, new_colour: str, new_statio
                              ''', (new_colour, new_station, json.dumps(switch_history),
                                    original_colour, original_station, message_id))
             await db.commit()
+
+# Add to database.py
+async def update_watch_related_messages(self, message_id: int, related_messages: list):
+    """Update the related_messages array for a watch"""
+    async with self.pool.acquire() as conn:
+        await conn.execute(
+            'UPDATE active_watches SET related_messages = $1 WHERE message_id = $2',
+            related_messages, message_id
+        )

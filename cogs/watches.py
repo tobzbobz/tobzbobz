@@ -53,12 +53,12 @@ class VoteButton(discord.ui.View):
         self.cog = cog
         self.cancelled = False
 
-    @discord.ui.button(label='0 ✅', style=discord.ButtonStyle.green, custom_id='vote_button')
+    @discord.ui.button(label='0 <:Accepted:1426930333789585509>', style=discord.ButtonStyle.green, custom_id='vote_button')
     async def vote_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             if interaction.user.id in self.voted_users:
                 already_voted_embed = discord.Embed(
-                    description='❌ You have already voted!',
+                    description='<:Denied:1426930694633816248> You have already voted!',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.response.send_message(embed=already_voted_embed, ephemeral=True)
@@ -66,7 +66,7 @@ class VoteButton(discord.ui.View):
 
             self.voted_users.add(interaction.user.id)
             self.vote_count += 1
-            button.label = f'{self.vote_count} ✅'
+            button.label = f'{self.vote_count} <:Accepted:1426930333789585509>'
 
             if self.vote_count >= self.required_votes:
                 colour_map = {
@@ -150,13 +150,13 @@ class VoteButton(discord.ui.View):
             else:
                 await interaction.response.edit_message(view=self)
                 voted_embed = discord.Embed(
-                    description=f'✅ Vote recorded! ({self.vote_count}/{self.required_votes})',
+                    description=f'<:Accepted:1426930333789585509> Vote recorded! ({self.vote_count}/{self.required_votes})',
                     colour=discord.Colour(0x2ecc71)
                 )
                 await interaction.followup.send(embed=voted_embed, ephemeral=True)
 
         except Exception as e:
-            error_embed = discord.Embed(description=f'❌ Error: {e}', colour=discord.Colour(0xf24d4d))
+            error_embed = discord.Embed(description=f'<:Denied:1426930694633816248> Error: {e}', colour=discord.Colour(0xf24d4d))
             if not interaction.response.is_done():
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
             else:
@@ -169,7 +169,7 @@ class VoteButton(discord.ui.View):
         try:
             if interaction.user.id not in self.voted_users:
                 not_voted_embed = discord.Embed(
-                    description='❌ You have not voted yet!',
+                    description='<:Denied:1426930694633816248> You have not voted yet!',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.response.send_message(embed=not_voted_embed, ephemeral=True)
@@ -180,18 +180,18 @@ class VoteButton(discord.ui.View):
 
             for item in self.children:
                 if item.custom_id == 'vote_button':
-                    item.label = f'{self.vote_count} ✅'
+                    item.label = f'{self.vote_count} <:Accepted:1426930333789585509>'
                     break
 
             await interaction.response.edit_message(view=self)
             removed_embed = discord.Embed(
-                description=f'✅ Vote removed! ({self.vote_count}/{self.required_votes})',
+                description=f'<:Accepted:1426930333789585509> Vote removed! ({self.vote_count}/{self.required_votes})',
                 colour=discord.Colour(0x2ecc71)
             )
             await interaction.followup.send(embed=removed_embed, ephemeral=True)
 
         except Exception as e:
-            error_embed = discord.Embed(description=f'❌ Error: {e}', colour=discord.Colour(0xf24d4d))
+            error_embed = discord.Embed(description=f'<:Denied:1426930694633816248> Error: {e}', colour=discord.Colour(0xf24d4d))
             if not interaction.response.is_done():
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
             else:
@@ -213,7 +213,7 @@ class WatchRoleButton(discord.ui.View):
 
             if not role_id:
                 error_embed = discord.Embed(
-                    description='❌ Watch role not configured for this server!',
+                    description='<:Denied:1426930694633816248> Watch role not configured for this server!',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
@@ -221,7 +221,7 @@ class WatchRoleButton(discord.ui.View):
 
             role = interaction.guild.get_role(role_id)
             if not role:
-                error_embed = discord.Embed(description='❌ Role not found!', colour=discord.Colour(0xf24d4d))
+                error_embed = discord.Embed(description='<:Denied:1426930694633816248> Role not found!', colour=discord.Colour(0xf24d4d))
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
                 return
 
@@ -235,7 +235,7 @@ class WatchRoleButton(discord.ui.View):
                 await interaction.response.send_message(embed=embed, ephemeral=True)
 
         except Exception as e:
-            error_embed = discord.Embed(description=f'❌ Error: {e}', colour=discord.Colour(0xf24d4d))
+            error_embed = discord.Embed(description=f'<:Denied:1426930694633816248> Error: {e}', colour=discord.Colour(0xf24d4d))
             await interaction.response.send_message(embed=error_embed, ephemeral=True)
             print(f'Error toggling role: {e}')
             raise
@@ -257,7 +257,7 @@ class LogsPaginationView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
-            await interaction.response.send_message('❌ This is not your logs view!', ephemeral=True)
+            await interaction.response.send_message('<:Denied:1426930694633816248> This is not your logs view!', ephemeral=True)
             return False
         return True
 
@@ -293,11 +293,11 @@ class MissedVoteConfirmationView(discord.ui.View):
         self.vote_data = vote_data
         self.cog = cog
 
-    @discord.ui.button(label='Send Now', emoji='✅', style=discord.ButtonStyle.green, custom_id='send_missed_vote')
+    @discord.ui.button(label='Send Now', emoji='<:Accepted:1426930333789585509>', style=discord.ButtonStyle.green, custom_id='send_missed_vote')
     async def send_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             if interaction.user.id != OWNER_ID:
-                await interaction.response.send_message('❌ Only the bot owner can use this!', ephemeral=True)
+                await interaction.response.send_message('<:Denied:1426930694633816248> Only the bot owner can use this!', ephemeral=True)
                 return
 
             await interaction.response.defer()
@@ -308,23 +308,23 @@ class MissedVoteConfirmationView(discord.ui.View):
 
             embed = interaction.message.embeds[0]
             embed.colour = discord.Colour(0x2ecc71)
-            embed.title = '✅ Missed Vote - SENT'
+            embed.title = '<:Accepted:1426930333789585509> Missed Vote - SENT'
 
             for item in self.children:
                 item.disabled = True
 
             await interaction.message.edit(embed=embed, view=self)
-            await interaction.followup.send('✅ Vote sent successfully!', ephemeral=True)
+            await interaction.followup.send('<:Accepted:1426930333789585509> Vote sent successfully!', ephemeral=True)
 
         except Exception as e:
             print(f'Error sending missed vote: {e}')
-            await interaction.followup.send(f'❌ Error sending vote: {e}', ephemeral=True)
+            await interaction.followup.send(f'<:Denied:1426930694633816248> Error sending vote: {e}', ephemeral=True)
 
-    @discord.ui.button(label='Cancel', emoji='❌', style=discord.ButtonStyle.red, custom_id='cancel_missed_vote')
+    @discord.ui.button(label='Cancel', emoji='<:Denied:1426930694633816248>', style=discord.ButtonStyle.red, custom_id='cancel_missed_vote')
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             if interaction.user.id != OWNER_ID:
-                await interaction.response.send_message('❌ Only the bot owner can use this!', ephemeral=True)
+                await interaction.response.send_message('<:Denied:1426930694633816248> Only the bot owner can use this!', ephemeral=True)
                 return
 
             await interaction.response.defer()
@@ -334,17 +334,17 @@ class MissedVoteConfirmationView(discord.ui.View):
 
             embed = interaction.message.embeds[0]
             embed.colour = discord.Colour(0xf24d4d)
-            embed.title = '❌ Missed Vote - CANCELLED'
+            embed.title = '<:Denied:1426930694633816248> Missed Vote - CANCELLED'
 
             for item in self.children:
                 item.disabled = True
 
             await interaction.message.edit(embed=embed, view=self)
-            await interaction.followup.send('✅ Vote cancelled and removed from schedule.', ephemeral=True)
+            await interaction.followup.send('<:Accepted:1426930333789585509> Vote cancelled and removed from schedule.', ephemeral=True)
 
         except Exception as e:
             print(f'Error cancelling missed vote: {e}')
-            await interaction.followup.send(f'❌ Error: {e}', ephemeral=True)
+            await interaction.followup.send(f'<:Denied:1426930694633816248> Error: {e}', ephemeral=True)
 
 
 class WatchCog(commands.Cog):
@@ -359,7 +359,7 @@ class WatchCog(commands.Cog):
         """Load active watches from database on startup"""
         global active_watches
         active_watches = await load_watches()
-        print(f'✅ Loaded {len(active_watches)} active watches from database')
+        print(f'<:Accepted:1426930333789585509> Loaded {len(active_watches)} active watches from database')
 
     watch_group = app_commands.Group(name='watch', description='Watch management commands')
 
@@ -376,7 +376,7 @@ class WatchCog(commands.Cog):
 
             if not any(role_id in user_roles for role_id in allowed_role_ids):
                 permission_embed = discord.Embed(
-                    description='❌ You do not have permission to use this command!',
+                    description='<:Denied:1426930694633816248> You do not have permission to use this command!',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.response.send_message(embed=permission_embed, ephemeral=True)
@@ -392,7 +392,7 @@ class WatchCog(commands.Cog):
                     }
                     embed_colour = colour_map.get(colour, discord.Colour.orange())
                     decline_embed = discord.Embed(
-                        description=f'❌ A {colour} Watch for `{station}` is already active! End it first before starting a new one.',
+                        description=f'<:Denied:1426930694633816248> A {colour} Watch for `{station}` is already active! End it first before starting a new one.',
                         colour=embed_colour
                     )
                     await interaction.response.send_message(embed=decline_embed, ephemeral=True)
@@ -406,7 +406,7 @@ class WatchCog(commands.Cog):
 
             if not watch_channel_id:
                 error_embed = discord.Embed(
-                    description='❌ Watch channel not configured for this server!',
+                    description='<:Denied:1426930694633816248> Watch channel not configured for this server!',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
@@ -415,7 +415,7 @@ class WatchCog(commands.Cog):
             watch_channel = interaction.guild.get_channel(watch_channel_id)
             if not watch_channel:
                 error_embed = discord.Embed(
-                    description='❌ Watch channel not found!',
+                    description='<:Denied:1426930694633816248> Watch channel not found!',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
@@ -491,6 +491,7 @@ class WatchCog(commands.Cog):
                 station=station,
                 started_at=int(interaction.created_at.timestamp()),
                 has_voters_embed=False
+                related_messages = [msg.id]  # ADD THIS - track all related messages
             )
 
             # Update in-memory cache
@@ -502,17 +503,18 @@ class WatchCog(commands.Cog):
                 'station': station,
                 'started_at': int(interaction.created_at.timestamp()),
                 'has_voters_embed': False
+                'related_messages': [msg.id]  # ADD THIS
             }
 
             success_embed = discord.Embed(
-                description=f'✅ Watch started in {watch_channel.mention}!',
+                description=f'<:Accepted:1426930333789585509> Watch started in {watch_channel.mention}!',
                 colour=discord.Colour(0x2ecc71)
             )
             await interaction.followup.send(embed=success_embed, ephemeral=True)
 
         except Exception as e:
             print(f'Error starting watch: {e}')
-            error_embed = discord.Embed(description=f'❌ Error: {e}', colour=discord.Colour(0xf24d4d))
+            error_embed = discord.Embed(description=f'<:Denied:1426930694633816248> Error: {e}', colour=discord.Colour(0xf24d4d))
             if not interaction.response.is_done():
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
             else:
@@ -549,7 +551,7 @@ class WatchCog(commands.Cog):
 
             if not any(role_id in user_roles for role_id in allowed_role_ids):
                 permission_embed = discord.Embed(
-                    description='❌ You do not have permission to use this command!',
+                    description='<:Denied:1426930694633816248> You do not have permission to use this command!',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.response.send_message(embed=permission_embed, ephemeral=True)
@@ -563,7 +565,7 @@ class WatchCog(commands.Cog):
 
             if not watch_channel_id:
                 error_embed = discord.Embed(
-                    description='❌ Watch channel not configured for this server!',
+                    description='<:Denied:1426930694633816248> Watch channel not configured for this server!',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
@@ -572,7 +574,7 @@ class WatchCog(commands.Cog):
             watch_channel = interaction.guild.get_channel(watch_channel_id)
             if not watch_channel:
                 error_embed = discord.Embed(
-                    description='❌ Watch channel not found!',
+                    description='<:Denied:1426930694633816248> Watch channel not found!',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
@@ -600,12 +602,12 @@ class WatchCog(commands.Cog):
             if time:
                 scheduled_dt = datetime.datetime.fromtimestamp(scheduled_time, tz=datetime.timezone.utc)
                 success_embed = discord.Embed(
-                    description=f'✅ Vote scheduled for {discord.utils.format_dt(scheduled_dt, style="F")} ({discord.utils.format_dt(scheduled_dt, style="R")})',
+                    description=f'<:Accepted:1426930333789585509> Vote scheduled for {discord.utils.format_dt(scheduled_dt, style="F")} ({discord.utils.format_dt(scheduled_dt, style="R")})',
                     colour=discord.Colour(0x2ecc71)
                 )
             else:
                 success_embed = discord.Embed(
-                    description=f'✅ Vote will be sent immediately!',
+                    description=f'<:Accepted:1426930333789585509> Vote will be sent immediately!',
                     colour=discord.Colour(0x2ecc71)
                 )
 
@@ -613,7 +615,7 @@ class WatchCog(commands.Cog):
 
         except Exception as e:
             print(f'Error scheduling vote: {e}')
-            error_embed = discord.Embed(description=f'❌ Error: {e}', colour=discord.Colour(0xf24d4d))
+            error_embed = discord.Embed(description=f'<:Denied:1426930694633816248> Error: {e}', colour=discord.Colour(0xf24d4d))
             await interaction.followup.send(embed=error_embed, ephemeral=True)
             raise
 
@@ -644,7 +646,7 @@ class WatchCog(commands.Cog):
 
             if not any(role_id in user_roles for role_id in allowed_role_ids):
                 permission_embed = discord.Embed(
-                    description='❌ You do not have permission to use this command!',
+                    description='<:Denied:1426930694633816248> You do not have permission to use this command!',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.response.send_message(embed=permission_embed, ephemeral=True)
@@ -654,7 +656,7 @@ class WatchCog(commands.Cog):
 
             if watch not in active_watches:
                 not_found_embed = discord.Embed(
-                    description='❌ Watch not found!',
+                    description='<:Denied:1426930694633816248> Watch not found!',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.followup.send(embed=not_found_embed, ephemeral=True)
@@ -665,7 +667,7 @@ class WatchCog(commands.Cog):
 
             if channel is None:
                 error_embed = discord.Embed(
-                    description='❌ Watch channel not found! The channel may have been deleted.',
+                    description='<:Denied:1426930694633816248> Watch channel not found! The channel may have been deleted.',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
@@ -673,11 +675,12 @@ class WatchCog(commands.Cog):
                 del active_watches[watch]
                 return
 
+            # Get the original message
             try:
-                message = await channel.fetch_message(int(watch))
+                original_message = await channel.fetch_message(int(watch))
             except discord.NotFound:
                 error_embed = discord.Embed(
-                    description='❌ Watch message not found! It may have been deleted.',
+                    description='<:Denied:1426930694633816248> Watch message not found! It may have been deleted.',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
@@ -685,19 +688,47 @@ class WatchCog(commands.Cog):
                 del active_watches[watch]
                 return
 
-            if not message.embeds:
-                no_embed_error = discord.Embed(
-                    description='❌ No embed found in that message!',
-                    colour=discord.Colour(0xf24d4d)
-                )
-                await interaction.followup.send(embed=no_embed_error, ephemeral=True)
-                return
+            # DELETE ALL RELATED MESSAGES (boosts, etc.)
+            related_messages = watch_data.get('related_messages', [int(watch)])
+            for msg_id in related_messages:
+                try:
+                    msg_to_delete = await channel.fetch_message(msg_id)
+                    await msg_to_delete.delete()
+                except (discord.NotFound, discord.Forbidden):
+                    pass
+                except Exception as e:
+                    print(f'Error deleting related message {msg_id}: {e}')
 
-            embed = message.embeds[0]
-            embed.title = f'🚨 {watch_data["colour"]} Watch - ENDED 🚨'
-            embed.clear_fields()
+            # DELETE ALL USER MESSAGES (keep bot messages) since watch started
+            try:
+                deleted_count = 0
+                async for message in channel.history(after=discord.Object(id=int(watch)), limit=None):
+                    # Delete if it's a user message (not from a bot)
+                    if not message.author.bot:
+                        try:
+                            await message.delete()
+                            deleted_count += 1
+                        except (discord.Forbidden, discord.NotFound):
+                            pass
+                print(f'Deleted {deleted_count} user messages from watch')
+            except Exception as e:
+                print(f'Error deleting user messages: {e}')
+
+            # CREATE NEW ENDED EMBED
+            colour_map = {
+                'Yellow': discord.Colour.gold(),
+                'Blue': discord.Colour.blue(),
+                'Brown': discord.Colour(0x8B4513),
+                'Red': discord.Colour.red()
+            }
+            embed_colour = colour_map.get(watch_data["colour"], discord.Colour.orange())
+
+            embed = discord.Embed(
+                title=f'🚨 {watch_data["colour"]} Watch - ENDED 🚨',
+                colour=embed_colour
+            )
             embed.add_field(
-                name='‎',
+                name='​',
                 value=f'The {watch_data["colour"]} watch has now concluded. Thank you for attending this watch, and we hope to see you back with FENZ for another one!',
                 inline=False
             )
@@ -707,29 +738,25 @@ class WatchCog(commands.Cog):
                 inline=False
             )
             embed.add_field(
-                name='‎',
+                name='​',
                 value='**Select the below reaction role to be notified of any future watches!**',
                 inline=False
             )
             embed.add_field(
-                name='‎',
+                name='​',
                 value=f'-# Watch Ended {discord.utils.format_dt(discord.utils.utcnow(), style="F")}',
                 inline=True
             )
+            embed.set_image(
+                url='https://cdn.discordapp.com/attachments/1425867714160758896/1426932258694238258/image.png?ex=68f4eeb9&is=68f39d39&hm=b69f7f8bad7dcd7c7bde4dab731ca7e23e27d32d864cad9fc7224dcbb0648840')
+            embed.set_thumbnail(url='https://cdn.discordapp.com/emojis/1389200656090533970.webp?size=128')
 
             ended_by = interaction.user
             embed.set_author(name=f'Ended by {ended_by.display_name}', icon_url=ended_by.display_avatar.url)
 
-            guild_config = get_guild_config(interaction.guild.id)
-            watch_role_id = guild_config.get('watch_role_id')
+            # SEND NEW MESSAGE (no ping)
+            await channel.send(embed=embed, view=WatchRoleButton(0))
 
-            await message.edit(
-                content=f'-# ||<@&{watch_role_id}> {interaction.user.mention} <@&1285474077556998196> <@&1365536209681514636>||' if watch_role_id else '',
-                embed=embed,
-                view=WatchRoleButton(int(watch))
-            )
-
-            # Save to completed watches database
             # Save to completed watches database
             await db.add_completed_watch(
                 message_id=int(watch),
@@ -755,14 +782,14 @@ class WatchCog(commands.Cog):
             del active_watches[watch]
 
             success_embed = discord.Embed(
-                description=f'✅ Watch ended successfully with {attendees} attendees!',
+                description=f'<:Accepted:1426930333789585509> Watch ended successfully with {attendees} attendees!',
                 colour=discord.Colour(0x2ecc71)
             )
             await interaction.followup.send(embed=success_embed, ephemeral=True)
 
         except Exception as e:
             print(f'Error ending watch: {e}')
-            error_embed = discord.Embed(description=f'❌ Error: {e}', colour=discord.Colour(0xf24d4d))
+            error_embed = discord.Embed(description=f'<:Denied:1426930694633816248> Error: {e}', colour=discord.Colour(0xf24d4d))
             await interaction.followup.send(embed=error_embed, ephemeral=True)
             raise
 
@@ -787,7 +814,7 @@ class WatchCog(commands.Cog):
 
             if not any(role_id in user_roles for role_id in allowed_role_ids):
                 permission_embed = discord.Embed(
-                    description='❌ You do not have permission to use this command!',
+                    description='<:Denied:1426930694633816248> You do not have permission to use this command!',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.response.send_message(embed=permission_embed, ephemeral=True)
@@ -799,7 +826,7 @@ class WatchCog(commands.Cog):
 
             if not completed_watches:
                 no_logs_embed = discord.Embed(
-                    description='❌ No watch logs found!',
+                    description='<:Denied:1426930694633816248> No watch logs found!',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.followup.send(embed=no_logs_embed, ephemeral=True)
@@ -816,7 +843,7 @@ class WatchCog(commands.Cog):
 
             if not sorted_watches:
                 no_logs_embed = discord.Embed(
-                    description='❌ No watch logs found!',
+                    description='<:Denied:1426930694633816248> No watch logs found!',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.followup.send(embed=no_logs_embed, ephemeral=True)
@@ -860,7 +887,7 @@ class WatchCog(commands.Cog):
 
                     if watch_data.get('status') == 'failed':
                         field_value = (
-                            f"**Status:** ❌ FAILED\n"
+                            f"**Status:** <:Denied:1426930694633816248> FAILED\n"
                             f"**Reason:** {watch_data.get('reason', 'Unknown')}\n"
                             f"**Colour:** {watch_data.get('colour', 'Unknown')}\n"
                             f"**Station:** {watch_data.get('station', 'Unknown')}\n"
@@ -916,7 +943,7 @@ class WatchCog(commands.Cog):
 
         except Exception as e:
             print(f'Error fetching watch logs: {e}')
-            error_embed = discord.Embed(description=f'❌ Error: {e}', colour=discord.Colour(0xf24d4d))
+            error_embed = discord.Embed(description=f'<:Denied:1426930694633816248> Error: {e}', colour=discord.Colour(0xf24d4d))
             await interaction.followup.send(embed=error_embed, ephemeral=True)
             raise
 
@@ -930,7 +957,7 @@ class WatchCog(commands.Cog):
 
             if allowed_role_id not in user_roles:
                 permission_embed = discord.Embed(
-                    description='❌ You do not have permission to use this command!',
+                    description='<:Denied:1426930694633816248> You do not have permission to use this command!',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.response.send_message(embed=permission_embed, ephemeral=True)
@@ -942,7 +969,7 @@ class WatchCog(commands.Cog):
 
             if log not in completed_watches:
                 not_found_embed = discord.Embed(
-                    description='❌ Watch log not found!',
+                    description='<:Denied:1426930694633816248> Watch log not found!',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.followup.send(embed=not_found_embed, ephemeral=True)
@@ -960,14 +987,14 @@ class WatchCog(commands.Cog):
             await db.delete_completed_watch(int(log))
 
             success_embed = discord.Embed(
-                description=f'✅ Deleted watch log:\n**{colour} Watch at {station}**\nEnded: {formatted_time}',
+                description=f'<:Accepted:1426930333789585509> Deleted watch log:\n**{colour} Watch at {station}**\nEnded: {formatted_time}',
                 colour=discord.Colour(0x2ecc71)
             )
             await interaction.followup.send(embed=success_embed, ephemeral=True)
 
         except Exception as e:
             print(f'Error deleting watch log: {e}')
-            error_embed = discord.Embed(description=f'❌ Error: {e}', colour=discord.Colour(0xf24d4d))
+            error_embed = discord.Embed(description=f'<:Denied:1426930694633816248> Error: {e}', colour=discord.Colour(0xf24d4d))
             await interaction.followup.send(embed=error_embed, ephemeral=True)
             raise
 
@@ -1014,7 +1041,7 @@ class WatchCog(commands.Cog):
         try:
             if interaction.user.id != OWNER_ID:
                 permission_embed = discord.Embed(
-                    description='❌ This command is restricted to the bot owner only!',
+                    description='<:Denied:1426930694633816248> This command is restricted to the bot owner only!',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.response.send_message(embed=permission_embed, ephemeral=True)
@@ -1024,7 +1051,7 @@ class WatchCog(commands.Cog):
 
             if not active_watches:
                 no_watches_embed = discord.Embed(
-                    description='❌ No active watches to end!',
+                    description='<:Denied:1426930694633816248> No active watches to end!',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.followup.send(embed=no_watches_embed, ephemeral=True)
@@ -1052,7 +1079,7 @@ class WatchCog(commands.Cog):
                     failed_count += 1
 
             summary_embed = discord.Embed(
-                description=f'✅ Successfully deleted {deleted_count} watch(es) and vote(s)!' +
+                description=f'<:Accepted:1426930333789585509> Successfully deleted {deleted_count} watch(es) and vote(s)!' +
                             (f'\n⚠️ Failed to delete {failed_count} watch(es)/vote(s).' if failed_count > 0 else ''),
                 colour=discord.Colour(0x2ecc71)
             )
@@ -1060,7 +1087,7 @@ class WatchCog(commands.Cog):
 
         except Exception as e:
             print(f'Error in end all watches: {e}')
-            error_embed = discord.Embed(description=f'❌ Error: {e}', colour=discord.Colour(0xf24d4d))
+            error_embed = discord.Embed(description=f'<:Denied:1426930694633816248> Error: {e}', colour=discord.Colour(0xf24d4d))
             await interaction.followup.send(embed=error_embed, ephemeral=True)
             raise
 
@@ -1214,7 +1241,7 @@ class WatchCog(commands.Cog):
             message = await channel.fetch_message(message_id)
 
             failed_embed = discord.Embed(
-                title=f"❌ {vote_data['colour']} Watch Vote - TERMINATED ❌",
+                title=f"<:Denied:1426930694633816248> {vote_data['colour']} Watch Vote - TERMINATED <:Denied:1426930694633816248>",
                 description="Insufficient votes received. Watch has been cancelled.",
                 colour=discord.Colour(0xf24d4d)
             )
@@ -1280,7 +1307,7 @@ class WatchCog(commands.Cog):
 
             if not any(role_id in user_roles for role_id in allowed_role_ids):
                 permission_embed = discord.Embed(
-                    description='❌ You do not have permission to use this command!',
+                    description='<:Denied:1426930694633816248> You do not have permission to use this command!',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.response.send_message(embed=permission_embed, ephemeral=True)
@@ -1288,7 +1315,7 @@ class WatchCog(commands.Cog):
 
             if new_colour is None and new_station is None:
                 error_embed = discord.Embed(
-                    description='❌ You must specify at least one parameter to switch (colour or station)!',
+                    description='<:Denied:1426930694633816248> You must specify at least one parameter to switch (colour or station)!',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
@@ -1298,7 +1325,7 @@ class WatchCog(commands.Cog):
 
             if watch not in active_watches:
                 not_found_embed = discord.Embed(
-                    description='❌ Watch not found!',
+                    description='<:Denied:1426930694633816248> Watch not found!',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.followup.send(embed=not_found_embed, ephemeral=True)
@@ -1312,30 +1339,82 @@ class WatchCog(commands.Cog):
             final_colour = new_colour if new_colour else old_colour
             final_station = new_station if new_station else old_station
 
-            # Check if target colour/station combo already exists
-            for msg_id, other_watch in active_watches.items():
-                if (msg_id != watch and
-                        other_watch.get('colour') == final_colour and
-                        other_watch.get('station') == final_station):
-                    colour_map = {
-                        'Yellow': discord.Colour.gold(),
-                        'Blue': discord.Colour.blue(),
-                        'Brown': discord.Colour(0x8B4513),
-                        'Red': discord.Colour.red()
-                    }
-                    embed_colour = colour_map.get(final_colour, discord.Colour.orange())
+            # Check if switching to the EXACT SAME watch (no changes at all)
+            if final_colour == old_colour and final_station == old_station:
+                error_embed = discord.Embed(
+                    description='<:Denied:1426930694633816248> This watch is already that colour and station! No changes to make.',
+                    colour=discord.Colour(0xf24d4d)
+                )
+                await interaction.followup.send(embed=error_embed, ephemeral=True)
+                return
 
-                    conflict_embed = discord.Embed(
-                        description=f'❌ A {final_colour} Watch for `{final_station}` is already active! End it first before switching to this combination.',
-                        colour=embed_colour
-                    )
-                    await interaction.response.send_message(embed=conflict_embed, ephemeral=True)
-                    return
+            # Check if only switching colour (station stays the same) but that colour already exists at this station
+            if final_station == old_station and final_colour != old_colour:
+                for msg_id, other_watch in active_watches.items():
+                    if (msg_id != watch and
+                            other_watch.get('colour') == final_colour and
+                            other_watch.get('station') == final_station):
+                        colour_map = {
+                            'Yellow': discord.Colour.gold(),
+                            'Blue': discord.Colour.blue(),
+                            'Brown': discord.Colour(0x8B4513),
+                            'Red': discord.Colour.red()
+                        }
+                        embed_colour = colour_map.get(final_colour, discord.Colour.orange())
+
+                        conflict_embed = discord.Embed(
+                            description=f'<:Denied:1426930694633816248> A {final_colour} Watch for `{final_station}` is already active! End it first before switching to this colour.',
+                            colour=embed_colour
+                        )
+                        await interaction.followup.send(embed=conflict_embed, ephemeral=True)
+                        return
+
+            # Check if only switching station (colour stays the same) but that station already has this colour
+            if final_colour == old_colour and final_station != old_station:
+                for msg_id, other_watch in active_watches.items():
+                    if (msg_id != watch and
+                            other_watch.get('colour') == final_colour and
+                            other_watch.get('station') == final_station):
+                        colour_map = {
+                            'Yellow': discord.Colour.gold(),
+                            'Blue': discord.Colour.blue(),
+                            'Brown': discord.Colour(0x8B4513),
+                            'Red': discord.Colour.red()
+                        }
+                        embed_colour = colour_map.get(final_colour, discord.Colour.orange())
+
+                        conflict_embed = discord.Embed(
+                            description=f'<:Denied:1426930694633816248> A {final_colour} Watch for `{final_station}` is already active! End it first before switching to this station.',
+                            colour=embed_colour
+                        )
+                        await interaction.followup.send(embed=conflict_embed, ephemeral=True)
+                        return
+
+            # Check if switching BOTH colour AND station - validate the new combination doesn't exist
+            if final_colour != old_colour and final_station != old_station:
+                for msg_id, other_watch in active_watches.items():
+                    if (msg_id != watch and
+                            other_watch.get('colour') == final_colour and
+                            other_watch.get('station') == final_station):
+                        colour_map = {
+                            'Yellow': discord.Colour.gold(),
+                            'Blue': discord.Colour.blue(),
+                            'Brown': discord.Colour(0x8B4513),
+                            'Red': discord.Colour.red()
+                        }
+                        embed_colour = colour_map.get(final_colour, discord.Colour.orange())
+
+                        conflict_embed = discord.Embed(
+                            description=f'<:Denied:1426930694633816248> A {final_colour} Watch for `{final_station}` is already active! End it first before switching to this combination.',
+                            colour=embed_colour
+                        )
+                        await interaction.followup.send(embed=conflict_embed, ephemeral=True)
+                        return
 
             channel = interaction.guild.get_channel(watch_data['channel_id'])
             if channel is None:
                 error_embed = discord.Embed(
-                    description='❌ Watch channel not found!',
+                    description='<:Denied:1426930694633816248> Watch channel not found!',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
@@ -1455,14 +1534,14 @@ class WatchCog(commands.Cog):
             }
 
             success_embed = discord.Embed(
-                description=f'✅ Watch switched successfully!\n' + '\n'.join(switch_info),
+                description=f'<:Accepted:1426930333789585509> Watch switched successfully!\n' + '\n'.join(switch_info),
                 colour=discord.Colour(0x2ecc71)
             )
             await interaction.followup.send(embed=success_embed, ephemeral=True)
 
         except Exception as e:
             print(f'Error switching watch: {e}')
-            error_embed = discord.Embed(description=f'❌ Error: {e}', colour=discord.Colour(0xf24d4d))
+            error_embed = discord.Embed(description=f'<:Denied:1426930694633816248> Error: {e}', colour=discord.Colour(0xf24d4d))
             await interaction.followup.send(embed=error_embed, ephemeral=True)
             raise
 
@@ -1499,7 +1578,7 @@ class WatchCog(commands.Cog):
 
             if not any(role_id in user_roles for role_id in allowed_role_ids):
                 permission_embed = discord.Embed(
-                    description='❌ You do not have permission to use this command!',
+                    description='<:Denied:1426930694633816248> You do not have permission to use this command!',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.response.send_message(embed=permission_embed, ephemeral=True)
@@ -1509,7 +1588,7 @@ class WatchCog(commands.Cog):
 
             if watch not in active_watches:
                 not_found_embed = discord.Embed(
-                    description='❌ Watch not found!',
+                    description='<:Denied:1426930694633816248> Watch not found!',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.followup.send(embed=not_found_embed, ephemeral=True)
@@ -1520,11 +1599,24 @@ class WatchCog(commands.Cog):
 
             if channel is None:
                 error_embed = discord.Embed(
-                    description='❌ Watch channel not found!',
+                    description='<:Denied:1426930694633816248> Watch channel not found!',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
                 return
+
+            # DELETE ALL PREVIOUS BOOST MESSAGES for this watch
+            related_messages = watch_data.get('related_messages', [int(watch)])
+            # Keep only the original watch message
+            for msg_id in related_messages:
+                if msg_id != int(watch):  # Don't delete the main watch message
+                    try:
+                        msg_to_delete = await channel.fetch_message(msg_id)
+                        await msg_to_delete.delete()
+                    except (discord.NotFound, discord.Forbidden):
+                        pass
+                    except Exception as e:
+                        print(f'Error deleting boost message {msg_id}: {e}')
 
             guild_config = get_guild_config(interaction.guild.id)
             watch_role_id = guild_config.get('watch_role_id')
@@ -1545,25 +1637,32 @@ class WatchCog(commands.Cog):
             boost_embed.add_field(name='Station', value=f"`{watch_data['station']}`", inline=True)
             boost_embed.add_field(name='Watch Leader', value=f"<@{watch_data['user_id']}>", inline=True)
             boost_embed.add_field(name='Started', value=f"<t:{watch_data['started_at']}:R>", inline=True)
-            boost_embed.add_field(name='❎', value='Join Fenz RTO and help out! 🙌', inline=False)
+            boost_embed.add_field(name='​', value='Join Fenz RTO and help out! 🙌', inline=False)
             boost_embed.set_thumbnail(url='https://cdn.discordapp.com/emojis/1389200656090533970.webp?size=128')
             boost_embed.set_footer(text=f'Boosted by {interaction.user.display_name}',
                                    icon_url=interaction.user.display_avatar.url)
 
-            await channel.send(
+            boost_msg = await channel.send(
                 content=f'||<@&{watch_role_id}> <@&1285474077556998196> <@&1365536209681514636>||' if watch_role_id else '',
                 embed=boost_embed
             )
 
+            # ADD NEW BOOST MESSAGE to tracked messages
+            watch_data['related_messages'] = [int(watch), boost_msg.id]
+            active_watches[watch] = watch_data
+
+            # Update database
+            await db.update_watch_related_messages(int(watch), watch_data['related_messages'])
+
             success_embed = discord.Embed(
-                description=f'✅ Watch boosted successfully in {channel.mention}!',
+                description=f'<:Accepted:1426930333789585509> Watch boosted successfully in {channel.mention}!',
                 colour=discord.Colour(0x2ecc71)
             )
             await interaction.followup.send(embed=success_embed, ephemeral=True)
 
         except Exception as e:
             print(f'Error boosting watch: {e}')
-            error_embed = discord.Embed(description=f'❌ Error: {e}', colour=discord.Colour(0xf24d4d))
+            error_embed = discord.Embed(description=f'<:Denied:1426930694633816248> Error: {e}', colour=discord.Colour(0xf24d4d))
             await interaction.followup.send(embed=error_embed, ephemeral=True)
             raise
 
