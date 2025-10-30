@@ -1004,7 +1004,7 @@ class CallsignCog(commands.Cog):
         except Exception as e:
             await interaction.followup.send(f"<:Denied:1426930694633816248> Error removing callsign: {str(e)}")
 
-    @watch_group.command(name='nickname-sync', description="Force update all nicknames from database (Owner only)")
+    @callsign_group.command(name='nickname-sync', description="Force update all nicknames from database (Owner only)")
     @app_commands.describe(dry_run="Preview changes without applying them")
     async def force_sync_nicknames(self, interaction: discord.Interaction, dry_run: bool = False):
         """Force sync all nicknames from database - Owner only"""

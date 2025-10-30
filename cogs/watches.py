@@ -8,7 +8,6 @@ from discord.ext import tasks
 import asyncio
 import datetime
 import json
-from datetime import datetime, timezone
 
 # Import database
 from database import db, load_watches, load_scheduled_votes, load_completed_watches
@@ -26,6 +25,21 @@ GUILD_CONFIGS = {
         'watch_channel_id': 1426190071115284502,
         'watch_role_id': 1426185588930777199
     }
+}
+
+CHANNEL_NAME_RULES = {
+    "Station 1": {
+        "Red": "「🔴1️⃣」active-watch",
+        "Blue": "「🔵1️⃣」active-watch",
+        "Yellow": "「🟡1️⃣」active-watch",
+        "Brown": "「🟤1️⃣」active-watch"
+    },
+    "Station 2": {
+        "Red": "「🔴2️⃣」active-watch",
+        "Blue": "「🔵2️⃣」active-watch",
+        "Yellow": "「🟡2️⃣」active-watch",
+        "Brown": "「🟤2️⃣」active-watch"
+    },
 }
 
 
@@ -80,6 +94,7 @@ class VoteButton(discord.ui.View):
             button.label = f'{self.vote_count}'
 
             if self.vote_count >= self.required_votes:
+                # Cancel auto-cancel task if it exists
                 if self.cog and f"auto_cancel_{self.message_id}" in self.cog.vote_timeout_tasks:
                     self.cog.vote_timeout_tasks[f"auto_cancel_{self.message_id}"].cancel()
                     del self.cog.vote_timeout_tasks[f"auto_cancel_{self.message_id}"]
@@ -100,85 +115,21 @@ class VoteButton(discord.ui.View):
                     watch_start_time = discord.utils.utcnow()
                     watch_start_timestamp = int(watch_start_time.timestamp())
 
-                # Create "Vote Passed" embed
-                passed_embed = discord.Embed(
-                    title=f'🎉 {self.colour} Watch Vote - PASSED! 🎉',
-                    colour=embed_colour
-                )
-                passed_embed.add_field(name='Station', value=f'`{self.station}`', inline=True)
-                passed_embed.add_field(name='Watch Starts', value=f'<t:{watch_start_timestamp}:R>', inline=True)
-                passed_embed.add_field(name='Watch Leader', value=interaction.user.mention, inline=True)
-                passed_embed.add_field(
-                    name='​',
-                    value=f'The vote has passed! Watch will begin <t:{watch_start_timestamp}:R>\nGet ready to join Fenz RTO! 🙌',
-                    inline=False
-                )
-                passed_embed.add_field(
-                    name='​',
-                    value='**Select the below reaction role to be notified of any future watches!**',
-                    inline=False
-                )
-                passed_embed.set_thumbnail(url='https://cdn.discordapp.com/emojis/1389200656090533970.webp?size=128')
-                passed_embed.set_author(name=f'Vote passed - Started by {interaction.user.display_name}',
-                                        icon_url=interaction.user.display_avatar.url)
-
-                voters_embed = discord.Embed(title='Voters:', colour=embed_colour)
-                voter_mentions = []
-                for user_id in self.voted_users:
-                    user = interaction.guild.get_member(user_id)
-                    if user:
-                        voter_mentions.append(user.mention)
-                voters_embed.description = '\n'.join(voter_mentions)
-
-                watch_view = WatchRoleButton(self.message_id)
-                guild_config = get_guild_config(interaction.guild.id)
-                watch_role_id = guild_config.get('watch_role_id')
-
-                await interaction.response.edit_message(
-                    content=f'-# ||<@&{watch_role_id}> {interaction.user.mention} <@&1285474077556998196> <@&1365536209681514636>||' if watch_role_id else '',
-                    embeds=[passed_embed, voters_embed],
-                    view=watch_view
-                )
-
-                # Cancel timeout task since vote passed
-                if self.cog and str(self.message_id) in self.cog.vote_timeout_tasks:
-                    self.cog.vote_timeout_tasks[str(self.message_id)].cancel()
-                    del self.cog.vote_timeout_tasks[str(self.message_id)]
-
-                # Schedule the actual watch start
-                if self.cog:
-                    delay_seconds = self.time_minutes * 60 if self.time_minutes else 0
-                    start_task = asyncio.create_task(
-                        self.cog.start_watch_after_vote(
-                            channel=self.channel,
-                            message_id=self.message_id,
-                            user_id=interaction.user.id,
-                            user_name=interaction.user.display_name,
-                            colour=self.colour,
-                            station=self.station,
-                            watch_role_id=watch_role_id,
-                            voters=list(self.voted_users),
-                            delay_seconds=delay_seconds
-                        )
-                    )
-                    self.cog.vote_timeout_tasks[f"start_{self.message_id}"] = start_task
-
-                start_embed = discord.Embed(title=f'{self.colour} Watch Announcement', colour=embed_colour)
+                # Create watch start embed (skip the "Vote Passed" intermediate step)
+                start_embed = discord.Embed(title=f'🚨 {self.colour} Watch Announcement 🚨', colour=embed_colour)
                 start_embed.add_field(name='Station', value=f'`{self.station}`', inline=True)
 
                 if self.time_minutes:
-                    watch_time = discord.utils.utcnow() + datetime.timedelta(minutes=self.time_minutes)
-                    start_embed.add_field(name='Time', value=discord.utils.format_dt(watch_time, style='R'),
-                                          inline=True)
+                    start_embed.add_field(name='Time', value=f'<t:{watch_start_timestamp}:R>', inline=True)
                 else:
                     start_embed.add_field(name='Time', value=discord.utils.format_dt(discord.utils.utcnow(), style='R'),
                                           inline=True)
 
                 start_embed.add_field(name='Watch Leader', value=interaction.user.mention, inline=True)
-                start_embed.add_field(name='‎',
+                start_embed.add_field(name='​',
                                       value='No need to vote just hop in!!\nIf you are joining, please join Fenz RTO 🙌',
                                       inline=False)
-                start_embed.add_field(name='‎',
+                start_embed.add_field(name='​',
                                       value='**Select the below reaction role to be notified of any future watches!**',
                                       inline=False)
                 start_embed.set_image(
@@ -187,6 +138,7 @@ class VoteButton(discord.ui.View):
                 start_embed.set_author(name=f'Requested by {interaction.user.display_name}',
                                        icon_url=interaction.user.display_avatar.url)
 
+                # Add voters embed
                 voters_embed = discord.Embed(title='Voters:', colour=embed_colour)
                 voter_mentions = []
                 for user_id in self.voted_users:
@@ -199,6 +151,7 @@ class VoteButton(discord.ui.View):
                 guild_config = get_guild_config(interaction.guild.id)
                 watch_role_id = guild_config.get('watch_role_id')
 
+                # SINGLE response - edit message to watch state
                 await interaction.response.edit_message(
                     content=f'-# ||<@&{watch_role_id}> {interaction.user.mention} <@&1285474077556998196> <@&1365536209681514636>||' if watch_role_id else '',
                     embeds=[start_embed, voters_embed],
@@ -214,7 +167,7 @@ class VoteButton(discord.ui.View):
                     user_name=interaction.user.display_name,
                     colour=self.colour,
                     station=self.station,
-                    started_at=interaction.created_at,  # ✅ Pass datetime directly
+                    started_at=interaction.created_at,
                     has_voters_embed=True
                 )
 
@@ -229,11 +182,31 @@ class VoteButton(discord.ui.View):
                     'has_voters_embed': True
                 }
 
+                # Cancel vote timeout task since vote passed
                 if self.cog and str(self.message_id) in self.cog.vote_timeout_tasks:
                     self.cog.vote_timeout_tasks[str(self.message_id)].cancel()
                     del self.cog.vote_timeout_tasks[str(self.message_id)]
 
+                # Schedule the actual watch start (if delayed)
+                if self.cog and self.time_minutes:
+                    delay_seconds = self.time_minutes * 60
+                    start_task = asyncio.create_task(
+                        self.cog.start_watch_after_vote(
+                            channel=self.channel,
+                            message_id=self.message_id,
+                            user_id=interaction.user.id,
+                            user_name=interaction.user.display_name,
+                            colour=self.colour,
+                            station=self.station,
+                            watch_role_id=watch_role_id,
+                            voters=list(self.voted_users),
+                            delay_seconds=delay_seconds
+                        )
+                    )
+                    self.cog.vote_timeout_tasks[f"start_{self.message_id}"] = start_task
+
             else:
+                # Vote not yet passed - just update the button
                 await interaction.response.edit_message(view=self)
                 voted_embed = discord.Embed(
                     description=f'<:Accepted:1426930333789585509> Vote recorded! ({self.vote_count}/{self.required_votes})',
@@ -729,8 +702,23 @@ class WatchCog(commands.Cog):
                 created_at=current_time
             )
 
+            if not time:
+                await self.send_scheduled_vote({
+                    "guild_id": interaction.guild.id,
+                    "channel_id": watch_channel_id,
+                    "watch_role_id": watch_role_id,
+                    "user_id": interaction.user.id,
+                    "colour": colour,
+                    "station": station,
+                    "votes": votes,
+                    "time_minutes": None,
+                    "scheduled_time": scheduled_time,
+                    "created_at": current_time
+                })
+                await db.remove_scheduled_vote(vote_id)
+
             if time:
-                scheduled_dt = datetime.fromtimestamp(scheduled_time, tz=timezone.utc)
+                scheduled_dt = datetime.datetime.fromtimestamp(scheduled_time, tz=timezone.utc)
                 success_embed = discord.Embed(
                     description=f'<:Accepted:1426930333789585509> Vote scheduled for {discord.utils.format_dt(scheduled_dt, style="F")} ({discord.utils.format_dt(scheduled_dt, style="R")})',
                     colour=discord.Colour(0x2ecc71)
@@ -1124,7 +1112,7 @@ class WatchCog(commands.Cog):
             station = log_data.get('station', 'Unknown')
             ended_at = log_data.get('ended_at', 0)
 
-            ended_datetime = datetime.datetime.fromtimestamp(ended_at, tz=datetime.timezone.utc)
+            ended_datetime = datetime.datetime.datetime.fromtimestamp(ended_at, tz=datetime.timezone.utc)
             formatted_time = ended_datetime.strftime('%b %d, %Y at %I:%M %p UTC')
 
             # Delete from database
@@ -1163,7 +1151,7 @@ class WatchCog(commands.Cog):
         choices = []
         for watch_id, data in sorted_watches:
             ended_at = data.get('ended_at', 0)
-            ended_datetime = datetime.datetime.fromtimestamp(ended_at, tz=datetime.timezone.utc)
+            ended_datetime = datetime.datetime.datetime.fromtimestamp(ended_at, tz=datetime.timezone.utc)
             formatted_time = ended_datetime.strftime('%b %d, %Y at %I:%M %p')
 
             colour = data.get('colour', 'Unknown')
@@ -1279,7 +1267,7 @@ class WatchCog(commands.Cog):
             owner = await self.bot.fetch_user(OWNER_ID)
 
             for vote_id, vote_data in missed_votes:
-                scheduled_dt = datetime.datetime.fromtimestamp(vote_data['scheduled_time'], tz=datetime.timezone.utc)
+                scheduled_dt = datetime.datetime.datetime.fromtimestamp(vote_data['scheduled_time'], tz=datetime.timezone.utc)
                 missed_by_minutes = (current_time - vote_data['scheduled_time']) // 60
 
                 embed = discord.Embed(
@@ -2029,6 +2017,37 @@ class WatchCog(commands.Cog):
             label = f"{data['colour']} Watch - {data['station']} (by {data.get('user_name', 'Unknown')})"
             choices.append(app_commands.Choice(name=label, value=msg_id))
         return [choice for choice in choices if current.lower() in choice.name.lower()][:25]
+
+    async def update_watch_channel_name(self, channel: discord.TextChannel, colour: str, station: str, state: str):
+
+        try:
+            # Simplify station to short form
+            station_clean = station.strip()
+            colour_clean = colour.strip()
+
+            base_name = CHANNEL_NAME_RULES.get(station_clean, {}).get(colour_clean)
+
+            if not base_name:
+                station_simple = station_clean.lower().replace(" ", "-")
+                colour_simple = colour_clean.lower()
+                base_name = f"「⚫」watches"
+
+            if state == 'voting':
+                new_name = f"「🗳️」watch-voting"
+            elif state == 'waiting':
+                new_name = f"「🟠」watch-soon"
+            elif state == 'ended':
+                new_name = f"「⚫」watches"
+            else:
+                new_name = f"「⚫」watches"
+
+            await channel.edit(name=new_name)
+            print(f"✅ Channel renamed to {new_name}")
+
+        except discord.Forbidden:
+            print("⚠️ Missing permissions to rename channel.")
+        except Exception as e:
+            print(f"⚠️ Error renaming channel: {e}")
 
 async def setup(bot):
     await bot.add_cog(WatchCog(bot))
