@@ -464,30 +464,37 @@ class WatchCog(commands.Cog):
             view.message_id = msg.id
 
             # Save to database
-            await db.add_active_watch(
-                message_id=msg.id,
-                guild_id=interaction.guild.id,
-                channel_id=watch_channel.id,
-                user_id=interaction.user.id,
-                user_name=interaction.user.display_name,
-                colour=colour,
-                station=station,
-                started_at=int(interaction.created_at.timestamp()),
-                has_voters_embed=False,
-                related_messages=[msg.id]  # ADD THIS - track all related messages
-            )
+            # Save to database
+            try:
+                await db.add_active_watch(
+                    message_id=msg.id,
+                    guild_id=interaction.guild.id,
+                    channel_id=watch_channel.id,
+                    user_id=interaction.user.id,
+                    user_name=interaction.user.display_name,
+                    colour=colour,
+                    station=station,
+                    started_at=int(interaction.created_at.timestamp()),
+                    has_voters_embed=False,
+                    related_messages=[msg.id]
+                )
 
-            # Update in-memory cache
-            active_watches[str(msg.id)] = {
-                'user_id': interaction.user.id,
-                'user_name': interaction.user.display_name,
-                'channel_id': watch_channel.id,
-                'colour': colour,
-                'station': station,
-                'started_at': int(interaction.created_at.timestamp()),
-                'has_voters_embed': False,
-                'related_messages': [msg.id]  # ADD THIS
-            }
+                # Update in-memory cache
+                active_watches[str(msg.id)] = {
+                    'user_id': interaction.user.id,
+                    'user_name': interaction.user.display_name,
+                    'channel_id': watch_channel.id,
+                    'colour': colour,
+                    'station': station,
+                    'started_at': int(interaction.created_at.timestamp()),
+                    'has_voters_embed': False,
+                    'related_messages': [msg.id]
+                }
+
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                # Still let the watch message stay posted, just warn the user
 
             success_embed = discord.Embed(
                 description=f'<:Accepted:1426930333789585509> Watch started in {watch_channel.mention}!',
@@ -1214,17 +1221,6 @@ class WatchCog(commands.Cog):
                 self.handle_vote_timeout(msg.id, view, vote_data, watch_channel, guild)
             )
             self.vote_timeout_tasks[str(msg.id)] = timeout_task
-
-            active_watches[str(msg.id)] = {
-                'user_id': interaction.user.id,
-                'user_name': interaction.user.display_name,
-                'channel_id': watch_channel.id,
-                'colour': colour,
-                'station': station,
-                'started_at': int(interaction.created_at.timestamp()),
-                'has_voters_embed': False,
-                'related_messages': [msg.id]
-            }
 
         except Exception as e:
             print(f'Error sending scheduled vote: {e}')
