@@ -4,7 +4,7 @@ import os
 import asyncpg
 from typing import Optional, Dict, List, Any
 import json
-
+from datetime import datetime, timezone
 
 class Database:
     def __init__(self):
@@ -178,38 +178,130 @@ class Database:
             rows = await conn.fetch(query, *params)
             return [dict(row) for row in rows]
 
-    # Replace the existing methods in your Database class with these updated versions
+    # COMPLETE FIX for database.py
+
+    from datetime import datetime, timezone
 
     async def add_active_watch(self, message_id: int, guild_id: int, channel_id: int,
                                user_id: int, user_name: str, colour: str, station: str,
-                               started_at: int, has_voters_embed: bool = False,
+                               started_at, has_voters_embed: bool = False,
                                original_colour: str = None, original_station: str = None,
                                switch_history: str = None, related_messages: list = None):
         """Add an active watch to the database"""
         async with self.pool.acquire() as conn:
-            # Convert timestamp integer to datetime if needed
-            from datetime import datetime, timezone
-
+            # CRITICAL: Convert to timezone-AWARE datetime for PostgreSQL
             if isinstance(started_at, int):
+                # Unix timestamp - convert to UTC datetime
                 started_at_dt = datetime.fromtimestamp(started_at, tz=timezone.utc)
+            elif isinstance(started_at, datetime):
+                # Already a datetime
+                if started_at.tzinfo is None:
+                    # NAIVE datetime - add UTC timezone explicitly
+                    started_at_dt = started_at.replace(tzinfo=timezone.utc)
+                    print(f"⚠️ Warning: Converted naive datetime to UTC: {started_at_dt}")
+                else:
+                    # Already timezone-aware - use as-is
+                    started_at_dt = started_at
             else:
-                started_at_dt = started_at
+                # Invalid type - use current time
+                print(f"❌ Error: Invalid started_at type {type(started_at)}, using current time")
+                started_at_dt = datetime.now(timezone.utc)
 
-            await conn.execute(
-                '''INSERT INTO active_watches
-                   (message_id, guild_id, channel_id, user_id, user_name, colour, station,
-                    started_at, has_voters_embed, original_colour, original_station,
-                    switch_history, related_messages)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT (message_id) DO
-                UPDATE SET
-                    colour = EXCLUDED.colour,
-                    station = EXCLUDED.station,
-                    switch_history = EXCLUDED.switch_history,
-                    related_messages = EXCLUDED.related_messages''',
-                message_id, guild_id, channel_id, user_id, user_name, colour, station,
-                started_at_dt, has_voters_embed, original_colour, original_station,
-                switch_history, related_messages or [message_id]
-            )
+            try:
+                print(f"💾 Saving to database:")
+                print(f"   - started_at_dt: {started_at_dt}")
+                print(f"   - tzinfo: {started_at_dt.tzinfo}")
+                print(f"   - ISO format: {started_at_dt.isoformat()}")
+
+                await conn.execute(
+                    '''INSERT INTO active_watches
+                       (message_id, guild_id, channel_id, user_id, user_name, colour, station,
+                        started_at, has_voters_embed, original_colour, original_station,
+                        switch_history, related_messages)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT (message_id) DO
+                    UPDATE SET
+                        colour = EXCLUDED.colour,
+                        station = EXCLUDED.station,
+                        switch_history = EXCLUDED.switch_history,
+                        related_messages = EXCLUDED.related_messages''',
+                    message_id, guild_id, channel_id, user_id, user_name, colour, station,
+                    started_at_dt, has_voters_embed, original_colour, original_station,
+                    switch_history, related_messages or [message_id]
+                )
+                print(f"✅ Successfully saved active watch {message_id} to database")
+            except Exception as e:
+                print(f"❌ Error saving active watch {message_id}: {e}")
+                import traceback
+                traceback.print_exc()
+                raise
+
+    # ===========================================
+    # ALSO UPDATE add_completed_watch method
+    # ===========================================
+
+    async def add_completed_watch(self, message_id: int, guild_id: int, channel_id: int,
+                                  user_id: int, user_name: str, colour: str, station: str,
+                                  started_at, ended_at, ended_by: int = None,
+                                  attendees: int = None, status: str = 'completed',
+                                  reason: str = None, votes_received: int = None,
+                                  votes_required: int = None, has_voters_embed: bool = False,
+                                  original_colour: str = None, original_station: str = None,
+                                  switch_history: str = None):
+        """Add a completed watch with switch tracking support"""
+        async with self.pool.acquire() as conn:
+            try:
+                # Set defaults
+                if switch_history is None:
+                    switch_history = '[]'
+
+                # Convert started_at to timezone-aware datetime
+                if isinstance(started_at, int):
+                    started_at_dt = datetime.fromtimestamp(started_at, tz=timezone.utc)
+                elif isinstance(started_at, datetime):
+                    if started_at.tzinfo is None:
+                        started_at_dt = started_at.replace(tzinfo=timezone.utc)
+                    else:
+                        started_at_dt = started_at
+                else:
+                    started_at_dt = datetime.now(timezone.utc)
+
+                # Convert ended_at to timezone-aware datetime
+                if isinstance(ended_at, int):
+                    ended_at_dt = datetime.fromtimestamp(ended_at, tz=timezone.utc)
+                elif isinstance(ended_at, datetime):
+                    if ended_at.tzinfo is None:
+                        ended_at_dt = ended_at.replace(tzinfo=timezone.utc)
+                    else:
+                        ended_at_dt = ended_at
+                else:
+                    ended_at_dt = datetime.now(timezone.utc)
+
+                await conn.execute(
+                    '''INSERT INTO completed_watches
+                       (message_id, guild_id, channel_id, user_id, user_name, colour, station,
+                        started_at, ended_at, ended_by, attendees, status, reason,
+                        votes_received, votes_required, has_voters_embed,
+                        original_colour, original_station, switch_history)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+                               $10, $11, $12, $13, $14, $15, $16, $17, $18, $19::jsonb) ON CONFLICT (message_id) DO
+                    UPDATE SET
+                        guild_id = $2, channel_id = $3, user_id = $4, user_name = $5,
+                        colour = $6, station = $7, started_at = $8,
+                        ended_at = $9, ended_by = $10, attendees = $11,
+                        status = $12, reason = $13, votes_received = $14,
+                        votes_required = $15, has_voters_embed = $16,
+                        original_colour = $17, original_station = $18, switch_history = $19::jsonb''',
+                    message_id, guild_id, channel_id, user_id, user_name, colour, station,
+                    started_at_dt, ended_at_dt, ended_by, attendees, status, reason,
+                    votes_received, votes_required, has_voters_embed,
+                    original_colour, original_station, switch_history
+                )
+                return True
+            except Exception as e:
+                print(f'<:Denied:1426930694633816248> Error adding completed watch: {e}')
+                import traceback
+                traceback.print_exc()
+                return False
 
     async def get_active_watches(self, guild_id: int = None) -> Dict:
         """Get all active watches with switch history (returns dict with message_id as key for compatibility)"""
