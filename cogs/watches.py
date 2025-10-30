@@ -8,6 +8,7 @@ from discord.ext import tasks
 import asyncio
 import datetime
 import json
+from datetime import datetime, timezone
 
 # Import database
 from database import db, load_watches, load_scheduled_votes, load_completed_watches
@@ -1566,48 +1567,62 @@ class WatchCog(commands.Cog):
 
             # Update active watch with new message ID and switch data
             await db.remove_active_watch(int(watch))
-            await db.add_active_watch(
-                message_id=msg.id,
-                guild_id=interaction.guild.id,
-                channel_id=channel.id,
-                user_id=watch_data['user_id'],
-                user_name=watch_data['user_name'],
-                colour=final_colour,
-                station=final_station,
-                started_at=watch_data['started_at'],  # ✅ This is already an integer timestamp from active_watches
-                has_voters_embed=watch_data.get('has_voters_embed', False),
-                original_colour=watch_data.get('original_colour', old_colour),
-                original_station=watch_data.get('original_station', old_station),
-                switch_history=json.dumps(switch_history)
-            )
+            try:
+                await db.add_active_watch(
+                    message_id=msg.id,
+                    guild_id=interaction.guild.id,
+                    channel_id=channel.id,
+                    user_id=watch_data['user_id'],
+                    user_name=watch_data['user_name'],
+                    colour=final_colour,
+                    station=final_station,
+                    started_at=watch_data['started_at'],  # ✅ This is already an integer timestamp
+                    has_voters_embed=watch_data.get('has_voters_embed', False),
+                    original_colour=watch_data.get('original_colour', old_colour),
+                    original_station=watch_data.get('original_station', old_station),
+                    switch_history=json.dumps(switch_history)
+                )
 
-            # Update in-memory cache
-            del active_watches[watch]
-            active_watches[str(msg.id)] = {
-                'user_id': watch_data['user_id'],
-                'user_name': watch_data['user_name'],
-                'channel_id': channel.id,
-                'colour': final_colour,
-                'station': final_station,
-                'started_at': watch_data['started_at'],
-                'has_voters_embed': watch_data.get('has_voters_embed', False),
-                'original_colour': watch_data.get('original_colour', old_colour),
-                'original_station': watch_data.get('original_station', old_station),
-                'switch_history': switch_history
-            }
+                # Update in-memory cache ONLY if database save succeeded
+                active_watches[str(msg.id)] = {
+                    'user_id': interaction.user.id,
+                    'user_name': interaction.user.display_name,
+                    'channel_id': watch_channel.id,
+                    'colour': colour,
+                    'station': station,
+                    'started_at': int(interaction.created_at.timestamp()),
+                    'has_voters_embed': False,
+                    'related_messages': [msg.id]
+                }
+
+                print(f"✅ Successfully saved watch {msg.id} to database and cache")
+
+            except Exception as e:
+                # Database save failed - this is a critical error
+                import traceback
+                traceback.print_exc()
+                print(f"❌ CRITICAL: Failed to save watch {msg.id} to database: {e}")
+
+                # Delete the watch message since we couldn't save it
+                try:
+                    await msg.delete()
+                except:
+                    pass
+
+                error_embed = discord.Embed(
+                    description=f'<:Denied:1426930694633816248> Failed to save watch to database. Please try again or contact an administrator.',
+                    colour=discord.Colour(0xf24d4d),
+                    ephemeral=True
+                )
+                await interaction.followup.send(embed=error_embed, ephemeral=True)
+                return  # Exit early - don't send success message
 
             success_embed = discord.Embed(
-                description=f'<:Accepted:1426930333789585509> Watch switched successfully!\n' + '\n'.join(switch_info),
-                colour=discord.Colour(0x2ecc71)
+                description=f'<:Accepted:1426930333789585509> Watch started in {watch_channel.mention}!',
+                colour=discord.Colour(0x2ecc71),
+                ephemeral=True
             )
             await interaction.followup.send(embed=success_embed, ephemeral=True)
-
-        except Exception as e:
-            print(f'Error switching watch: {e}')
-            error_embed = discord.Embed(description=f'<:Denied:1426930694633816248> Error: {e}',
-                                        colour=discord.Colour(0xf24d4d))
-            await interaction.followup.send(embed=error_embed, ephemeral=True)
-            raise
 
     @watch_switch.autocomplete('watch')
     async def switch_watch_autocomplete(self, interaction: discord.Interaction, current: str) -> list[

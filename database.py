@@ -189,7 +189,7 @@ class Database:
                                switch_history: str = None, related_messages: list = None):
         """Add an active watch to the database"""
         async with self.pool.acquire() as conn:
-            # CRITICAL: Convert to timezone-AWARE datetime for PostgreSQL
+            # Convert to timezone-AWARE datetime for PostgreSQL timestamptz
             if isinstance(started_at, int):
                 # Unix timestamp - convert to UTC datetime
                 started_at_dt = datetime.fromtimestamp(started_at, tz=timezone.utc)
@@ -198,7 +198,6 @@ class Database:
                 if started_at.tzinfo is None:
                     # NAIVE datetime - add UTC timezone explicitly
                     started_at_dt = started_at.replace(tzinfo=timezone.utc)
-                    print(f"⚠️ Warning: Converted naive datetime to UTC: {started_at_dt}")
                 else:
                     # Already timezone-aware - use as-is
                     started_at_dt = started_at
@@ -208,10 +207,8 @@ class Database:
                 started_at_dt = datetime.now(timezone.utc)
 
             try:
-                print(f"💾 Saving to database:")
-                print(f"   - started_at_dt: {started_at_dt}")
-                print(f"   - tzinfo: {started_at_dt.tzinfo}")
-                print(f"   - ISO format: {started_at_dt.isoformat()}")
+                print(f"💾 Saving watch {message_id} to database")
+                print(f"   - started_at: {started_at_dt.isoformat()}")
 
                 await conn.execute(
                     '''INSERT INTO active_watches
@@ -228,16 +225,13 @@ class Database:
                     started_at_dt, has_voters_embed, original_colour, original_station,
                     switch_history, related_messages or [message_id]
                 )
-                print(f"✅ Successfully saved active watch {message_id} to database")
+                print(f"✅ Successfully saved active watch {message_id}")
+                return True
             except Exception as e:
                 print(f"❌ Error saving active watch {message_id}: {e}")
                 import traceback
                 traceback.print_exc()
                 raise
-
-    # ===========================================
-    # ALSO UPDATE add_completed_watch method
-    # ===========================================
 
     async def add_completed_watch(self, message_id: int, guild_id: int, channel_id: int,
                                   user_id: int, user_name: str, colour: str, station: str,
@@ -298,7 +292,7 @@ class Database:
                 )
                 return True
             except Exception as e:
-                print(f'<:Denied:1426930694633816248> Error adding completed watch: {e}')
+                print(f'❌ Error adding completed watch: {e}')
                 import traceback
                 traceback.print_exc()
                 return False

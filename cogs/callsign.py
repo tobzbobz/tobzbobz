@@ -386,7 +386,7 @@ class CallsignCog(commands.Cog):
                 print(f'❌ Error in auto-sync for guild {guild.name}: {e}')
                 import traceback
                 traceback.print_exc()
-    
+
     @auto_sync_loop.before_loop
     async def before_auto_sync(self):
         """Wait for bot AND database to be ready before starting auto-sync"""
