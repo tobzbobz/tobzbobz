@@ -138,7 +138,7 @@ class VoteButton(discord.ui.View):
                     user_name=interaction.user.display_name,
                     colour=self.colour,
                     station=self.station,
-                    started_at=int(interaction.created_at.timestamp()),
+                    started_at=interaction.created_at,  # ✅ Pass datetime directly
                     has_voters_embed=True
                 )
 
@@ -465,6 +465,7 @@ class WatchCog(commands.Cog):
 
             # Save to database
             # Save to database
+            # Save to database
             try:
                 await db.add_active_watch(
                     message_id=msg.id,
@@ -474,10 +475,11 @@ class WatchCog(commands.Cog):
                     user_name=interaction.user.display_name,
                     colour=colour,
                     station=station,
-                    started_at=int(interaction.created_at.timestamp()),
+                    started_at=interaction.created_at,  # ✅ Pass the datetime object directly
                     has_voters_embed=False,
                     related_messages=[msg.id]
                 )
+
 
                 # Update in-memory cache
                 active_watches[str(msg.id)] = {
@@ -1451,9 +1453,6 @@ class WatchCog(commands.Cog):
             if new_station and new_station != old_station:
                 switch_info.append(f'**Station changed:** {old_station} → {final_station}')
 
-            if switch_info:
-                embed.add_field(name='⚠️ Watch Updated', value='\n'.join(switch_info), inline=False)
-
             embed.add_field(name='‎', value='**Select the below reaction role to be notified of any future watches!**',
                             inline=False)
             embed.set_image(
@@ -1466,7 +1465,7 @@ class WatchCog(commands.Cog):
 
             # Only ping specific roles for switch
             msg = await channel.send(
-                content=f'-# ||<@&1285474077556998196> <@&1365536209681514636>||',
+                content=f'-# ||<@&1285474077556998196><@&1365536209681514636><@&1390867686170300456><@{watch_data["user_id"]}><@{interaction.user.id}>||',
                 embed=embed,
                 view=view
             )
@@ -1507,7 +1506,7 @@ class WatchCog(commands.Cog):
                 user_name=watch_data['user_name'],
                 colour=final_colour,
                 station=final_station,
-                started_at=watch_data['started_at'],
+                started_at=watch_data['started_at'],  # ✅ This is already an integer timestamp from active_watches
                 has_voters_embed=watch_data.get('has_voters_embed', False),
                 original_colour=watch_data.get('original_colour', old_colour),
                 original_station=watch_data.get('original_station', old_station),
