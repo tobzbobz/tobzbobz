@@ -253,6 +253,11 @@ class CallsignCog(commands.Cog):
     @tasks.loop(minutes=60)
     async def auto_sync_loop(self):
         """Background task for automatic syncing"""
+        # Safety check: ensure database is connected
+        if db.pool is None:
+            print("⚠️ Auto-sync skipped: database not connected")
+            return
+
         for guild in self.bot.guilds:
             try:
                 async with db.pool.acquire() as conn:
@@ -261,14 +266,14 @@ class CallsignCog(commands.Cog):
                 if callsigns:
                     callsign_data = []
                     for record in callsigns:
-                        member = guild.get_member(record['discord_user_id'])  # Use 'guild' not 'interaction.guild'
+                        member = guild.get_member(record['discord_user_id'])
                         is_command_rank = False
                         if member:
                             rank_type, rank_data = sheets_manager.determine_rank_type(member.roles)
                             is_command_rank = (rank_type == 'command')
 
                         callsign_data.append({
-                            'fenz_prefix': record['fenz_prefix'] or '',  # Ensure not None
+                            'fenz_prefix': record['fenz_prefix'] or '',
                             'hhstj_prefix': record['hhstj_prefix'] or '',
                             'callsign': record['callsign'],
                             'discord_user_id': record['discord_user_id'],
@@ -287,7 +292,29 @@ class CallsignCog(commands.Cog):
 
     @auto_sync_loop.before_loop
     async def before_auto_sync(self):
+        """Wait for bot AND database to be ready before starting auto-sync"""
         await self.bot.wait_until_ready()
+
+        # Wait for database connection to be established
+        import asyncio
+        while db.pool is None:
+            print("⏳ Auto-sync waiting for database connection...")
+            await asyncio.sleep(1)
+
+        print("✅ Auto-sync ready - database connected")
+
+    @auto_sync_loop.before_loop
+    async def before_auto_sync(self):
+        """Wait for bot AND database to be ready before starting auto-sync"""
+        await self.bot.wait_until_ready()
+
+        # Wait for database connection to be established
+        import asyncio
+        while db.pool is None:
+            print("⏳ Auto-sync waiting for database connection...")
+            await asyncio.sleep(1)
+
+        print("✅ Auto-sync ready - database connected")
 
     async def search_callsign_database(self, query: str, search_type: str) -> list:
         async with db.pool.acquire() as conn:
@@ -348,6 +375,14 @@ class CallsignCog(commands.Cog):
     async def sync_callsigns(self, interaction: discord.Interaction):
         """Bidirectional sync: database ↔ Google Sheets and update Discord nicknames"""
         await interaction.response.defer(thinking=True)
+
+        # Safety check: ensure database is connected
+        if db.pool is None:
+            await interaction.followup.send(
+                "<:Denied:1426930694633816248> Database connection not available. Please try again in a moment.",
+                ephemeral=True
+            )
+            return
 
         try:
             # Get all callsigns from database
@@ -550,13 +585,17 @@ class CallsignCog(commands.Cog):
     @callsign_group.command(name="assign", description="Assign a callsign to a user")
     @app_commands.checks.has_role(SYNC_ROLE_ID)
     @app_commands.checks.has_permissions(administrator=True)
-    async def assign_callsign(
-            self,
-            interaction: discord.Interaction,
-            user: discord.Member,
-            callsign: str,
-            use_prefix: bool = True  # New parameter for high command
-    ):
+    async def assign_callsign(self, interaction: discord.Interaction, user: discord.Member, callsign: str,
+                              use_prefix: bool = True):
+        await interaction.response.defer(thinking=True)
+
+        if db.pool is None:
+            await interaction.followup.send(
+                "<:Denied:1426930694633816248> Database not connected. Please try again.",
+                ephemeral=True
+            )
+            return
+
         """Assign a callsign to a Discord user"""
         await interaction.response.defer(thinking=True)
 
@@ -722,12 +761,17 @@ class CallsignCog(commands.Cog):
 
     @callsign_group.command(name="lookup", description="Look up a callsign")
     @app_commands.checks.has_role(1309021002675654700)
-    async def lookup_callsign(
-            self,
-            interaction: discord.Interaction,
-            callsign: str = None,
-            user: discord.Member = None
-    ):
+    async def lookup_callsign(self, interaction: discord.Interaction, callsign: str = None,
+                              user: discord.Member = None):
+        await interaction.response.defer(thinking=True)
+
+        if db.pool is None:
+            await interaction.followup.send(
+                "<:Denied:1426930694633816248> Database not connected. Please try again.",
+                ephemeral=True
+            )
+            return
+
         """Look up information about a callsign or user"""
         await interaction.response.defer(thinking=True)
 
@@ -798,13 +842,17 @@ class CallsignCog(commands.Cog):
     @callsign_group.command(name="remove", description="Remove a callsign assignment")
     @app_commands.checks.has_role(SYNC_ROLE_ID)
     @app_commands.checks.has_permissions(administrator=True)
-    async def remove_callsign(
-            self,
-            interaction: discord.Interaction,
-            callsign: str = None,
-            user: discord.Member = None,
-            user_id: str = None
-    ):
+    async def remove_callsign(self, interaction: discord.Interaction, callsign: str = None, user: discord.Member = None,
+                              user_id: str = None):
+        await interaction.response.defer(thinking=True)
+
+        if db.pool is None:
+            await interaction.followup.send(
+                "<:Denied:1426930694633816248> Database not connected. Please try again.",
+                ephemeral=True
+            )
+            return
+
         """Remove a callsign from the database"""
         await interaction.response.defer(thinking=True)
 

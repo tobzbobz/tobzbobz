@@ -334,15 +334,57 @@ class WatchCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.vote_timeout_tasks = {}
-        # Load watches from database on init
-        asyncio.create_task(self.load_initial_data())
+        # Don't load immediately - wait for database
+        self.bot.loop.create_task(self.initialize_cog())
+
+    async def initialize_cog(self):
+        """Initialize the cog after database is ready"""
+        # Wait for bot to be ready
+        await self.bot.wait_until_ready()
+
+        # Wait for database connection
+        max_wait = 30  # Maximum 30 seconds
+        waited = 0
+        while db.pool is None and waited < max_wait:
+            print("⏳ WatchCog waiting for database connection...")
+            await asyncio.sleep(1)
+            waited += 1
+
+        if db.pool is None:
+            print("❌ WatchCog initialization failed: database connection timeout")
+            return
+
+        # Now load initial data
+        await self.load_initial_data()
+
+        # Start the scheduled votes checker
         self.check_scheduled_votes.start()
+
+        print("✅ WatchCog initialized successfully")
 
     async def load_initial_data(self):
         """Load active watches from database on startup"""
         global active_watches
-        active_watches = await load_watches()
-        print(f'<:Accepted:1426930333789585509> Loaded {len(active_watches)} active watches from database')
+        try:
+            active_watches = await load_watches()
+            print(f'✅ Loaded {len(active_watches)} active watches from database')
+        except Exception as e:
+            print(f'❌ Error loading watches: {e}')
+            active_watches = {}
+
+    # Also update cog_unload to handle the case where check_scheduled_votes might not be started
+    def cog_unload(self):
+        """Clean up when cog is unloaded"""
+        if self.check_scheduled_votes.is_running():
+            self.check_scheduled_votes.cancel()
+
+
+    # Add this helper method to check database connection in all commands:
+    def check_database_ready():
+        """Decorator/helper to check if database is ready"""
+        if db.pool is None:
+            return False
+        return True
 
     watch_group = app_commands.Group(name='watch', description='Watch management commands')
 
@@ -804,6 +846,16 @@ class WatchCog(commands.Cog):
     )
     async def watch_logs(self, interaction: discord.Interaction, limit: int = 50, per_page: int = 5):
         try:
+            # Database check at the very start
+            if db.pool is None:
+                error_embed = discord.Embed(
+                    description='<:Denied:1426930694633816248> Database not available. Please try again in a moment.',
+                    colour=discord.Colour(0xf24d4d)
+                )
+                await interaction.response.send_message(embed=error_embed, ephemeral=True)
+                return
+
+            # Permission check
             allowed_role_ids = [1389550689113473024, 1333197141920710718]
             user_roles = [role.id for role in interaction.user.roles]
 
@@ -940,7 +992,12 @@ class WatchCog(commands.Cog):
             print(f'Error fetching watch logs: {e}')
             error_embed = discord.Embed(description=f'<:Denied:1426930694633816248> Error: {e}',
                                         colour=discord.Colour(0xf24d4d))
-            await interaction.followup.send(embed=error_embed, ephemeral=True)
+
+            # Handle if response not sent yet
+            if not interaction.response.is_done():
+                await interaction.response.send_message(embed=error_embed, ephemeral=True)
+            else:
+                await interaction.followup.send(embed=error_embed, ephemeral=True)
             raise
 
     @watch_group.command(name='delete-log', description='Delete a specific watch log.')
