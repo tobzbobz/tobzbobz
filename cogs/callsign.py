@@ -1004,6 +1004,152 @@ class CallsignCog(commands.Cog):
         except Exception as e:
             await interaction.followup.send(f"<:Denied:1426930694633816248> Error removing callsign: {str(e)}")
 
+    @watch_group.command(name='nickname-sync', description="Force update all nicknames from database (Owner only)")
+    @app_commands.describe(dry_run="Preview changes without applying them")
+    async def force_sync_nicknames(self, interaction: discord.Interaction, dry_run: bool = False):
+        """Force sync all nicknames from database - Owner only"""
+
+        # Lock to your user ID
+        OWNER_ID = 678475709257089057
+
+        if interaction.user.id != OWNER_ID:
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> This command is restricted to the bot owner only!",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(thinking=True)
+
+        try:
+            # Get all callsigns from database
+            async with db.pool.acquire() as conn:
+                callsigns = await conn.fetch('SELECT * FROM callsigns ORDER BY callsign')
+
+            if not callsigns:
+                await interaction.followup.send("<:Denied:1426930694633816248> No callsigns found in database.")
+                return
+
+            # Track results
+            updated = []
+            skipped = []
+            errors = []
+            not_found = []
+
+            # Process each callsign
+            for record in callsigns:
+                try:
+                    member = interaction.guild.get_member(record['discord_user_id'])
+
+                    if not member:
+                        not_found.append(f"{record['discord_username']} (ID: {record['discord_user_id']})")
+                        continue
+
+                    # Check if member has high command roles
+                    is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
+                    is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
+
+                    # Calculate what the nickname SHOULD be
+                    expected_nickname = format_nickname(
+                        record['fenz_prefix'],
+                        record['callsign'],
+                        record['hhstj_prefix'],
+                        record['roblox_username'],
+                        is_fenz_high_command,
+                        is_hhstj_high_command
+                    )
+
+                    current_nick = member.nick or member.name
+
+                    # Check if update is needed
+                    if member.nick == expected_nickname:
+                        skipped.append(f"{member.mention} - Already correct: `{expected_nickname}`")
+                        continue
+
+                    if dry_run:
+                        # Just preview the change
+                        updated.append(
+                            f"{member.mention}\n"
+                            f"  Current: `{current_nick}`\n"
+                            f"  New: `{expected_nickname}`"
+                        )
+                    else:
+                        # Apply the change
+                        await member.edit(nick=expected_nickname)
+                        updated.append(
+                            f"{member.mention}\n"
+                            f"  Old: `{current_nick}`\n"
+                            f"  New: `{expected_nickname}`"
+                        )
+
+                except discord.Forbidden:
+                    errors.append(f"{record['discord_username']} - Missing permissions")
+                except Exception as e:
+                    errors.append(f"{record['discord_username']} - {str(e)}")
+
+            # Build response
+            embed = discord.Embed(
+                title="🔄 Nickname Sync Results" + (" (DRY RUN - Preview Only)" if dry_run else ""),
+                color=discord.Color.blue() if dry_run else discord.Color.green()
+            )
+
+            if updated:
+                # Split into multiple fields if too many
+                chunk_size = 10
+                for i in range(0, len(updated), chunk_size):
+                    chunk = updated[i:i + chunk_size]
+                    field_name = f"✅ Updated ({i + 1}-{min(i + chunk_size, len(updated))})" if len(
+                        updated) > chunk_size else f"✅ Updated ({len(updated)})"
+                    embed.add_field(
+                        name=field_name,
+                        value="\n\n".join(chunk[:10]),  # Limit to 10 to avoid field length issues
+                        inline=False
+                    )
+
+            if skipped:
+                embed.add_field(
+                    name=f"⏭️ Skipped ({len(skipped)})",
+                    value=f"{len(skipped)} members already have correct nicknames",
+                    inline=False
+                )
+
+            if not_found:
+                embed.add_field(
+                    name=f"❓ Not Found ({len(not_found)})",
+                    value="\n".join(not_found[:5]) + (
+                        f"\n... and {len(not_found) - 5} more" if len(not_found) > 5 else ""),
+                    inline=False
+                )
+
+            if errors:
+                embed.add_field(
+                    name=f"⚠️ Errors ({len(errors)})",
+                    value="\n".join(errors[:5]) + (f"\n... and {len(errors) - 5} more" if len(errors) > 5 else ""),
+                    inline=False
+                )
+
+            # Summary
+            summary = f"**Total Callsigns:** {len(callsigns)}\n"
+            summary += f"**Updated:** {len(updated)}\n"
+            summary += f"**Skipped:** {len(skipped)}\n"
+            summary += f"**Not Found:** {len(not_found)}\n"
+            summary += f"**Errors:** {len(errors)}"
+
+            embed.description = summary
+
+            if dry_run:
+                embed.set_footer(text="This was a dry run. Run without dry_run=True to apply changes.")
+
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+        except Exception as e:
+            await interaction.followup.send(
+                f"<:Denied:1426930694633816248> Error during nickname sync: {str(e)}"
+            )
+            import traceback
+            traceback.print_exc()
+
+
 
 class HighCommandPrefixChoice(discord.ui.View):
     def __init__(self, interaction_user_id: int, cog, original_interaction, user, callsign,

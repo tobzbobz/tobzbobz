@@ -80,6 +80,10 @@ class VoteButton(discord.ui.View):
             button.label = f'{self.vote_count}'
 
             if self.vote_count >= self.required_votes:
+                if self.cog and f"auto_cancel_{self.message_id}" in self.cog.vote_timeout_tasks:
+                    self.cog.vote_timeout_tasks[f"auto_cancel_{self.message_id}"].cancel()
+                    del self.cog.vote_timeout_tasks[f"auto_cancel_{self.message_id}"]
+
                 colour_map = {
                     'Yellow': discord.Colour.gold(),
                     'Blue': discord.Colour.blue(),
@@ -87,6 +91,77 @@ class VoteButton(discord.ui.View):
                     'Red': discord.Colour.red()
                 }
                 embed_colour = colour_map.get(self.colour, discord.Colour.orange())
+
+                # Calculate watch start time
+                if self.time_minutes:
+                    watch_start_time = discord.utils.utcnow() + datetime.timedelta(minutes=self.time_minutes)
+                    watch_start_timestamp = int(watch_start_time.timestamp())
+                else:
+                    watch_start_time = discord.utils.utcnow()
+                    watch_start_timestamp = int(watch_start_time.timestamp())
+
+                # Create "Vote Passed" embed
+                passed_embed = discord.Embed(
+                    title=f'🎉 {self.colour} Watch Vote - PASSED! 🎉',
+                    colour=embed_colour
+                )
+                passed_embed.add_field(name='Station', value=f'`{self.station}`', inline=True)
+                passed_embed.add_field(name='Watch Starts', value=f'<t:{watch_start_timestamp}:R>', inline=True)
+                passed_embed.add_field(name='Watch Leader', value=interaction.user.mention, inline=True)
+                passed_embed.add_field(
+                    name='​',
+                    value=f'The vote has passed! Watch will begin <t:{watch_start_timestamp}:R>\nGet ready to join Fenz RTO! 🙌',
+                    inline=False
+                )
+                passed_embed.add_field(
+                    name='​',
+                    value='**Select the below reaction role to be notified of any future watches!**',
+                    inline=False
+                )
+                passed_embed.set_thumbnail(url='https://cdn.discordapp.com/emojis/1389200656090533970.webp?size=128')
+                passed_embed.set_author(name=f'Vote passed - Started by {interaction.user.display_name}',
+                                        icon_url=interaction.user.display_avatar.url)
+
+                voters_embed = discord.Embed(title='Voters:', colour=embed_colour)
+                voter_mentions = []
+                for user_id in self.voted_users:
+                    user = interaction.guild.get_member(user_id)
+                    if user:
+                        voter_mentions.append(user.mention)
+                voters_embed.description = '\n'.join(voter_mentions)
+
+                watch_view = WatchRoleButton(self.message_id)
+                guild_config = get_guild_config(interaction.guild.id)
+                watch_role_id = guild_config.get('watch_role_id')
+
+                await interaction.response.edit_message(
+                    content=f'-# ||<@&{watch_role_id}> {interaction.user.mention} <@&1285474077556998196> <@&1365536209681514636>||' if watch_role_id else '',
+                    embeds=[passed_embed, voters_embed],
+                    view=watch_view
+                )
+
+                # Cancel timeout task since vote passed
+                if self.cog and str(self.message_id) in self.cog.vote_timeout_tasks:
+                    self.cog.vote_timeout_tasks[str(self.message_id)].cancel()
+                    del self.cog.vote_timeout_tasks[str(self.message_id)]
+
+                # Schedule the actual watch start
+                if self.cog:
+                    delay_seconds = self.time_minutes * 60 if self.time_minutes else 0
+                    start_task = asyncio.create_task(
+                        self.cog.start_watch_after_vote(
+                            channel=self.channel,
+                            message_id=self.message_id,
+                            user_id=interaction.user.id,
+                            user_name=interaction.user.display_name,
+                            colour=self.colour,
+                            station=self.station,
+                            watch_role_id=watch_role_id,
+                            voters=list(self.voted_users),
+                            delay_seconds=delay_seconds
+                        )
+                    )
+                    self.cog.vote_timeout_tasks[f"start_{self.message_id}"] = start_task
 
                 start_embed = discord.Embed(title=f'{self.colour} Watch Announcement', colour=embed_colour)
                 start_embed.add_field(name='Station', value=f'`{self.station}`', inline=True)
@@ -101,7 +176,7 @@ class VoteButton(discord.ui.View):
 
                 start_embed.add_field(name='Watch Leader', value=interaction.user.mention, inline=True)
                 start_embed.add_field(name='‎',
-                                      value='No need to vote just hop in!!\nIf you are joining, please join Fenz RTO ðŸ™Œ',
+                                      value='No need to vote just hop in!!\nIf you are joining, please join Fenz RTO 🙌',
                                       inline=False)
                 start_embed.add_field(name='‎',
                                       value='**Select the below reaction role to be notified of any future watches!**',
@@ -109,10 +184,10 @@ class VoteButton(discord.ui.View):
                 start_embed.set_image(
                     url='https://cdn.discordapp.com/attachments/1425867714160758896/1426932258694238258/image.png?ex=68f4eeb9&is=68f39d39&hm=b69f7f8bad7dcd7c7bde4dab731ca7e23e27d32d864cad9fc7224dcbb0648840')
                 start_embed.set_thumbnail(url='https://cdn.discordapp.com/emojis/1389200656090533970.webp?size=128')
-                start_embed.set_author(name=f'Vote passed - Started by vote',
+                start_embed.set_author(name=f'Requested by {interaction.user.display_name}',
                                        icon_url=interaction.user.display_avatar.url)
 
-                voters_embed = discord.Embed(title='Voters', colour=embed_colour)
+                voters_embed = discord.Embed(title='Voters:', colour=embed_colour)
                 voter_mentions = []
                 for user_id in self.voted_users:
                     user = interaction.guild.get_member(user_id)
@@ -394,14 +469,6 @@ class WatchCog(commands.Cog):
         if self.check_scheduled_votes.is_running():
             self.check_scheduled_votes.cancel()
 
-
-    # Add this helper method to check database connection in all commands:
-    def check_database_ready():
-        """Decorator/helper to check if database is ready"""
-        if db.pool is None:
-            return False
-        return True
-
     watch_group = app_commands.Group(name='watch', description='Watch management commands')
 
     @watch_group.command(name='start', description='Declares the start of a FENZ watch without a vote.')
@@ -461,6 +528,18 @@ class WatchCog(commands.Cog):
                 )
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
                 return
+
+            try:
+                deleted_count = 0
+                async for message in watch_channel.history(limit=100):
+                    try:
+                        await message.delete()
+                        deleted_count += 1
+                    except (discord.Forbidden, discord.NotFound):
+                        pass
+                print(f'Cleaned {deleted_count} messages before watch start')
+            except Exception as e:
+                print(f'Error cleaning channel: {e}')
 
             # Delete only previous watches for the SAME station
             try:
@@ -651,7 +730,7 @@ class WatchCog(commands.Cog):
             )
 
             if time:
-                scheduled_dt = datetime.datetime.fromtimestamp(scheduled_time, tz=datetime.timezone.utc)
+                scheduled_dt = datetime.fromtimestamp(scheduled_time, tz=timezone.utc)
                 success_embed = discord.Embed(
                     description=f'<:Accepted:1426930333789585509> Vote scheduled for {discord.utils.format_dt(scheduled_dt, style="F")} ({discord.utils.format_dt(scheduled_dt, style="R")})',
                     colour=discord.Colour(0x2ecc71)
@@ -1240,6 +1319,19 @@ class WatchCog(commands.Cog):
                 print(f"Channel {vote_data['channel_id']} not found")
                 return
 
+            # CLEAN UP CHANNEL BEFORE SENDING VOTE
+            try:
+                deleted_count = 0
+                async for message in watch_channel.history(limit=100):
+                    try:
+                        await message.delete()
+                        deleted_count += 1
+                    except (discord.Forbidden, discord.NotFound):
+                        pass
+                print(f'Cleaned {deleted_count} messages before vote')
+            except Exception as e:
+                print(f'Error cleaning channel: {e}')
+
             colour_map = {
                 'Yellow': discord.Colour.gold(),
                 'Blue': discord.Colour.blue(),
@@ -1281,20 +1373,88 @@ class WatchCog(commands.Cog):
             )
 
             msg = await watch_channel.send(
-                content=f"||<@&{vote_data['watch_role_id']}> <@{vote_data['user_id']}> <@&1285474077556998196> <@&1365536209681514636>||" if vote_data.get(
+                content=f"||<@&{vote_data['watch_role_id']}><@{vote_data['user_id']}><@&1285474077556998196><@&1365536209681514636>||" if vote_data.get(
                     'watch_role_id') else '',
                 embed=embed,
                 view=view
             )
 
             view.message_id = msg.id
-            timeout_task = asyncio.create_task(
-                self.handle_vote_timeout(msg.id, view, vote_data, watch_channel, guild)
-            )
-            self.vote_timeout_tasks[str(msg.id)] = timeout_task
+
+            # Schedule auto-cancel ONLY if time_minutes is set (not immediate)
+            if vote_data.get('time_minutes'):
+                cancel_task = asyncio.create_task(
+                    self.auto_cancel_vote(msg.id, view, vote_data, watch_channel, guild)
+                )
+                self.vote_timeout_tasks[f"auto_cancel_{msg.id}"] = cancel_task
 
         except Exception as e:
             print(f'Error sending scheduled vote: {e}')
+
+    async def auto_cancel_vote(self, message_id: int, view: VoteButton, vote_data: dict, channel, guild):
+        """Auto-cancel vote when scheduled time arrives if insufficient votes"""
+        try:
+            # Wait until the scheduled watch time
+            timeout_duration = vote_data.get('time_minutes', 10) * 60
+            await asyncio.sleep(timeout_duration)
+
+            # Check if vote passed or was cancelled
+            if view.cancelled or view.vote_count >= view.required_votes:
+                return
+
+            # Vote did not pass - cancel it
+            message = await channel.fetch_message(message_id)
+
+            cancelled_embed = discord.Embed(
+                title=f"<:Denied:1426930694633816248> {vote_data['colour']} Watch Vote - CANCELLED <:Denied:1426930694633816248>",
+                description="Insufficient votes received by scheduled time. Watch has been cancelled.",
+                colour=discord.Colour(0xf24d4d)
+            )
+            cancelled_embed.add_field(name='Station', value=f"`{vote_data['station']}`", inline=True)
+            cancelled_embed.add_field(name='Votes Received', value=f"`{view.vote_count}/{view.required_votes}`",
+                                      inline=True)
+            cancelled_embed.add_field(name='Scheduled Time',
+                                      value=f"<t:{vote_data['scheduled_time'] + (vote_data.get('time_minutes', 0) * 60)}:F>",
+                                      inline=True)
+            cancelled_embed.set_thumbnail(url='https://cdn.discordapp.com/emojis/1389200656090533970.webp?size=128')
+
+            for item in view.children:
+                item.disabled = True
+
+            guild_config = get_guild_config(guild.id)
+            watch_role_id = guild_config.get('watch_role_id')
+
+            await message.edit(
+                content=f"||<@&{watch_role_id}> <@{vote_data['user_id']}> <@&1285474077556998196> <@&1365536209681514636>||" if watch_role_id else '',
+                embed=cancelled_embed,
+                view=view
+            )
+
+            # Log failed vote to database
+            await db.add_completed_watch(
+                message_id=message_id,
+                guild_id=guild.id,
+                channel_id=channel.id,
+                user_id=vote_data['user_id'],
+                user_name='',
+                colour=vote_data['colour'],
+                station=vote_data['station'],
+                started_at=vote_data['created_at'],
+                ended_at=int(discord.utils.utcnow().timestamp()),
+                ended_by=self.bot.user.id,
+                status='failed',
+                reason='insufficient_votes_at_scheduled_time',
+                votes_received=view.vote_count,
+                votes_required=view.required_votes
+            )
+
+            if f"auto_cancel_{message_id}" in self.vote_timeout_tasks:
+                del self.vote_timeout_tasks[f"auto_cancel_{message_id}"]
+
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            print(f'Error in auto-cancel handler: {e}')
 
     async def handle_vote_timeout(self, message_id: int, view: VoteButton, vote_data: dict, channel, guild):
         """Handle vote timeout when insufficient votes"""
@@ -1324,7 +1484,7 @@ class WatchCog(commands.Cog):
             watch_role_id = guild_config.get('watch_role_id')
 
             await message.edit(
-                content=f"||<@&{watch_role_id}> <@{vote_data['user_id']}> <@&1285474077556998196> <@&1365536209681514636>||" if watch_role_id else '',
+                content=f"||<@&{watch_role_id}><@{vote_data['user_id']}><@&1285474077556998196><@&1365536209681514636>||" if watch_role_id else '',
                 embed=failed_embed,
                 view=view
             )
@@ -1358,6 +1518,104 @@ class WatchCog(commands.Cog):
     def cog_unload(self):
         """Clean up when cog is unloaded"""
         self.check_scheduled_votes.cancel()
+
+    async def start_watch_after_vote(self, channel, message_id: int, user_id: int, user_name: str,
+                                     colour: str, station: str, watch_role_id: int, voters: list,
+                                     delay_seconds: int):
+        """Start a watch after the vote delay period"""
+        try:
+            # Wait for the delay period
+            if delay_seconds > 0:
+                await asyncio.sleep(delay_seconds)
+
+            # Delete the vote passed message
+            try:
+                vote_message = await channel.fetch_message(message_id)
+                await vote_message.delete()
+            except discord.NotFound:
+                pass
+            except Exception as e:
+                print(f'Error deleting vote message: {e}')
+
+            # Create the actual watch start embed
+            colour_map = {
+                'Yellow': discord.Colour.gold(),
+                'Blue': discord.Colour.blue(),
+                'Brown': discord.Colour(0x8B4513),
+                'Red': discord.Colour.red()
+            }
+            embed_colour = colour_map.get(colour, discord.Colour.orange())
+
+            start_embed = discord.Embed(title=f'🚨 {colour} Watch Announcement 🚨', colour=embed_colour)
+            start_embed.add_field(name='Station', value=f'`{station}`', inline=True)
+            start_embed.add_field(name='Time', value=discord.utils.format_dt(discord.utils.utcnow(), style='R'),
+                                  inline=True)
+            start_embed.add_field(name='Watch Leader', value=f'<@{user_id}>', inline=True)
+            start_embed.add_field(name='​',
+                                  value='No need to vote just hop in!!\nIf you are joining, please join Fenz RTO 🙌',
+                                  inline=False)
+            start_embed.add_field(name='​',
+                                  value='**Select the below reaction role to be notified of any future watches!**',
+                                  inline=False)
+            start_embed.set_image(
+                url='https://cdn.discordapp.com/attachments/1425867714160758896/1426932258694238258/image.png?ex=68f4eeb9&is=68f39d39&hm=b69f7f8bad7dcd7c7bde4dab731ca7e23e27d32d864cad9fc7224dcbb0648840')
+            start_embed.set_thumbnail(url='https://cdn.discordapp.com/emojis/1389200656090533970.webp?size=128')
+            start_embed.set_author(name=f'Requested by {interaction.user.display_name}', icon_url=interaction.user.display_avatar.url)
+
+            # Add voters embed
+            voters_embed = discord.Embed(title='Voters:', colour=embed_colour)
+            voter_mentions = []
+            for voter_id in voters:
+                voter_mentions.append(f'<@{voter_id}>')
+            voters_embed.description = '\n'.join(voter_mentions)
+
+            view = WatchRoleButton(0)
+
+            # Send new watch message
+            msg = await channel.send(
+                content=f'-# ||<@&{watch_role_id}><@{user_id}><@&1285474077556998196><@&1365536209681514636>||' if watch_role_id else '',
+                embeds=[start_embed, voters_embed],
+                view=view
+            )
+
+            view.message_id = msg.id
+
+            # Save to database as active watch
+            await db.add_active_watch(
+                message_id=msg.id,
+                guild_id=channel.guild.id,
+                channel_id=channel.id,
+                user_id=user_id,
+                user_name=user_name,
+                colour=colour,
+                station=station,
+                started_at=discord.utils.utcnow(),
+                has_voters_embed=True,
+                related_messages=[msg.id]
+            )
+
+            # Update in-memory cache
+            active_watches[str(msg.id)] = {
+                'user_id': user_id,
+                'user_name': user_name,
+                'channel_id': channel.id,
+                'colour': colour,
+                'station': station,
+                'started_at': int(discord.utils.utcnow().timestamp()),
+                'has_voters_embed': True,
+                'related_messages': [msg.id]
+            }
+
+            # Clean up the task from tracking
+            if f"start_{message_id}" in self.vote_timeout_tasks:
+                del self.vote_timeout_tasks[f"start_{message_id}"]
+
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            print(f'Error starting watch after vote: {e}')
+            import traceback
+            traceback.print_exc()
 
     @watch_group.command(name='switch', description='Switch an active watch to a different colour/station.')
     @app_commands.default_permissions(manage_nicknames=True)
@@ -1771,155 +2029,6 @@ class WatchCog(commands.Cog):
             label = f"{data['colour']} Watch - {data['station']} (by {data.get('user_name', 'Unknown')})"
             choices.append(app_commands.Choice(name=label, value=msg_id))
         return [choice for choice in choices if current.lower() in choice.name.lower()][:25]
-
-    # Add this command to your CallsignCog class in callsign.py
-    # Place it after the other callsign commands
-
-    @watch_group.command(name='nickname-sync', description="Force update all nicknames from database (Owner only)")
-    @app_commands.describe(dry_run="Preview changes without applying them")
-    async def force_sync_nicknames(self, interaction: discord.Interaction, dry_run: bool = False):
-        """Force sync all nicknames from database - Owner only"""
-
-        # Lock to your user ID
-        OWNER_ID = 678475709257089057
-
-        if interaction.user.id != OWNER_ID:
-            await interaction.response.send_message(
-                "<:Denied:1426930694633816248> This command is restricted to the bot owner only!",
-                ephemeral=True
-            )
-            return
-
-        await interaction.response.defer(thinking=True)
-
-        try:
-            # Get all callsigns from database
-            async with db.pool.acquire() as conn:
-                callsigns = await conn.fetch('SELECT * FROM callsigns ORDER BY callsign')
-
-            if not callsigns:
-                await interaction.followup.send("<:Denied:1426930694633816248> No callsigns found in database.")
-                return
-
-            # Track results
-            updated = []
-            skipped = []
-            errors = []
-            not_found = []
-
-            # Process each callsign
-            for record in callsigns:
-                try:
-                    member = interaction.guild.get_member(record['discord_user_id'])
-
-                    if not member:
-                        not_found.append(f"{record['discord_username']} (ID: {record['discord_user_id']})")
-                        continue
-
-                    # Check if member has high command roles
-                    is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
-                    is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
-
-                    # Calculate what the nickname SHOULD be
-                    expected_nickname = format_nickname(
-                        record['fenz_prefix'],
-                        record['callsign'],
-                        record['hhstj_prefix'],
-                        record['roblox_username'],
-                        is_fenz_high_command,
-                        is_hhstj_high_command
-                    )
-
-                    current_nick = member.nick or member.name
-
-                    # Check if update is needed
-                    if member.nick == expected_nickname:
-                        skipped.append(f"{member.mention} - Already correct: `{expected_nickname}`")
-                        continue
-
-                    if dry_run:
-                        # Just preview the change
-                        updated.append(
-                            f"{member.mention}\n"
-                            f"  Current: `{current_nick}`\n"
-                            f"  New: `{expected_nickname}`"
-                        )
-                    else:
-                        # Apply the change
-                        await member.edit(nick=expected_nickname)
-                        updated.append(
-                            f"{member.mention}\n"
-                            f"  Old: `{current_nick}`\n"
-                            f"  New: `{expected_nickname}`"
-                        )
-
-                except discord.Forbidden:
-                    errors.append(f"{record['discord_username']} - Missing permissions")
-                except Exception as e:
-                    errors.append(f"{record['discord_username']} - {str(e)}")
-
-            # Build response
-            embed = discord.Embed(
-                title="🔄 Nickname Sync Results" + (" (DRY RUN - Preview Only)" if dry_run else ""),
-                color=discord.Color.blue() if dry_run else discord.Color.green()
-            )
-
-            if updated:
-                # Split into multiple fields if too many
-                chunk_size = 10
-                for i in range(0, len(updated), chunk_size):
-                    chunk = updated[i:i + chunk_size]
-                    field_name = f"✅ Updated ({i + 1}-{min(i + chunk_size, len(updated))})" if len(
-                        updated) > chunk_size else f"✅ Updated ({len(updated)})"
-                    embed.add_field(
-                        name=field_name,
-                        value="\n\n".join(chunk[:10]),  # Limit to 10 to avoid field length issues
-                        inline=False
-                    )
-
-            if skipped:
-                embed.add_field(
-                    name=f"⏭️ Skipped ({len(skipped)})",
-                    value=f"{len(skipped)} members already have correct nicknames",
-                    inline=False
-                )
-
-            if not_found:
-                embed.add_field(
-                    name=f"❓ Not Found ({len(not_found)})",
-                    value="\n".join(not_found[:5]) + (
-                        f"\n... and {len(not_found) - 5} more" if len(not_found) > 5 else ""),
-                    inline=False
-                )
-
-            if errors:
-                embed.add_field(
-                    name=f"⚠️ Errors ({len(errors)})",
-                    value="\n".join(errors[:5]) + (f"\n... and {len(errors) - 5} more" if len(errors) > 5 else ""),
-                    inline=False
-                )
-
-            # Summary
-            summary = f"**Total Callsigns:** {len(callsigns)}\n"
-            summary += f"**Updated:** {len(updated)}\n"
-            summary += f"**Skipped:** {len(skipped)}\n"
-            summary += f"**Not Found:** {len(not_found)}\n"
-            summary += f"**Errors:** {len(errors)}"
-
-            embed.description = summary
-
-            if dry_run:
-                embed.set_footer(text="This was a dry run. Run without dry_run=True to apply changes.")
-
-            await interaction.followup.send(embed=embed, ephemeral=True)
-
-        except Exception as e:
-            await interaction.followup.send(
-                f"<:Denied:1426930694633816248> Error during nickname sync: {str(e)}"
-            )
-            import traceback
-            traceback.print_exc()
-
 
 async def setup(bot):
     await bot.add_cog(WatchCog(bot))

@@ -207,7 +207,7 @@ class Database:
                 started_at_dt = datetime.now(timezone.utc)
 
             try:
-                print(f"💾 Saving watch {message_id} to database")
+                print(f"💾 Saving active watch {message_id} to database")
                 print(f"   - started_at: {started_at_dt.isoformat()}")
 
                 await conn.execute(
@@ -215,7 +215,8 @@ class Database:
                        (message_id, guild_id, channel_id, user_id, user_name, colour, station,
                         started_at, has_voters_embed, original_colour, original_station,
                         switch_history, related_messages)
-                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT (message_id) DO
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb,
+                               $13) ON CONFLICT (message_id) DO
                     UPDATE SET
                         colour = EXCLUDED.colour,
                         station = EXCLUDED.station,
@@ -241,7 +242,11 @@ class Database:
                                   votes_required: int = None, has_voters_embed: bool = False,
                                   original_colour: str = None, original_station: str = None,
                                   switch_history: str = None):
-        """Add a completed watch with switch tracking support"""
+        """Add a completed watch with switch tracking support
+
+        CRITICAL: This handles BOTH datetime objects AND integer timestamps.
+        DO NOT create a second version of this method!
+        """
         async with self.pool.acquire() as conn:
             try:
                 # Set defaults
@@ -257,6 +262,7 @@ class Database:
                     else:
                         started_at_dt = started_at
                 else:
+                    print(f"⚠️ Warning: Invalid started_at type {type(started_at)}, using current time")
                     started_at_dt = datetime.now(timezone.utc)
 
                 # Convert ended_at to timezone-aware datetime
@@ -268,7 +274,13 @@ class Database:
                     else:
                         ended_at_dt = ended_at
                 else:
+                    print(f"⚠️ Warning: Invalid ended_at type {type(ended_at)}, using current time")
                     ended_at_dt = datetime.now(timezone.utc)
+
+                print(f"💾 Saving completed watch {message_id}")
+                print(f"   - status: {status}")
+                print(f"   - started_at: {started_at_dt.isoformat()}")
+                print(f"   - ended_at: {ended_at_dt.isoformat()}")
 
                 await conn.execute(
                     '''INSERT INTO completed_watches
@@ -276,20 +288,33 @@ class Database:
                         started_at, ended_at, ended_by, attendees, status, reason,
                         votes_received, votes_required, has_voters_embed,
                         original_colour, original_station, switch_history)
-                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-                               $10, $11, $12, $13, $14, $15, $16, $17, $18, $19::jsonb) ON CONFLICT (message_id) DO
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18,
+                               $19::jsonb) ON CONFLICT (message_id) DO
                     UPDATE SET
-                        guild_id = $2, channel_id = $3, user_id = $4, user_name = $5,
-                        colour = $6, station = $7, started_at = $8,
-                        ended_at = $9, ended_by = $10, attendees = $11,
-                        status = $12, reason = $13, votes_received = $14,
-                        votes_required = $15, has_voters_embed = $16,
-                        original_colour = $17, original_station = $18, switch_history = $19::jsonb''',
+                        guild_id = EXCLUDED.guild_id,
+                        channel_id = EXCLUDED.channel_id,
+                        user_id = EXCLUDED.user_id,
+                        user_name = EXCLUDED.user_name,
+                        colour = EXCLUDED.colour,
+                        station = EXCLUDED.station,
+                        started_at = EXCLUDED.started_at,
+                        ended_at = EXCLUDED.ended_at,
+                        ended_by = EXCLUDED.ended_by,
+                        attendees = EXCLUDED.attendees,
+                        status = EXCLUDED.status,
+                        reason = EXCLUDED.reason,
+                        votes_received = EXCLUDED.votes_received,
+                        votes_required = EXCLUDED.votes_required,
+                        has_voters_embed = EXCLUDED.has_voters_embed,
+                        original_colour = EXCLUDED.original_colour,
+                        original_station = EXCLUDED.original_station,
+                        switch_history = EXCLUDED.switch_history''',
                     message_id, guild_id, channel_id, user_id, user_name, colour, station,
                     started_at_dt, ended_at_dt, ended_by, attendees, status, reason,
                     votes_received, votes_required, has_voters_embed,
                     original_colour, original_station, switch_history
                 )
+                print(f"✅ Successfully saved completed watch {message_id}")
                 return True
             except Exception as e:
                 print(f'❌ Error adding completed watch: {e}')
@@ -338,25 +363,50 @@ class Database:
     # === SCHEDULED VOTES ===
     async def add_scheduled_vote(self, vote_id: str, guild_id: int, channel_id: int,
                                  watch_role_id: int, user_id: int, colour: str, station: str,
-                                 votes: int, time_minutes: int, scheduled_time: int, created_at: int):
-        """Add a scheduled vote"""
+                                 votes: int, time_minutes: int, scheduled_time, created_at):
+        """Add a scheduled vote (PostgreSQL safe version — no to_timestamp)"""
         async with self.pool.acquire() as conn:
             try:
+                # Convert timestamps to timezone-aware datetimes
+                if isinstance(scheduled_time, int):
+                    scheduled_time_dt = datetime.fromtimestamp(scheduled_time, tz=timezone.utc)
+                elif isinstance(scheduled_time, datetime):
+                    scheduled_time_dt = (
+                        scheduled_time.replace(tzinfo=timezone.utc)
+                        if scheduled_time.tzinfo is None else scheduled_time
+                    )
+                else:
+                    print(f"⚠️ Invalid scheduled_time type {type(scheduled_time)}, using current time")
+                    scheduled_time_dt = datetime.now(timezone.utc)
+
+                if isinstance(created_at, int):
+                    created_at_dt = datetime.fromtimestamp(created_at, tz=timezone.utc)
+                elif isinstance(created_at, datetime):
+                    created_at_dt = (
+                        created_at.replace(tzinfo=timezone.utc)
+                        if created_at.tzinfo is None else created_at
+                    )
+                else:
+                    print(f"⚠️ Invalid created_at type {type(created_at)}, using current time")
+                    created_at_dt = datetime.now(timezone.utc)
+
                 await conn.execute(
                     '''INSERT INTO scheduled_votes
                        (vote_id, guild_id, channel_id, watch_role_id, user_id, colour, station,
                         votes, time_minutes, scheduled_time, created_at)
-                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, to_timestamp($10), to_timestamp($11))
-                       ON CONFLICT (vote_id) DO UPDATE SET
-                       guild_id = $2, channel_id = $3, watch_role_id = $4, user_id = $5,
-                       colour = $6, station = $7, votes = $8, time_minutes = $9,
-                       scheduled_time = to_timestamp($10), created_at = to_timestamp($11)''',
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT (vote_id) DO
+                    UPDATE SET
+                        guild_id = $2, channel_id = $3, watch_role_id = $4, user_id = $5,
+                        colour = $6, station = $7, votes = $8, time_minutes = $9,
+                        scheduled_time = $10, created_at = $11''',
                     vote_id, guild_id, channel_id, watch_role_id, user_id, colour, station,
-                    votes, time_minutes, scheduled_time, created_at
+                    votes, time_minutes, scheduled_time_dt, created_at_dt
                 )
                 return True
             except Exception as e:
                 print(f'<:Denied:1426930694633816248> Error adding scheduled vote: {e}')
+                import traceback
+                traceback.print_exc()
                 return False
 
     async def get_scheduled_votes(self) -> Dict:
@@ -390,7 +440,7 @@ class Database:
             return result != 'DELETE 0'
 
     # === COMPLETED WATCHES ===
-    async def get_completed_watches(self, guild_id: int = None, limit: int = 500) -> Dict:
+    async def get_completed_watches(self, guild_id: int = None, limit: int = 500):
         """Get completed watches with switch history (returns dict with message_id as key for compatibility)"""
         async with self.pool.acquire() as conn:
             if guild_id:
@@ -406,10 +456,13 @@ class Database:
 
             watches = {}
             for row in rows:
-                import json
+                # Handle switch_history JSON
                 switch_history = row.get('switch_history', [])
                 if isinstance(switch_history, str):
-                    switch_history = json.loads(switch_history)
+                    try:
+                        switch_history = json.loads(switch_history)
+                    except:
+                        switch_history = []
 
                 watches[str(row['message_id'])] = {
                     'user_id': row['user_id'],
@@ -421,8 +474,8 @@ class Database:
                     'ended_at': int(row['ended_at'].timestamp()),
                     'ended_by': row['ended_by'],
                     'attendees': row['attendees'],
-                    'status': row['status'],
-                    'reason': row['reason'],
+                    'status': row.get('status', 'completed'),
+                    'reason': row.get('reason'),
                     'votes_received': row.get('votes_received'),
                     'votes_required': row.get('votes_required'),
                     'original_colour': row.get('original_colour'),
@@ -430,48 +483,6 @@ class Database:
                     'switch_history': switch_history
                 }
             return watches
-
-
-    async def add_completed_watch(self, message_id: int, guild_id: int, channel_id: int,
-                                  user_id: int, user_name: str, colour: str, station: str,
-                                  started_at: int, ended_at: int, ended_by: int = None,
-                                  attendees: int = None, status: str = 'completed',
-                                  reason: str = None, votes_received: int = None,
-                                  votes_required: int = None, has_voters_embed: bool = False,
-                                  original_colour: str = None, original_station: str = None,
-                                  switch_history: str = None):
-        """Add a completed watch with switch tracking support"""
-        async with self.pool.acquire() as conn:
-            try:
-                # Set defaults
-                if switch_history is None:
-                    switch_history = '[]'
-
-                await conn.execute(
-                    '''INSERT INTO completed_watches
-                       (message_id, guild_id, channel_id, user_id, user_name, colour, station,
-                        started_at, ended_at, ended_by, attendees, status, reason,
-                        votes_received, votes_required, has_voters_embed,
-                        original_colour, original_station, switch_history)
-                       VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8), to_timestamp($9),
-                               $10, $11, $12, $13, $14, $15, $16, $17, $18, $19::jsonb) ON CONFLICT (message_id) DO
-                    UPDATE SET
-                        guild_id = $2, channel_id = $3, user_id = $4, user_name = $5,
-                        colour = $6, station = $7, started_at = to_timestamp($8),
-                        ended_at = to_timestamp($9), ended_by = $10, attendees = $11,
-                        status = $12, reason = $13, votes_received = $14,
-                        votes_required = $15, has_voters_embed = $16,
-                        original_colour = $17, original_station = $18, switch_history = $19::jsonb''',
-                    message_id, guild_id, channel_id, user_id, user_name, colour, station,
-                    started_at, ended_at, ended_by, attendees, status, reason,
-                    votes_received, votes_required, has_voters_embed,
-                    original_colour, original_station, switch_history
-                )
-                return True
-            except Exception as e:
-                print(f'<:Denied:1426930694633816248> Error adding completed watch: {e}')
-                return False
-
 
     async def delete_completed_watch(self, message_id: int):
         """Delete a completed watch"""
@@ -566,52 +577,16 @@ async def save_completed_watches(watches: dict):
     # This remains as a no-op since we save in real-time now
     pass
 
-
-async def update_watch_switch(self, message_id: int, new_colour: str, new_station: str,
-                              old_colour: str, old_station: str, switch_timestamp: int):
-    """Update watch with switch information"""
-    async with aiosqlite.connect(self.db_path) as db:
-        # Get current switch history
-        cursor = await db.execute(
-            'SELECT switch_history, original_colour, original_station FROM active_watches WHERE message_id = ?',
-            (message_id,)
-        )
-        row = await cursor.fetchone()
-
-        if row:
-            import json
-            switch_history = json.loads(row[0]) if row[0] else []
-            original_colour = row[1] or old_colour
-            original_station = row[2] or old_station
-
-            # Add new switch entry
-            switch_entry = {
-                'timestamp': switch_timestamp,
-                'from_colour': old_colour,
-                'to_colour': new_colour,
-                'from_station': old_station,
-                'to_station': new_station
-            }
-            switch_history.append(switch_entry)
-
-            # Update the watch
-            await db.execute('''
-                             UPDATE active_watches
-                             SET colour           = ?,
-                                 station          = ?,
-                                 switch_history   = ?,
-                                 original_colour  = ?,
-                                 original_station = ?
-                             WHERE message_id = ?
-                             ''', (new_colour, new_station, json.dumps(switch_history),
-                                   original_colour, original_station, message_id))
-            await db.commit()
-
-# Add to database.py
 async def update_watch_related_messages(self, message_id: int, related_messages: list):
     """Update the related_messages array for a watch"""
     async with self.pool.acquire() as conn:
-        await conn.execute(
-            'UPDATE active_watches SET related_messages = $1 WHERE message_id = $2',
-            related_messages, message_id
-        )
+        try:
+            await conn.execute(
+                'UPDATE active_watches SET related_messages = $1 WHERE message_id = $2',
+                related_messages, message_id
+            )
+            print(f"✅ Updated related_messages for watch {message_id}")
+            return True
+        except Exception as e:
+            print(f"❌ Error updating related_messages: {e}")
+            return False
