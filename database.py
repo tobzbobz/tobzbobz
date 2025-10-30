@@ -187,6 +187,14 @@ class Database:
                                switch_history: str = None, related_messages: list = None):
         """Add an active watch to the database"""
         async with self.pool.acquire() as conn:
+            # Convert timestamp integer to datetime if needed
+            from datetime import datetime, timezone
+
+            if isinstance(started_at, int):
+                started_at_dt = datetime.fromtimestamp(started_at, tz=timezone.utc)
+            else:
+                started_at_dt = started_at
+
             await conn.execute(
                 '''INSERT INTO active_watches
                    (message_id, guild_id, channel_id, user_id, user_name, colour, station,
@@ -199,8 +207,8 @@ class Database:
                     switch_history = EXCLUDED.switch_history,
                     related_messages = EXCLUDED.related_messages''',
                 message_id, guild_id, channel_id, user_id, user_name, colour, station,
-                started_at, has_voters_embed, original_colour, original_station,
-                switch_history, related_messages or [message_id]  # Default to just the main message
+                started_at_dt, has_voters_embed, original_colour, original_station,
+                switch_history, related_messages or [message_id]
             )
 
     async def get_active_watches(self, guild_id: int = None) -> Dict:
@@ -409,18 +417,33 @@ async def load_watches():
         rows = await conn.fetch('SELECT * FROM active_watches')
         watches = {}
         for row in rows:
+            import json
+
+            # Handle started_at - convert datetime to timestamp integer
+            started_at = row['started_at']
+            if hasattr(started_at, 'timestamp'):
+                started_at = int(started_at.timestamp())
+
+            # Handle switch_history JSON
+            switch_history = row.get('switch_history', [])
+            if isinstance(switch_history, str):
+                try:
+                    switch_history = json.loads(switch_history)
+                except:
+                    switch_history = []
+
             watches[str(row['message_id'])] = {
                 'user_id': row['user_id'],
                 'user_name': row['user_name'],
                 'channel_id': row['channel_id'],
                 'colour': row['colour'],
                 'station': row['station'],
-                'started_at': row['started_at'],
+                'started_at': started_at,
                 'has_voters_embed': row.get('has_voters_embed', False),
                 'original_colour': row.get('original_colour'),
                 'original_station': row.get('original_station'),
-                'switch_history': json.loads(row['switch_history']) if row.get('switch_history') else [],
-                'related_messages': row.get('related_messages', [row['message_id']])  # ADD THIS
+                'switch_history': switch_history,
+                'related_messages': row.get('related_messages', [row['message_id']])
             }
         return watches
 

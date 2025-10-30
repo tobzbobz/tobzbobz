@@ -3,6 +3,7 @@ from google.oauth2.service_account import Credentials
 import os
 import json
 import time
+import asyncio
 
 HHSTJ_RANK_MAP = {
     1389113026900394064: ("First Responder", "FR"),
@@ -573,29 +574,26 @@ class GoogleSheetsManager:
                     # Check if exists and needs update
                     if discord_id in existing_cmd_map:
                         existing = existing_cmd_map[discord_id]['data']
+
+                        # Ensure existing row has at least 6 columns, pad with empty strings if needed
+                        while len(existing) < 6:
+                            existing.append('')
+
                         # Compare relevant fields (skip strikes/qualifications - manual edits)
-                        # Check if exists and needs update
-                        if discord_id in existing_cmd_map:
-                            existing = existing_cmd_map[discord_id]['data']
+                        if (existing[0] != new_row[0] or  # Callsign
+                                existing[1] != new_row[1] or  # Roblox username
+                                existing[4] != new_row[4] or  # Discord ID
+                                str(existing[5]) != str(new_row[5])):  # Rank priority
 
-                            # Ensure existing row has at least 6 columns, pad with empty strings if needed
-                            while len(existing) < 6:
-                                existing.append('')
+                            # Preserve manual edits for strikes (col D) and qualifications (col C)
+                            new_row[2] = existing[2] if len(existing) > 2 and existing[2] else new_row[2]
+                            new_row[3] = existing[3] if len(existing) > 3 and existing[3] else new_row[3]
 
-                            # Compare relevant fields (skip strikes/qualifications - manual edits)
-                            if (existing[0] != new_row[0] or  # Callsign
-                                    existing[1] != new_row[1] or  # Roblox username
-                                    existing[4] != new_row[4] or  # Discord ID
-                                    str(existing[5]) != str(new_row[5])):  # Rank priority
+                            cmd_updates.append({
+                                'row': existing_cmd_map[discord_id]['row'],
+                                'data': new_row
+                            })
 
-                                # Preserve manual edits for strikes (col D) and qualifications (col C)
-                                new_row[2] = existing[2] if len(existing) > 2 else new_row[2]
-                                new_row[3] = existing[3] if len(existing) > 3 else new_row[3]
-
-                                cmd_updates.append({
-                                    'row': existing_cmd_map[discord_id]['row'],
-                                    'data': new_row
-                                })
                         elif discord_id in existing_nc_map:
                             # Rank transition: NC -> Command
                             nc_deletes.add(discord_id)
@@ -669,6 +667,9 @@ class GoogleSheetsManager:
                     if i + chunk_size < len(batch_data):
                         await asyncio.sleep(1)  # Delay between chunks
 
+                updated_rows = [update['row'] for update in nc_updates]
+                self.batch_copy_validations(non_command_sheet, 2, updated_rows, [6, 9])
+
             # ===== BATCH UPDATE EXISTING ROWS (Command) =====
             if cmd_updates:
                 batch_data = []
@@ -686,6 +687,9 @@ class GoogleSheetsManager:
                     print(f"✅ Updated {len(chunk)} CMD rows")
                     if i + chunk_size < len(batch_data):
                         await asyncio.sleep(1)  # Delay between chunks
+
+                updated_rows = [update['row'] for update in cmd_updates]  # Use cmd_updates not nc_updates
+                self.batch_copy_validations(command_sheet, 2, updated_rows,[3, 4])  # Use command_sheet not non_command_sheet
 
             # ===== ADD NEW ROWS (existing code is fine for this) =====
             if nc_new:
@@ -780,7 +784,6 @@ class GoogleSheetsManager:
         except Exception as e:
             print(f"⚠️ Could not batch copy data validation: {e}")
             return False
-
 
     def apply_validations_directly(self, worksheet, rows: range, column: int, validation_values: list):
         """

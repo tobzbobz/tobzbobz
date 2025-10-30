@@ -108,7 +108,7 @@ async def add_callsign_to_database(callsign: str, discord_user_id: int, discord_
                                    hhstj_prefix: str):
     """Add a new callsign to the database"""
     async with db.pool.acquire() as conn:
-        # Check if user already has a callsign
+        # Check if user already has ANY callsign
         old_callsigns = await conn.fetch(
             'SELECT * FROM callsigns WHERE discord_user_id = $1',
             discord_user_id
@@ -125,18 +125,29 @@ async def add_callsign_to_database(callsign: str, discord_user_id: int, discord_
                 "replaced_at": int(datetime.utcnow().timestamp())
             })
 
-            # Delete old callsign
-            await conn.execute(
-                'DELETE FROM callsigns WHERE callsign = $1',
-                old_data['callsign']
-            )
+        # Delete ALL old callsigns for this user (not just different ones)
+        await conn.execute(
+            'DELETE FROM callsigns WHERE discord_user_id = $1',
+            discord_user_id
+        )
 
         # Insert new callsign
         await conn.execute(
             '''INSERT INTO callsigns
                (callsign, discord_user_id, discord_username, roblox_user_id, roblox_username,
                 fenz_prefix, hhstj_prefix, approved_by_id, approved_by_name, callsign_history)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)''',
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+               ON CONFLICT (callsign) DO UPDATE SET
+                   discord_user_id = EXCLUDED.discord_user_id,
+                   discord_username = EXCLUDED.discord_username,
+                   roblox_user_id = EXCLUDED.roblox_user_id,
+                   roblox_username = EXCLUDED.roblox_username,
+                   fenz_prefix = EXCLUDED.fenz_prefix,
+                   hhstj_prefix = EXCLUDED.hhstj_prefix,
+                   approved_by_id = EXCLUDED.approved_by_id,
+                   approved_by_name = EXCLUDED.approved_by_name,
+                   callsign_history = EXCLUDED.callsign_history,
+                   approved_at = NOW()''',
             callsign, discord_user_id, discord_username, roblox_user_id, roblox_username,
             fenz_prefix, hhstj_prefix, discord_user_id, discord_username,
             json.dumps(history)
@@ -250,8 +261,11 @@ class CallsignCog(commands.Cog):
                 if callsigns:
                     callsign_data = []
                     for record in callsigns:
-                        is_command_rank = record['fenz_prefix'] in [prefix for _, (_, prefix) in COMMAND_RANKS.items()] if \
-                        record['fenz_prefix'] else False
+                        member = guild.get_member(record['discord_user_id'])  # Use 'guild' not 'interaction.guild'
+                        is_command_rank = False
+                        if member:
+                            rank_type, rank_data = sheets_manager.determine_rank_type(member.roles)
+                            is_command_rank = (rank_type == 'command')
 
                         callsign_data.append({
                             'fenz_prefix': record['fenz_prefix'] or '',  # Ensure not None
@@ -397,8 +411,11 @@ class CallsignCog(commands.Cog):
                 record = dict(record)  # Convert to mutable dict
 
                 # Determine if command based on FENZ prefix
-                is_command_rank = record['fenz_prefix'] in [prefix for _, (_, prefix) in COMMAND_RANKS.items()] if \
-                record['fenz_prefix'] else False
+                member = interaction.guild.get_member(record['discord_user_id'])
+                is_command_rank = False
+                if member:
+                    rank_type, rank_data = sheets_manager.determine_rank_type(member.roles)
+                    is_command_rank = (rank_type == 'command')
 
                 callsign_data.append({
                     'fenz_prefix': record['fenz_prefix'] or '',
@@ -785,30 +802,51 @@ class CallsignCog(commands.Cog):
             self,
             interaction: discord.Interaction,
             callsign: str = None,
-            user: discord.Member = None
+            user: discord.Member = None,
+            user_id: str = None
     ):
         """Remove a callsign from the database"""
         await interaction.response.defer(thinking=True)
 
         try:
-            if not callsign and not user:
-                await interaction.followup.send("<:Denied:1426930694633816248> Please provide either a callsign or a user.")
+            # Check if user_id is provided - requires special role
+            if user_id:
+                if not any(role.id == 1389550689113473024 for role in interaction.user.roles):
+                    await interaction.followup.send(
+                        "<:Denied:1426930694633816248> You need the sync role to use user_id!",
+                        ephemeral=True
+                    )
+                    return
+
+            if not callsign and not user and not user_id:
+                await interaction.followup.send(
+                    "<:Denied:1426930694633816248> Please provide either a callsign, user, or user_id.",
+                    ephemeral=True
+                )
                 return
 
             async with db.pool.acquire() as conn:
-                if callsign:
+                if user_id:
+                    result = await conn.fetchrow(
+                        'DELETE FROM callsigns WHERE discord_user_id = $1 RETURNING *',
+                        int(user_id)
+                    )
+                elif callsign:
                     result = await conn.fetchrow(
                         'DELETE FROM callsigns WHERE callsign = $1 RETURNING *',
                         callsign
                     )
-                else:
+                else:  # user
                     result = await conn.fetchrow(
                         'DELETE FROM callsigns WHERE discord_user_id = $1 RETURNING *',
                         user.id
                     )
 
                 if not result:
-                    await interaction.followup.send("<:Denied:1426930694633816248> No callsign found to remove.")
+                    await interaction.followup.send(
+                        "<:Denied:1426930694633816248> No callsign found to remove.",
+                        ephemeral=True
+                    )
                     return
 
                 removed_callsign = f"{result['fenz_prefix']}-{result['callsign']}" if result['fenz_prefix'] else result[
@@ -823,7 +861,8 @@ class CallsignCog(commands.Cog):
 
                 await interaction.followup.send(
                     f"<:Accepted:1426930333789585509> Removed callsign **{removed_callsign}**\n"
-                    f"💡 Remember to run `/callsign sync` to update Google Sheets!"
+                    f"💡 Remember to run `/callsign sync` to update Google Sheets!",
+                    ephemeral=True
                 )
 
         except Exception as e:

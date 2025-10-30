@@ -54,21 +54,29 @@ class VoteButton(discord.ui.View):
         self.cog = cog
         self.cancelled = False
 
-    @discord.ui.button(label='0 <:Accepted:1426930333789585509>', style=discord.ButtonStyle.green,
-                       custom_id='vote_button')
+    @discord.ui.button(label='0', style=discord.ButtonStyle.green,
+                       custom_id='vote_button', emoji='<:FENZ:1389200656090533970>')
     async def vote_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
+            # Toggle vote - if already voted, remove vote; otherwise add vote
             if interaction.user.id in self.voted_users:
-                already_voted_embed = discord.Embed(
-                    description='<:Denied:1426930694633816248> You have already voted!',
-                    colour=discord.Colour(0xf24d4d)
+                # Remove vote
+                self.voted_users.remove(interaction.user.id)
+                self.vote_count -= 1
+                button.label = f'{self.vote_count}'
+
+                await interaction.response.edit_message(view=self)
+                removed_embed = discord.Embed(
+                    description=f'<:Accepted:1426930333789585509> Vote removed! ({self.vote_count}/{self.required_votes})',
+                    colour=discord.Colour(0x2ecc71)
                 )
-                await interaction.response.send_message(embed=already_voted_embed, ephemeral=True)
+                await interaction.followup.send(embed=removed_embed, ephemeral=True)
                 return
 
+            # Add vote
             self.voted_users.add(interaction.user.id)
             self.vote_count += 1
-            button.label = f'{self.vote_count} <:Accepted:1426930333789585509>'
+            button.label = f'{self.vote_count}'
 
             if self.vote_count >= self.required_votes:
                 colour_map = {
@@ -79,7 +87,7 @@ class VoteButton(discord.ui.View):
                 }
                 embed_colour = colour_map.get(self.colour, discord.Colour.orange())
 
-                start_embed = discord.Embed(title=f'🚨 {self.colour} Watch Announcement 🚨', colour=embed_colour)
+                start_embed = discord.Embed(title=f'{self.colour} Watch Announcement', colour=embed_colour)
                 start_embed.add_field(name='Station', value=f'`{self.station}`', inline=True)
 
                 if self.time_minutes:
@@ -92,7 +100,7 @@ class VoteButton(discord.ui.View):
 
                 start_embed.add_field(name='Watch Leader', value=interaction.user.mention, inline=True)
                 start_embed.add_field(name='‎',
-                                      value='No need to vote just hop in!!\nIf you are joining, please join Fenz RTO 🙌',
+                                      value='No need to vote just hop in!!\nIf you are joining, please join Fenz RTO ðŸ™Œ',
                                       inline=False)
                 start_embed.add_field(name='‎',
                                       value='**Select the below reaction role to be notified of any future watches!**',
@@ -166,43 +174,6 @@ class VoteButton(discord.ui.View):
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
             print(f'Error processing vote: {e}')
             raise
-
-    @discord.ui.button(label='Remove Vote', emoji='🗑️', style=discord.ButtonStyle.red, custom_id='remove_vote_button')
-    async def remove_vote_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            if interaction.user.id not in self.voted_users:
-                not_voted_embed = discord.Embed(
-                    description='<:Denied:1426930694633816248> You have not voted yet!',
-                    colour=discord.Colour(0xf24d4d)
-                )
-                await interaction.response.send_message(embed=not_voted_embed, ephemeral=True)
-                return
-
-            self.voted_users.remove(interaction.user.id)
-            self.vote_count -= 1
-
-            for item in self.children:
-                if item.custom_id == 'vote_button':
-                    item.label = f'{self.vote_count} <:Accepted:1426930333789585509>'
-                    break
-
-            await interaction.response.edit_message(view=self)
-            removed_embed = discord.Embed(
-                description=f'<:Accepted:1426930333789585509> Vote removed! ({self.vote_count}/{self.required_votes})',
-                colour=discord.Colour(0x2ecc71)
-            )
-            await interaction.followup.send(embed=removed_embed, ephemeral=True)
-
-        except Exception as e:
-            error_embed = discord.Embed(description=f'<:Denied:1426930694633816248> Error: {e}',
-                                        colour=discord.Colour(0xf24d4d))
-            if not interaction.response.is_done():
-                await interaction.response.send_message(embed=error_embed, ephemeral=True)
-            else:
-                await interaction.followup.send(embed=error_embed, ephemeral=True)
-            print(f'Error removing vote: {e}')
-            raise
-
 
 class WatchRoleButton(discord.ui.View):
     def __init__(self, message_id: int):
