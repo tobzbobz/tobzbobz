@@ -1084,17 +1084,32 @@ class ModActionView(discord.ui.View):
         self.add_item(ModActionSelect(cog))
         self.cog = cog
 
+
+# Replace the entire has_mod_role function and ModCog class with these fixes:
+
 def has_mod_role():
     async def predicate(ctx):
         if ctx.guild.id not in MODERATOR_ROLES:
-            await ctx.send("This command is not configured for this server.", ephemeral=True)
+            await ctx.send("This command is not configured for this server.")
             return False
+
         role_id = MODERATOR_ROLES[ctx.guild.id]
+
+        # Handle None role_id (allows everyone)
+        if role_id is None:
+            return True
+
         role = ctx.guild.get_role(role_id)
         if role is None:
-            await ctx.send("Moderator role not found.", ephemeral=True)
+            await ctx.send("Moderator role not found.")
             return False
-        return role in ctx.author.roles
+
+        has_role = role in ctx.author.roles
+        if not has_role:
+            await ctx.send("You don't have permission to use this command!")
+
+        return has_role
+
     return commands.check(predicate)
 
 
@@ -1102,25 +1117,25 @@ class ModCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-        # ✅ CORRECT - Fix indentation
-        async def reset_user_infractions(self, guild_id: int, user_id: int):
-            """Reset all warning/kick counters for a user when they get banned"""
-            # Mark all previous infractions as archived
-            logs = await db.get_recent_logs(
-                guild_id=guild_id,
-                user_id=user_id,
-                limit=1000  # Get all logs
-            )
+    async def reset_user_infractions(self, guild_id: int, user_id: int):
+        """Reset all warning/kick counters for a user when they get banned"""
+        # Mark all previous infractions as archived
+        logs = await db.get_recent_logs(
+            guild_id=guild_id,
+            user_id=user_id,
+            limit=1000  # Get all logs
+        )
 
-            for log in logs:  # ✅ Properly indented (4 spaces)
-                if log.get('action') in ['kick', 'educational_note']:
-                    # Update the log to mark as archived
-                    await db.execute(
-                        '''UPDATE audit_logs
-                           SET details = details || '{"archived": true, "archived_reason": "User was banned - infractions reset"}'::jsonb
-                           WHERE id = $1''',
-                        log['id']
-                    )
+        for log in logs:
+            if log.get('action') in ['kick', 'educational_note']:
+                # Update the log to mark as archived
+                await db.execute(
+                    '''UPDATE audit_logs
+                       SET details = details ||
+                                     '{"archived": true, "archived_reason": "User was banned - infractions reset"}'::jsonb
+                       WHERE id = $1''',
+                    log['id']
+                )
 
     @commands.command(name="mod")
     @has_mod_role()
@@ -1130,7 +1145,7 @@ class ModCog(commands.Cog):
         try:
             await ctx.message.delete()
         except:
-            pass  # Ignore if bot doesn't have permission to delete
+            pass
 
         embed = discord.Embed(
             title="Moderation Panel",
@@ -1138,18 +1153,22 @@ class ModCog(commands.Cog):
             color=discord.Color.blue()
         )
         view = ModActionView(ctx.author.id, self)
-        await ctx.send(embed=embed, view=view, ephemeral=True)
+        # Send as regular message (ephemeral doesn't work with prefix commands)
+        await ctx.send(embed=embed, view=view, delete_after=300)
 
     @mod_command.error
     async def mod_error(self, ctx, error):
-        if isinstance(error, commands.MissingPermissions):
-            await ctx.send("You don't have permission to use this command!", ephemeral=True)
+        if isinstance(error, commands.CheckFailure):
+            # Error message already sent in check function
+            pass
+        elif isinstance(error, commands.MissingPermissions):
+            await ctx.send("You don't have permission to use this command!")
 
     @commands.command(name="modlogsclear")
     async def modlogsclear_command(self, ctx):
         """Clear all moderation logs (Owner only)"""
         if ctx.author.id != OWNER_ID:
-            await ctx.send("You don't have permission to use this command!", ephemeral=True)
+            await ctx.send("You don't have permission to use this command!")
             return
 
         # ✅ Clear from database
@@ -1164,26 +1183,17 @@ class ModCog(commands.Cog):
             ctx.guild.id
         )
 
-        await ctx.send(f"Cleared {log_count} moderation log entries.", ephemeral=True)
+        await ctx.send(f"Cleared {log_count} moderation log entries.")
 
     @commands.command(name="modlogs")
     @has_mod_role()
     async def modlogs_command(self, ctx, limit: int = None, skip: int = 0, user: discord.User = None):
-        """View moderation logs with pagination support
-
-        Usage:
-        !modlogs - View help menu
-        !modlogs 10 - View last 10 logs
-        !modlogs 20 - View last 20 logs
-        !modlogs 10 5 - View 10 logs, skipping the 5 most recent
-        !modlogs 10 0 @user - View last 10 logs for a specific user
-        !modlogs 15 20 @user - View 15 logs for a user, skipping 20 most recent
-        """
+        """View moderation logs with pagination support"""
         # Delete the command message
         try:
             await ctx.message.delete()
         except:
-            pass  # Ignore if bot doesn't have permission to delete
+            pass
 
         if limit is None:
             embed = discord.Embed(
@@ -1222,39 +1232,36 @@ class ModCog(commands.Cog):
             )
             embed.set_footer(text="This message will auto-delete in 1 minute")
 
-            # Send the help menu and delete after 60 seconds
-            help_message = await ctx.send(embed=embed, ephemeral=False)
+            help_message = await ctx.send(embed=embed)
             await help_message.delete(delay=60)
             return
 
-        # ✅ CORRECT - already have filtered_logs from database
+        # ✅ Get logs from database
+        if user:
+            filtered_logs = await db.get_recent_logs(
+                guild_id=ctx.guild.id,
+                user_id=user.id,
+                limit=1000
+            )
+        else:
+            filtered_logs = await db.get_recent_logs(
+                guild_id=ctx.guild.id,
+                limit=1000
+            )
+
         if not filtered_logs:
-            await ctx.send("No moderation logs found.", ephemeral=True)
+            await ctx.send("No moderation logs found.", delete_after=10)
             return
 
-        # Filter logs by user if specified
-        if user:
-            # ✅ Get logs from database
-            if user:
-                filtered_logs = await db.get_recent_logs(
-                    guild_id=ctx.guild.id,
-                    user_id=user.id,
-                    limit=1000  # Get all to filter
-                )
-            else:
-                filtered_logs = await db.get_recent_logs(
-                    guild_id=ctx.guild.id,
-                    limit=1000
-                )
-
-            # Rest of pagination logic stays the same
-            total_logs = len(filtered_logs)
-            start_index = max(0, total_logs - skip - limit)
-            end_index = total_logs - skip
+        total_logs = len(filtered_logs)
+        start_index = max(0, total_logs - skip - limit)
+        end_index = total_logs - skip
 
         if end_index <= 0 or start_index >= total_logs:
-            await ctx.send(f"Invalid skip amount. Total logs: {total_logs}", ephemeral=True)
+            await ctx.send(f"Invalid skip amount. Total logs: {total_logs}", delete_after=10)
             return
+
+        displayed_logs = filtered_logs[start_index:end_index]
 
         user_filter_text = f" for {user.mention}" if user else ""
         embed = discord.Embed(
@@ -1277,20 +1284,12 @@ class ModCog(commands.Cog):
             )
 
         embed.set_footer(text=f"Showing logs {start_index + 1}-{end_index} of {total_logs}{user_filter_text}")
+        await ctx.send(embed=embed, delete_after=300)
 
     @commands.command(name="deletelog")
     @has_mod_role()
     async def deletelog_command(self, ctx, limit: int = None, skip: int = 0, user: discord.User = None):
-        """Delete specific moderation logs with pagination support
-
-        Usage:
-        !deletelog - View help menu
-        !deletelog 10 - View last 10 logs to delete
-        !deletelog 20 - View last 20 logs to delete
-        !deletelog 10 5 - View 10 logs, skipping the 5 most recent
-        !deletelog 10 0 @user - View last 10 logs for a specific user to delete
-        !deletelog 15 20 @user - View 15 logs for a user, skipping 20 most recent
-        """
+        """Delete specific moderation logs with pagination support"""
         # Delete the command message
         try:
             await ctx.message.delete()
@@ -1332,36 +1331,37 @@ class ModCog(commands.Cog):
             )
             embed.set_footer(text="This message will auto-delete in 1 minute")
 
-            # Send the help menu and delete after 60 seconds
-            help_message = await ctx.send(embed=embed, ephemeral=False)
+            help_message = await ctx.send(embed=embed)
             await help_message.delete(delay=60)
             return
 
-        if not mod_logs:
-            await ctx.send("No moderation logs found.", ephemeral=True)
+        # ✅ Get logs from database
+        if user:
+            filtered_logs = await db.get_recent_logs(
+                guild_id=ctx.guild.id,
+                user_id=user.id,
+                limit=1000
+            )
+        else:
+            filtered_logs = await db.get_recent_logs(
+                guild_id=ctx.guild.id,
+                limit=1000
+            )
+
+        if not filtered_logs:
+            await ctx.send("No moderation logs found.", delete_after=10)
             return
 
-        # Filter logs by user if specified
-        if user:
-            filtered_logs = [log for log in mod_logs if log.get('user_id') == user.id]
-            if not filtered_logs:
-                await ctx.send(f"No moderation logs found for {user.mention}.", ephemeral=True)
-                return
-        else:
-            filtered_logs = mod_logs
-
         total_logs = len(filtered_logs)
-
         start_index = max(0, total_logs - skip - limit)
         end_index = total_logs - skip
 
         if end_index <= 0 or start_index >= total_logs:
-            await ctx.send(f"Invalid skip amount. Total logs: {total_logs}", ephemeral=True)
+            await ctx.send(f"Invalid skip amount. Total logs: {total_logs}", delete_after=10)
             return
 
         displayed_logs = filtered_logs[start_index:end_index]
 
-        # Create the delete log select view
         view = DeleteLogSelectView(ctx.author.id, displayed_logs, user)
 
         user_filter_text = f" for {user.mention}" if user else ""
@@ -1373,30 +1373,8 @@ class ModCog(commands.Cog):
 
         embed.set_footer(text=f"Showing logs {start_index + 1}-{end_index} of {total_logs}{user_filter_text}")
 
-        await ctx.send(embed=embed, view=view, ephemeral=True)
+        await ctx.send(embed=embed, view=view, delete_after=300)
 
-        def reset_user_infractions(self, user_id: int):
-            """Reset all warning/kick counters for a user when they get banned"""
-            global mod_logs
-
-            # Mark all previous infractions as 'archived' or add a 'banned' flag
-            for log in mod_logs:
-                if log.get('user_id') == user_id and log.get('type') in ['kick', 'educational_note']:
-                    log['archived'] = True
-                    log['archived_reason'] = 'User was banned - infractions reset'
-
-            save_logs()
-
-        def reset_user_infractions(self, user_id: int):
-            """Reset all warning/kick counters for a user when they get banned"""
-            global mod_logs
-
-            for log in mod_logs:
-                if log.get('user_id') == user_id and log.get('type') in ['kick', 'educational_note']:
-                    log['archived'] = True
-                    log['archived_reason'] = 'User was banned - infractions reset'
-
-            save_logs()
 
 async def setup(bot):
     await bot.add_cog(ModCog(bot))

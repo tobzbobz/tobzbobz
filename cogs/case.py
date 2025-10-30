@@ -49,7 +49,7 @@ class CaseLogCog(commands.Cog):
     case_group = app_commands.Group(name="case", description="Case management commands")
 
     @case_group.command(name="log", description="Log a case with punishment details")
-    @has_case_log_permission()  # Add this line
+    @has_case_log_permission()
     @app_commands.describe(
         user="The user being punished",
         punishment="Type of punishment",
@@ -112,7 +112,7 @@ class CaseLogCog(commands.Cog):
 
         embed.add_field(
             name="‎",
-            value=f"*Logged by {interaction.user}*",
+            value=f"*Logged by {interaction.user.mention}*",  # ✅ Changed to mention instead of display_name
             inline=False
         )
 
@@ -145,7 +145,7 @@ class CaseLogCog(commands.Cog):
         if proof_urls:
             urls = [url.strip() for url in proof_urls.split(',') if url.strip()]
             if urls:
-                proof_content += join(f"{url}" for url in urls)
+                proof_content += "\n".join(f"{url}" for url in urls)  # ✅ Fixed: use "\n".join() instead of join()
                 has_proof = True
 
         # Add attachment if provided

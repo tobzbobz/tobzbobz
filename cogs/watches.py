@@ -337,6 +337,21 @@ class WatchCog(commands.Cog):
         # Don't load immediately - wait for database
         self.bot.loop.create_task(self.initialize_cog())
 
+    async def check_database_ready(self, interaction: discord.Interaction) -> bool:
+        """Check if database is ready, send error message if not"""
+        if db.pool is None:
+            error_embed = discord.Embed(
+                description='<:Denied:1426930694633816248> Database connection not ready. Please try again in a moment.',
+                colour=discord.Colour(0xf24d4d)
+            )
+            if not interaction.response.is_done():
+                await interaction.response.send_message(embed=error_embed, ephemeral=True)
+            else:
+                await interaction.followup.send(embed=error_embed, ephemeral=True)
+            return False
+        return True
+
+
     async def initialize_cog(self):
         """Initialize the cog after database is ready"""
         # Wait for bot to be ready
@@ -846,13 +861,8 @@ class WatchCog(commands.Cog):
     )
     async def watch_logs(self, interaction: discord.Interaction, limit: int = 50, per_page: int = 5):
         try:
-            # Database check at the very start
-            if db.pool is None:
-                error_embed = discord.Embed(
-                    description='<:Denied:1426930694633816248> Database not available. Please try again in a moment.',
-                    colour=discord.Colour(0xf24d4d)
-                )
-                await interaction.response.send_message(embed=error_embed, ephemeral=True)
+            # ✅ Check database first
+            if not await self.check_database_ready(interaction):
                 return
 
             # Permission check
@@ -869,6 +879,7 @@ class WatchCog(commands.Cog):
 
             await interaction.response.defer(ephemeral=True)
 
+            # ✅ Now safe to call database
             completed_watches = await load_completed_watches()
 
             if not completed_watches:

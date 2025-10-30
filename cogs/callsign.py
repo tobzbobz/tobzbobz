@@ -252,7 +252,7 @@ class CallsignCog(commands.Cog):
 
     @tasks.loop(minutes=60)
     async def auto_sync_loop(self):
-        """Background task for automatic syncing"""
+        """Background task for automatic syncing with nickname updates"""
         # Safety check: ensure database is connected
         if db.pool is None:
             print("⚠️ Auto-sync skipped: database not connected")
@@ -265,16 +265,104 @@ class CallsignCog(commands.Cog):
 
                 if callsigns:
                     callsign_data = []
+                    nickname_updates = 0
+                    rank_updates = 0
+
                     for record in callsigns:
                         member = guild.get_member(record['discord_user_id'])
-                        is_command_rank = False
-                        if member:
-                            rank_type, rank_data = sheets_manager.determine_rank_type(member.roles)
-                            is_command_rank = (rank_type == 'command')
+
+                        if not member:
+                            # User not in guild, just add to sheets data
+                            rank_type, rank_data = sheets_manager.determine_rank_type([])
+                            is_command_rank = False
+
+                            callsign_data.append({
+                                'fenz_prefix': record['fenz_prefix'] or '',
+                                'hhstj_prefix': record['hhstj_prefix'] or '',
+                                'callsign': record['callsign'],
+                                'discord_user_id': record['discord_user_id'],
+                                'discord_username': record['discord_username'],
+                                'roblox_user_id': record['roblox_user_id'],
+                                'roblox_username': record['roblox_username'],
+                                'is_command': is_command_rank
+                            })
+                            continue
+
+                        # ✅ CHECK FOR RANK CHANGES
+                        is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
+                        is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
+
+                        current_fenz_prefix = record['fenz_prefix']
+                        current_hhstj_prefix = record['hhstj_prefix']
+
+                        # Get correct FENZ rank from current roles
+                        correct_fenz_prefix = None
+                        for role_id, (rank_name, prefix) in FENZ_RANK_MAP.items():
+                            if any(role.id == role_id for role in member.roles):
+                                correct_fenz_prefix = prefix
+                                break
+
+                        # Get correct HHStJ rank from current roles
+                        correct_hhstj_prefix = None
+                        for role_id, (rank_name, prefix) in HHSTJ_RANK_MAP.items():
+                            if any(role.id == role_id for role in member.roles):
+                                correct_hhstj_prefix = prefix
+                                break
+
+                        # Detect changes
+                        fenz_changed = False
+                        hhstj_changed = False
+
+                        # Update FENZ prefix if changed (unless high command chose no prefix)
+                        if correct_fenz_prefix and correct_fenz_prefix != current_fenz_prefix:
+                            # Don't override high command's choice to have no prefix
+                            if not (is_fenz_high_command and current_fenz_prefix == ""):
+                                async with db.pool.acquire() as conn:
+                                    await conn.execute(
+                                        'UPDATE callsigns SET fenz_prefix = $1 WHERE discord_user_id = $2',
+                                        correct_fenz_prefix, member.id
+                                    )
+                                current_fenz_prefix = correct_fenz_prefix
+                                fenz_changed = True
+                                rank_updates += 1
+
+                        # Update HHStJ prefix if changed
+                        if correct_hhstj_prefix != current_hhstj_prefix:
+                            async with db.pool.acquire() as conn:
+                                await conn.execute(
+                                    'UPDATE callsigns SET hhstj_prefix = $1 WHERE discord_user_id = $2',
+                                    correct_hhstj_prefix or '', member.id
+                                )
+                            current_hhstj_prefix = correct_hhstj_prefix
+                            hhstj_changed = True
+                            rank_updates += 1
+
+                        # ✅ UPDATE NICKNAME IF RANKS CHANGED OR NICKNAME IS WRONG
+                        expected_nickname = format_nickname(
+                            current_fenz_prefix,
+                            record['callsign'],
+                            current_hhstj_prefix,
+                            record['roblox_username'],
+                            is_fenz_high_command,
+                            is_hhstj_high_command
+                        )
+
+                        if member.nick != expected_nickname:
+                            try:
+                                await member.edit(nick=expected_nickname)
+                                nickname_updates += 1
+                            except discord.Forbidden:
+                                print(f"⚠️ Cannot update nickname for {member.display_name} (missing permissions)")
+                            except Exception as e:
+                                print(f"⚠️ Error updating nickname for {member.display_name}: {e}")
+
+                        # Determine rank type for sheets
+                        rank_type, rank_data = sheets_manager.determine_rank_type(member.roles)
+                        is_command_rank = (rank_type == 'command')
 
                         callsign_data.append({
-                            'fenz_prefix': record['fenz_prefix'] or '',
-                            'hhstj_prefix': record['hhstj_prefix'] or '',
+                            'fenz_prefix': current_fenz_prefix or '',
+                            'hhstj_prefix': current_hhstj_prefix or '',
                             'callsign': record['callsign'],
                             'discord_user_id': record['discord_user_id'],
                             'discord_username': record['discord_username'],
@@ -283,13 +371,22 @@ class CallsignCog(commands.Cog):
                             'is_command': is_command_rank
                         })
 
+                    # Sort by rank hierarchy
                     callsign_data.sort(key=lambda x: get_rank_sort_key(x['fenz_prefix'], x['hhstj_prefix']))
+
+                    # Update Google Sheets
                     await sheets_manager.batch_update_callsigns(callsign_data)
 
-                    print(f"Auto-sync completed for guild {guild.name}: {len(callsigns)} callsigns synced")
-            except Exception as e:
-                print(f'Error in auto-sync for guild {guild.name}: {e}')
+                    print(f"✅ Auto-sync completed for guild {guild.name}:")
+                    print(f"   📊 {len(callsigns)} callsigns synced to Google Sheets")
+                    print(f"   📝 {nickname_updates} nicknames updated")
+                    print(f"   🎖️ {rank_updates} rank changes detected and saved")
 
+            except Exception as e:
+                print(f'❌ Error in auto-sync for guild {guild.name}: {e}')
+                import traceback
+                traceback.print_exc()
+    
     @auto_sync_loop.before_loop
     async def before_auto_sync(self):
         """Wait for bot AND database to be ready before starting auto-sync"""
@@ -596,9 +693,6 @@ class CallsignCog(commands.Cog):
             )
             return
 
-        """Assign a callsign to a Discord user"""
-        await interaction.response.defer(thinking=True)
-
         try:
             # Validate callsign format (should be just the number)
             if not callsign.isdigit() or len(callsign) != 3:
@@ -772,9 +866,6 @@ class CallsignCog(commands.Cog):
             )
             return
 
-        """Look up information about a callsign or user"""
-        await interaction.response.defer(thinking=True)
-
         try:
             results = []
 
@@ -852,9 +943,6 @@ class CallsignCog(commands.Cog):
                 ephemeral=True
             )
             return
-
-        """Remove a callsign from the database"""
-        await interaction.response.defer(thinking=True)
 
         try:
             # Check if user_id is provided - requires special role
