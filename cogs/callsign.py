@@ -719,9 +719,6 @@ class CallsignCog(commands.Cog):
                     )
                     return
 
-                # Pad to 3 digits for storage consistency
-                callsign = callsign.zfill(3)
-
             # Check if callsign already exists (skip if blank)
             if callsign != "BLANK":
                 existing = await check_callsign_exists(callsign)
@@ -1252,9 +1249,6 @@ class CallsignCog(commands.Cog):
                     ephemeral=True
                 )
                 return
-
-            # Pad callsign to 3 digits
-            callsign = callsign.zfill(3)
 
             # Get user's Roblox info
             bloxlink_data = await self.get_bloxlink_data(interaction.user.id, interaction.guild.id)
