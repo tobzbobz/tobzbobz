@@ -678,4 +678,339 @@ class ERLC(commands.GroupCog, name="erlc"):
     )
     @app_commands.default_permissions(administrator=True)
     async def set_interval(self, interaction: discord.Interaction, seconds: int):
-        """Change
+        """Change the log monitoring interval."""
+        if seconds < 10:
+            await interaction.response.send_message(
+                "❌ Interval must be at least 10 seconds to respect API rate limits.",
+                ephemeral=True
+            )
+            return
+
+        self.change_log_interval(seconds)
+
+        embed = discord.Embed(
+            title="✅ Interval Updated",
+            description=f"Log monitoring will now check every **{seconds} seconds**",
+            color=discord.Color.green()
+        )
+        embed.add_field(
+            name="⚠️ Note",
+            value="Lower intervals may hit rate limits if monitoring multiple log types.",
+            inline=False
+        )
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # API Data Commands
+    @app_commands.command(name="server", description="Get server status information")
+    async def get_server(self, interaction: discord.Interaction):
+        """Fetch and display server status."""
+        config = self.get_config(interaction.guild_id)
+        if not config:
+            await interaction.response.send_message("❌ Please setup the API first using `/erlc setup`", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+
+        data = await self.make_request('/v1/server', config['server_key'])
+        embed = self.create_embed("🎮 Server Status", data)
+
+        await interaction.followup.send(embed=embed)
+        await self.send_to_channel(interaction.guild_id, embed)
+
+    @app_commands.command(name="players", description="Get list of players in server with optional filters")
+    @app_commands.describe(
+        team="Filter by team name",
+        callsign="Filter by callsign",
+        permission="Filter by permission level",
+        player="Filter by player name or Roblox ID"
+    )
+    async def get_players(
+            self,
+            interaction: discord.Interaction,
+            team: Optional[str] = None,
+            callsign: Optional[str] = None,
+            permission: Optional[Literal["Normal", "Server Administrator", "Server Owner", "Server Moderator"]] = None,
+            player: Optional[str] = None
+    ):
+        """Fetch and display current players with optional filtering."""
+        config = self.get_config(interaction.guild_id)
+        if not config:
+            await interaction.response.send_message("❌ Please setup the API first using `/erlc setup`", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+
+        data = await self.make_request('/v1/server/players', config['server_key'])
+
+        if isinstance(data, list):
+            filtered_data = self.filter_players(data, team, callsign, permission, player)
+
+            embed = discord.Embed(
+                title="👥 Current Players",
+                color=discord.Color.blue(),
+                timestamp=datetime.now(timezone.utc)
+            )
+
+            filters_applied = []
+            if team:
+                filters_applied.append(f"Team: {team}")
+            if callsign:
+                filters_applied.append(f"Callsign: {callsign}")
+            if permission:
+                filters_applied.append(f"Permission: {permission}")
+            if player:
+                filters_applied.append(f"Player: {player}")
+
+            if filters_applied:
+                embed.description = f"**Filters:** {', '.join(filters_applied)}\n**Results:** {len(filtered_data)} players"
+            else:
+                embed.description = f"**Total Players:** {len(filtered_data)}"
+
+            for i, p in enumerate(filtered_data[:25]):
+                player_info = []
+                player_info.append(f"**Player:** {p.get('Player', 'Unknown')}")
+                player_info.append(f"**Permission:** {p.get('Permission', 'N/A')}")
+                if p.get('Team'):
+                    player_info.append(f"**Team:** {p.get('Team')}")
+                if p.get('Callsign'):
+                    player_info.append(f"**Callsign:** {p.get('Callsign')}")
+
+                embed.add_field(
+                    name=f"Player {i + 1}",
+                    value='\n'.join(player_info),
+                    inline=False
+                )
+
+            if len(filtered_data) > 25:
+                embed.add_field(
+                    name="⚠️ Note",
+                    value=f"Showing first 25 of {len(filtered_data)} players",
+                    inline=False
+                )
+
+            embed.set_footer(text="ER:LC API")
+        else:
+            embed = self.create_embed("👥 Current Players", data)
+
+        await interaction.followup.send(embed=embed)
+        await self.send_to_channel(interaction.guild_id, embed)
+
+    @app_commands.command(name="vehicles", description="Get list of vehicles in server with optional filters")
+    @app_commands.describe(
+        livery="Filter by vehicle livery/texture",
+        name="Filter by vehicle name",
+        owner="Filter by owner username"
+    )
+    async def get_vehicles(
+            self,
+            interaction: discord.Interaction,
+            livery: Optional[str] = None,
+            name: Optional[str] = None,
+            owner: Optional[str] = None
+    ):
+        """Fetch and display current vehicles with optional filtering."""
+        config = self.get_config(interaction.guild_id)
+        if not config:
+            await interaction.response.send_message("❌ Please setup the API first using `/erlc setup`", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+
+        data = await self.make_request('/v1/server/vehicles', config['server_key'])
+
+        if isinstance(data, list):
+            filtered_data = self.filter_vehicles(data, livery, name, owner)
+
+            embed = discord.Embed(
+                title="🚗 Server Vehicles",
+                color=discord.Color.blue(),
+                timestamp=datetime.now(timezone.utc)
+            )
+
+            filters_applied = []
+            if livery:
+                filters_applied.append(f"Livery: {livery}")
+            if name:
+                filters_applied.append(f"Name: {name}")
+            if owner:
+                filters_applied.append(f"Owner: {owner}")
+
+            if filters_applied:
+                embed.description = f"**Filters:** {', '.join(filters_applied)}\n**Results:** {len(filtered_data)} vehicles"
+            else:
+                embed.description = f"**Total Vehicles:** {len(filtered_data)}"
+
+            for i, v in enumerate(filtered_data[:25]):
+                vehicle_info = []
+                vehicle_info.append(f"**Name:** {v.get('Name', 'Unknown')}")
+                vehicle_info.append(f"**Livery:** {v.get('Texture', 'N/A')}")
+                vehicle_info.append(f"**Owner:** {v.get('Owner', 'N/A')}")
+
+                embed.add_field(
+                    name=f"Vehicle {i + 1}",
+                    value='\n'.join(vehicle_info),
+                    inline=False
+                )
+
+            if len(filtered_data) > 25:
+                embed.add_field(
+                    name="⚠️ Note",
+                    value=f"Showing first 25 of {len(filtered_data)} vehicles",
+                    inline=False
+                )
+
+            embed.set_footer(text="ER:LC API")
+        else:
+            embed = self.create_embed("🚗 Server Vehicles", data)
+
+        await interaction.followup.send(embed=embed)
+        await self.send_to_channel(interaction.guild_id, embed)
+
+    @app_commands.command(name="staff", description="Get server staff list")
+    async def get_staff(self, interaction: discord.Interaction):
+        """Fetch and display server staff."""
+        config = self.get_config(interaction.guild_id)
+        if not config:
+            await interaction.response.send_message("❌ Please setup the API first using `/erlc setup`", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+
+        data = await self.make_request('/v1/server/staff', config['server_key'])
+        embed = self.create_embed("👮 Server Staff", data)
+
+        await interaction.followup.send(embed=embed)
+        await self.send_to_channel(interaction.guild_id, embed)
+
+    @app_commands.command(name="banned", description="Check server bans or search for a specific player")
+    @app_commands.describe(
+        player="Optional: Search for a specific player name or Roblox ID"
+    )
+    async def get_bans(self, interaction: discord.Interaction, player: Optional[str] = None):
+        """Fetch and display server bans with profile links."""
+        config = self.get_config(interaction.guild_id)
+        if not config:
+            await interaction.response.send_message("❌ Please setup the API first using `/erlc setup`", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+
+        data = await self.make_request('/v1/server/bans', config['server_key'])
+
+        if isinstance(data, list):
+            if player:
+                found = [b for b in data if player.lower() in b.get('Player', '').lower()]
+
+                if found:
+                    embed = discord.Embed(
+                        title="🔨 Ban Status: BANNED",
+                        description=f"Player **{player}** is currently banned.",
+                        color=discord.Color.red(),
+                        timestamp=datetime.now(timezone.utc)
+                    )
+
+                    for ban in found:
+                        ban_player = ban.get('Player', 'Unknown')
+                        player_id = await self.get_player_id_from_name(ban_player)
+                        player_link = self.format_player_link(ban_player, player_id)
+
+                        ban_info = [f"**Player:** {player_link}"]
+
+                        if ban.get('Reason'):
+                            ban_info.append(f"**Reason:** {ban.get('Reason')}")
+                        if ban.get('Moderator'):
+                            ban_info.append(f"**Banned By:** {ban.get('Moderator')}")
+                        if ban.get('Timestamp'):
+                            ban_time = datetime.fromtimestamp(ban.get('Timestamp'), tz=timezone.utc)
+                            ban_info.append(f"**Date:** {ban_time.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+
+                        embed.add_field(
+                            name="Ban Details",
+                            value='\n'.join(ban_info),
+                            inline=False
+                        )
+                else:
+                    embed = discord.Embed(
+                        title="✅ Ban Status: NOT BANNED",
+                        description=f"Player **{player}** is not currently banned.",
+                        color=discord.Color.green(),
+                        timestamp=datetime.now(timezone.utc)
+                    )
+            else:
+                embed = discord.Embed(
+                    title="🔨 Server Bans",
+                    description=f"**Total Bans:** {len(data)}",
+                    color=discord.Color.red(),
+                    timestamp=datetime.now(timezone.utc)
+                )
+
+                for i, ban in enumerate(data[:25]):
+                    ban_player = ban.get('Player', 'Unknown')
+                    player_id = await self.get_player_id_from_name(ban_player)
+                    player_link = self.format_player_link(ban_player, player_id)
+
+                    ban_info = [f"**Player:** {player_link}"]
+
+                    if ban.get('Reason'):
+                        ban_info.append(f"**Reason:** {ban.get('Reason')}")
+                    if ban.get('Moderator'):
+                        ban_info.append(f"**By:** {ban.get('Moderator')}")
+
+                    embed.add_field(
+                        name=f"Ban {i + 1}",
+                        value='\n'.join(ban_info),
+                        inline=False
+                    )
+
+                if len(data) > 25:
+                    embed.add_field(
+                        name="⚠️ Note",
+                        value=f"Showing first 25 of {len(data)} bans",
+                        inline=False
+                    )
+
+            embed.set_footer(text="ER:LC API")
+        else:
+            embed = self.create_embed("🔨 Server Bans", data)
+
+        await interaction.followup.send(embed=embed)
+
+    @app_commands.command(name="command", description="Execute a command on the server")
+    @app_commands.describe(command="The command to execute (e.g., :h Hello everyone!)")
+    @app_commands.default_permissions(administrator=True)
+    async def send_command(self, interaction: discord.Interaction, command: str):
+        """Send a command to the ER:LC server."""
+        config = self.get_config(interaction.guild_id)
+        if not config:
+            await interaction.response.send_message("❌ Please setup the API first using `/erlc setup`", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        data = await self.make_request(
+            '/v1/server/command',
+            config['server_key'],
+            method="POST",
+            json_data={'command': command}
+        )
+
+        if data.get('success'):
+            embed = discord.Embed(
+                title="✅ Command Executed",
+                description=f"Command `{command}` was executed successfully.",
+                color=discord.Color.green()
+            )
+        else:
+            embed = discord.Embed(
+                title="❌ Command Failed",
+                description=data.get('error', 'Unknown error'),
+                color=discord.Color.red()
+            )
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+async def setup(bot):
+    """Setup function to add the cog to the bot."""
+    await bot.add_cog(ERLC(bot))

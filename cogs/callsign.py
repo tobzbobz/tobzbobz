@@ -135,40 +135,27 @@ async def add_callsign_to_database(callsign: str, discord_user_id: int, discord_
             discord_user_id
         )
 
-        # Handle BLANK callsigns differently
-        if callsign == "BLANK":
-            await conn.execute(
-                '''INSERT INTO callsigns
-                   (callsign, discord_user_id, discord_username, roblox_user_id, roblox_username,
-                    fenz_prefix, hhstj_prefix, approved_by_id, approved_by_name, callsign_history)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)''',
-                callsign, discord_user_id, discord_username, roblox_user_id, roblox_username,
-                fenz_prefix, hhstj_prefix, discord_user_id, discord_username,
-                json.dumps(history)
-            )
-        else:
-            # For normal callsigns, use ON CONFLICT to handle edge cases
-            await conn.execute(
-                '''INSERT INTO callsigns
-                   (callsign, discord_user_id, discord_username, roblox_user_id, roblox_username,
-                    fenz_prefix, hhstj_prefix, approved_by_id, approved_by_name, callsign_history)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (callsign) DO
-                UPDATE SET
-                    discord_user_id = EXCLUDED.discord_user_id,
-                    discord_username = EXCLUDED.discord_username,
-                    roblox_user_id = EXCLUDED.roblox_user_id,
-                    roblox_username = EXCLUDED.roblox_username,
-                    fenz_prefix = EXCLUDED.fenz_prefix,
-                    hhstj_prefix = EXCLUDED.hhstj_prefix,
-                    approved_by_id = EXCLUDED.approved_by_id,
-                    approved_by_name = EXCLUDED.approved_by_name,
-                    callsign_history = EXCLUDED.callsign_history,
-                    approved_at = NOW()''',
-                callsign, discord_user_id, discord_username, roblox_user_id, roblox_username,
-                fenz_prefix, hhstj_prefix, discord_user_id, discord_username,
-                json.dumps(history)
-            )
-
+        # Insert the new callsign with ON CONFLICT on discord_user_id
+        await conn.execute(
+            '''INSERT INTO callsigns
+               (callsign, discord_user_id, discord_username, roblox_user_id, roblox_username,
+                fenz_prefix, hhstj_prefix, approved_by_id, approved_by_name, callsign_history)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+               ON CONFLICT (discord_user_id) DO UPDATE SET
+                callsign = EXCLUDED.callsign,
+                discord_username = EXCLUDED.discord_username,
+                roblox_user_id = EXCLUDED.roblox_user_id,
+                roblox_username = EXCLUDED.roblox_username,
+                fenz_prefix = EXCLUDED.fenz_prefix,
+                hhstj_prefix = EXCLUDED.hhstj_prefix,
+                approved_by_id = EXCLUDED.approved_by_id,
+                approved_by_name = EXCLUDED.approved_by_name,
+                callsign_history = EXCLUDED.callsign_history,
+                approved_at = NOW()''',
+            callsign, discord_user_id, discord_username, roblox_user_id, roblox_username,
+            fenz_prefix, hhstj_prefix, discord_user_id, discord_username,
+            json.dumps(history)
+        )
 
 def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_username: str,
                     has_fenz_high_command: bool = False, has_hhstj_high_command: bool = False) -> str:
@@ -696,7 +683,7 @@ class CallsignCog(commands.Cog):
     @app_commands.checks.has_permissions(administrator=True)
     @app_commands.describe(
         user="The user to assign the callsign to",
-        callsign="The callsign number (1-3 digits) or 'blank' for High Command",
+        callsign="The callsign number (1-3 digits)",
         use_affix="Whether to use rank prefix (High Command only - defaults to True)"
     )
     async def assign_callsign(self, interaction: discord.Interaction, user: discord.Member, callsign: str,
