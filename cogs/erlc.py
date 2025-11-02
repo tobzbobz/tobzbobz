@@ -532,14 +532,19 @@ class ERLC(commands.GroupCog, name="erlc"):
             enabled: bool
     ):
         """Configure automatic log monitoring."""
+        # ✅ Check config BEFORE deferring (to respond immediately if not set up)
         config = self.get_config(interaction.guild_id)
         if not config:
-            await interaction.response.send_message("❌ Please setup the API first using `/erlc setup`", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Please setup the API first using `/erlc setup`",
+                ephemeral=True
+            )
             return
 
+        # ✅ NOW defer for the async work
         await interaction.response.defer(ephemeral=True)
 
-        # ✅ AWAIT this call
+        # Do async work
         await self.set_log_monitoring(interaction.guild_id, log_type, enabled)
 
         embed = discord.Embed(
@@ -554,7 +559,8 @@ class ERLC(commands.GroupCog, name="erlc"):
         if channel and enabled:
             embed.add_field(name="Channel", value=channel.mention, inline=True)
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        # ✅ Use followup since we deferred
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="interval", description="Change the log monitoring check interval")
     @app_commands.describe(
