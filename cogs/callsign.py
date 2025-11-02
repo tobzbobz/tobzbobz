@@ -289,7 +289,8 @@ class CallsignCog(commands.Cog):
                                 'strikes': sheets_manager.determine_strikes_value(member.roles) if member else None,
                                 'qualifications': sheets_manager.determine_qualifications(member.roles,
                                                                                           is_command_rank) if member else None
-                            })                            continue
+                            })
+                            continue
 
                         # ✅ CHECK FOR RANK CHANGES
                         is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)

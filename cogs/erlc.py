@@ -43,6 +43,14 @@ class ERLC(commands.GroupCog, name="erlc"):
     async def cog_load(self):
         """Initialize the aiohttp session and load configs from database."""
         self.session = aiohttp.ClientSession()
+
+        # ✅ Check if database is connected
+        if not self.db or not self.db.pool:
+            logger.error("❌ Database not connected when ERLC cog loaded!")
+            print("❌ ERLC: Database not available!")
+        else:
+            logger.info("✅ ERLC: Database connection available")
+
         await self.load_all_configs()
         self.log_monitor.start()
 
@@ -105,6 +113,23 @@ class ERLC(commands.GroupCog, name="erlc"):
         # Save to memory cache
         self.guild_configs[guild_id] = config
 
+        # ✅ Save to database with proper error handling
+        try:
+            success = await self.db.set_setting(guild_id, 'erlc_config', config)
+            if success:
+                logger.info(f"✅ Saved ERLC config to database for guild {guild_id}")
+            else:
+                logger.error(f"❌ Failed to save ERLC config to database for guild {guild_id}")
+            return success
+        except Exception as e:
+            logger.error(f"❌ Error saving ERLC config: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+        # Save to memory cache
+        self.guild_configs[guild_id] = config
+
         # Save to database
         await self.db.set_setting(guild_id, 'erlc_config', config)
 
@@ -112,13 +137,13 @@ class ERLC(commands.GroupCog, name="erlc"):
         """Get configuration for a guild."""
         return self.guild_configs.get(guild_id)
 
-    def set_log_monitoring(self, guild_id: int, log_type: str, enabled: bool):
+    async def set_log_monitoring(self, guild_id: int, log_type: str, enabled: bool):
         """Enable/disable specific log monitoring and save to database."""
         config = self.get_config(guild_id)
         if config and log_type in config['log_monitoring']:
             config['log_monitoring'][log_type] = enabled
-            # Save to database
-            asyncio.create_task(self.db.set_setting(guild_id, 'erlc_config', config))
+            # ✅ Await properly
+            await self.db.set_setting(guild_id, 'erlc_config', config)
 
     async def make_request(self, endpoint: str, server_key: str, method: str = "GET", json_data: dict = None):
         """
@@ -451,7 +476,12 @@ class ERLC(commands.GroupCog, name="erlc"):
             modcalls_channel: Optional[discord.TextChannel] = None
     ):
         """Setup the ER:LC API configuration for this server."""
-        self.set_config(
+
+        # Defer response since database operations might take time
+        await interaction.response.defer(ephemeral=True)
+
+        # ✅ AWAIT the set_config call
+        success = await self.set_config(
             interaction.guild_id,
             server_key,
             channel.id,
@@ -462,9 +492,16 @@ class ERLC(commands.GroupCog, name="erlc"):
             modcalls_channel.id if modcalls_channel else None
         )
 
+        if not success:
+            await interaction.followup.send(
+                "❌ Failed to save configuration to database. Please check bot logs.",
+                ephemeral=True
+            )
+            return
+
         embed = discord.Embed(
             title="✅ Configuration Saved",
-            description=f"ER:LC API has been configured for this server.",
+            description=f"ER:LC API has been configured for this server and saved to database.",
             color=discord.Color.green()
         )
         embed.add_field(name="Default Channel", value=channel.mention, inline=False)
@@ -480,7 +517,7 @@ class ERLC(commands.GroupCog, name="erlc"):
         if modcalls_channel:
             embed.add_field(name="Mod Call Logs", value=modcalls_channel.mention, inline=True)
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="logs", description="Configure automatic log monitoring")
     @app_commands.describe(
@@ -500,7 +537,10 @@ class ERLC(commands.GroupCog, name="erlc"):
             await interaction.response.send_message("❌ Please setup the API first using `/erlc setup`", ephemeral=True)
             return
 
-        self.set_log_monitoring(interaction.guild_id, log_type, enabled)
+        await interaction.response.defer(ephemeral=True)
+
+        # ✅ AWAIT this call
+        await self.set_log_monitoring(interaction.guild_id, log_type, enabled)
 
         embed = discord.Embed(
             title="✅ Log Monitoring Updated",
