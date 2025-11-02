@@ -1149,7 +1149,225 @@ class CallsignCog(commands.Cog):
             import traceback
             traceback.print_exc()
 
+    @callsign_group.command(name="request", description="Request a callsign for yourself")
+    @app_commands.describe(callsign="The numeric callsign you want (e.g., 1, 42, 123)")
+    async def request_callsign(self, interaction: discord.Interaction, callsign: str):
+        """Allow users to request a callsign for themselves"""
+        await interaction.response.defer(thinking=True, ephemeral=True)
 
+        if db.pool is None:
+            await interaction.followup.send(
+                "<:Denied:1426930694633816248> Database not connected. Please try again.",
+                ephemeral=True
+            )
+            return
+
+        try:
+            # Validate callsign format (1-3 digits)
+            if not callsign.isdigit() or len(callsign) > 3 or len(callsign) < 1:
+                await interaction.followup.send(
+                    "<:Denied:1426930694633816248> Callsign must be a 1-3 digit number (e.g., 1, 42, 001)",
+                    ephemeral=True
+                )
+                return
+
+            # Pad callsign to 3 digits
+            callsign = callsign.zfill(3)
+
+            # Get user's Roblox info
+            bloxlink_data = await self.get_bloxlink_data(interaction.user.id, interaction.guild.id)
+            if not bloxlink_data:
+                await interaction.followup.send(
+                    "<:Denied:1426930694633816248> Could not find your Roblox account. "
+                    "Please verify your Bloxlink connection with `/verify` and try again.",
+                    ephemeral=True
+                )
+                return
+
+            roblox_id = bloxlink_data['id']
+            roblox_username = await self.get_roblox_user_from_id(roblox_id)
+
+            if not roblox_username:
+                await interaction.followup.send(
+                    "<:Denied:1426930694633816248> Failed to fetch Roblox username.",
+                    ephemeral=True
+                )
+                return
+
+            # Get FENZ rank from user's roles
+            fenz_prefix = None
+            fenz_rank_name = None
+            is_high_command = False
+
+            for role_id, (rank_name, prefix) in FENZ_RANK_MAP.items():
+                if any(role.id == role_id for role in interaction.user.roles):
+                    fenz_prefix = prefix
+                    fenz_rank_name = rank_name
+                    if role_id in HIGH_COMMAND_RANKS:
+                        is_high_command = True
+                    break
+
+            # Get HHStJ rank from user's roles
+            hhstj_prefix = None
+            for role_id, (rank_name, prefix) in HHSTJ_RANK_MAP.items():
+                if any(role.id == role_id for role in interaction.user.roles):
+                    hhstj_prefix = prefix
+                    break
+
+            if not fenz_prefix:
+                await interaction.followup.send(
+                    "<:Denied:1426930694633816248> You do not have a valid FENZ rank role. "
+                    "Please contact an admin.",
+                    ephemeral=True
+                )
+                return
+
+            # Check if user already has a callsign - allow replacement
+            async with db.pool.acquire() as conn:
+                user_callsign = await conn.fetchrow(
+                    'SELECT * FROM callsigns WHERE discord_user_id = $1',
+                    interaction.user.id
+                )
+
+            # Note: We now allow users to request new callsigns even if they have one
+            # The add_callsign_to_database function will handle replacing the old one
+
+            # Check if callsign already exists
+            existing = await check_callsign_exists(callsign)
+            if existing:
+                await interaction.followup.send(
+                    f"<:Denied:1426930694633816248> Callsign **{existing['fenz_prefix']}-{callsign}** is already assigned to <@{existing['discord_user_id']}>.\n"
+                    f"Please choose a different callsign.",
+                    ephemeral=True
+                )
+                return
+
+            # ✅ AUTO-ACCEPT: Callsign is available!
+            # FOR HIGH COMMAND - Send choice message
+            if is_high_command:
+                embed = discord.Embed(
+                    title="🎖️ High Command Callsign Request",
+                    description=f"Your callsign request for **{callsign}** is approved!\n\n"
+                                f"As a **{fenz_rank_name}**, you can choose whether to use your rank prefix or not.",
+                    color=discord.Color.gold()
+                )
+                embed.add_field(
+                    name="📋 Option 1: With Prefix",
+                    value=f"Your callsign will be: **{fenz_prefix}-{callsign}**\n"
+                          f"Example nickname: `{fenz_prefix}-{callsign} | {roblox_username}`",
+                    inline=False
+                )
+                embed.add_field(
+                    name="🔢 Option 2: Without Prefix",
+                    value=f"Your callsign will be: **{callsign}**\n"
+                          f"Example nickname: `{callsign} | {roblox_username}`",
+                    inline=False
+                )
+                embed.add_field(
+                    name="⏰ Time Limit",
+                    value="You have **5 minutes** to make your choice.",
+                    inline=False
+                )
+                embed.set_footer(text="Click one of the buttons below to make your choice")
+
+                # Create the view for high command
+                view = HighCommandPrefixChoice(
+                    interaction.user.id, self, interaction, interaction.user, callsign,
+                    fenz_prefix, hhstj_prefix, roblox_id, roblox_username
+                )
+
+                try: discord.Forbidden:
+                    # Post in channel if DM fails
+                    channel_message = await interaction.channel.send(
+                        content=f"{interaction.user.mention}",
+                        embed=embed,
+                        view=view
+                    )
+                    view.message = channel_message
+                    await interaction.followup.send(
+                        f"<:Accepted:1426930333789585509> Your callsign request has been approved!\n"
+                        f"Please respond to the message above.",
+                        ephemeral=True
+                    )
+                except:
+                    pass
+                return
+
+            # FOR NON-HIGH COMMAND - Auto-accept with prefix
+            await add_callsign_to_database(
+                callsign, interaction.user.id, str(interaction.user),
+                roblox_id, roblox_username, fenz_prefix, hhstj_prefix
+            )
+
+            # Check for high command roles (for formatting)
+            is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in interaction.user.roles)
+            is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in interaction.user.roles)
+
+            # Update nickname
+            new_nickname = format_nickname(
+                fenz_prefix, callsign, hhstj_prefix, roblox_username,
+                is_fenz_high_command, is_hhstj_high_command
+            )
+
+            try:
+                await interaction.user.edit(nick=new_nickname)
+            except discord.Forbidden:
+                await interaction.followup.send(
+                    f"<:Accepted:1426930333789585509> Callsign **{fenz_prefix}-{callsign}** approved!\n"
+                    f"⚠️ Could not update nickname automatically. Please ask an admin to set it to: `{new_nickname}`",
+                    ephemeral=True
+                )
+                return
+
+            # Update Google Sheets
+            await sheets_manager.add_callsign_to_sheets(
+                interaction.user, callsign, fenz_prefix, roblox_username, interaction.user.id
+            )
+
+            # Send success message
+            success_embed = discord.Embed(
+                title="<:Accepted:1426930333789585509> Callsign Approved!",
+                description=f"Your callsign request has been automatically approved!",
+                color=discord.Color.green()
+            )
+
+            # Show old callsign if they had one
+            if user_callsign:
+                success_embed.add_field(
+                    name="Previous Callsign",
+                    value=f"~~{user_callsign['fenz_prefix']}-{user_callsign['callsign']}~~",
+                    inline=True
+                )
+
+            success_embed.add_field(
+                name="Your New Callsign",
+                value=f"**{fenz_prefix}-{callsign}**",
+                inline=True
+            )
+            success_embed.add_field(
+                name="Nickname",
+                value=f"`{new_nickname}`",
+                inline=True
+            )
+            success_embed.add_field(
+                name="✅ What's Been Done",
+                value="• Added to database\n• Updated your Discord nickname\n• Synced to Google Sheets" + (
+                    "\n• Previous callsign archived" if user_callsign else ""
+                ),
+                inline=False
+            )
+            success_embed.set_footer(text=f"Approved automatically • {interaction.user.display_name}")
+            success_embed.timestamp = datetime.utcnow()
+
+            await interaction.followup.send(embed=success_embed, ephemeral=True)
+
+        except Exception as e:
+            await interaction.followup.send(
+                f"<:Denied:1426930694633816248> Error processing request: {str(e)}",
+                ephemeral=True
+            )
+            import traceback
+            traceback.print_exc()
 
 class HighCommandPrefixChoice(discord.ui.View):
     def __init__(self, interaction_user_id: int, cog, original_interaction, user, callsign,
@@ -1337,6 +1555,7 @@ class HighCommandPrefixChoice(discord.ui.View):
                 )
             except Exception as e:
                 print(f"Error in timeout handler: {e}")
+
 
 
 async def setup(bot):
