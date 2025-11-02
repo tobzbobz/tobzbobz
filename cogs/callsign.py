@@ -107,9 +107,25 @@ async def check_callsign_exists(callsign: str) -> dict:
         return dict(row) if row else None
 
 
+def get_hhstj_prefix_from_roles(roles) -> str:
+    """Get HHStJ prefix from roles, prioritizing management over clinical"""
+    # First check for management roles (high command)
+    for role_id, (rank_name, prefix) in HHSTJ_RANK_MAP.items():
+        if role_id in HHSTJ_HIGH_COMMAND_RANKS:
+            if any(role.id == role_id for role in roles):
+                return prefix
+
+    # Then check for clinical roles
+    for role_id, (rank_name, prefix) in HHSTJ_RANK_MAP.items():
+        if role_id not in HHSTJ_HIGH_COMMAND_RANKS:
+            if any(role.id == role_id for role in roles):
+                return prefix
+
+    return ""
+
 async def add_callsign_to_database(callsign: str, discord_user_id: int, discord_username: str,
                                    roblox_user_id: str, roblox_username: str, fenz_prefix: str,
-                                   hhstj_prefix: str):
+                                   hhstj_prefix: str, approved_by_id: int, approved_by_name: str):
     """Add a new callsign to the database"""
     async with db.pool.acquire() as conn:
         # Check if user already has ANY callsign
@@ -135,7 +151,7 @@ async def add_callsign_to_database(callsign: str, discord_user_id: int, discord_
             discord_user_id
         )
 
-        # Insert the new callsign with ON CONFLICT on discord_user_id
+        # Insert the new callsign with proper approved_by fields
         await conn.execute(
             '''INSERT INTO callsigns
                (callsign, discord_user_id, discord_username, roblox_user_id, roblox_username,
@@ -153,7 +169,7 @@ async def add_callsign_to_database(callsign: str, discord_user_id: int, discord_
                 callsign_history = EXCLUDED.callsign_history,
                 approved_at = NOW()''',
             callsign, discord_user_id, discord_username, roblox_user_id, roblox_username,
-            fenz_prefix, hhstj_prefix, discord_user_id, discord_username,
+            fenz_prefix, hhstj_prefix, approved_by_id, approved_by_name,
             json.dumps(history)
         )
 
@@ -309,11 +325,7 @@ class CallsignCog(commands.Cog):
                                 break
 
                         # Get correct HHStJ rank from current roles
-                        correct_hhstj_prefix = None
-                        for role_id, (rank_name, prefix) in HHSTJ_RANK_MAP.items():
-                            if any(role.id == role_id for role in member.roles):
-                                correct_hhstj_prefix = prefix
-                                break
+                        hhstj_prefix = get_hhstj_prefix_from_roles(user.roles)
 
                         # Detect changes
                         fenz_changed = False
@@ -358,7 +370,7 @@ class CallsignCog(commands.Cog):
                                 await member.edit(nick=expected_nickname)
                                 nickname_updates += 1
                             except discord.Forbidden:
-                                print(f"⚠️ Cannot update nickname for {member.display_name} (missing permissions)")
+                                print(f"⚠️ Cannot update nickname for {member.display_name}")
                             except Exception as e:
                                 print(f"⚠️ Error updating nickname for {member.display_name}: {e}")
 
@@ -507,11 +519,8 @@ class CallsignCog(commands.Cog):
 
                             if roblox_username:
                                 # Get HHStJ rank from roles
-                                hhstj_prefix = None
-                                for role_id, (rank_name, prefix) in HHSTJ_RANK_MAP.items():
-                                    if any(role.id == role_id for role in member.roles):
-                                        hhstj_prefix = prefix
-                                        break
+                                hhstj_prefix = get_hhstj_prefix_from_roles(user.roles)
+
 
                                 # Add to database
                                 await add_callsign_to_database(
@@ -594,11 +603,8 @@ class CallsignCog(commands.Cog):
                                 break
 
                         # Get correct HHStJ rank from current roles
-                        current_hhstj_prefix = None
-                        for role_id, (rank_name, prefix) in HHSTJ_RANK_MAP.items():
-                            if any(role.id == role_id for role in member.roles):
-                                current_hhstj_prefix = prefix
-                                break
+                        hhstj_prefix = get_hhstj_prefix_from_roles(user.roles)
+
 
                         # Update HHStJ prefix in database if changed
                         if current_hhstj_prefix != record['hhstj_prefix']:
@@ -759,11 +765,8 @@ class CallsignCog(commands.Cog):
                     break
 
             # Get HHStJ rank from user's roles
-            hhstj_prefix = None
-            for role_id, (rank_name, prefix) in HHSTJ_RANK_MAP.items():
-                if any(role.id == role_id for role in user.roles):
-                    hhstj_prefix = prefix
-                    break
+            hhstj_prefix = get_hhstj_prefix_from_roles(user.roles)
+
 
             if not fenz_prefix:
                 await interaction.followup.send(
@@ -789,7 +792,9 @@ class CallsignCog(commands.Cog):
             # Add to database
             await add_callsign_to_database(
                 final_callsign, user.id, str(user), roblox_id, roblox_username,
-                final_fenz_prefix, hhstj_prefix or ""
+                final_fenz_prefix, hhstj_prefix or "",
+                interaction.user.id,  # ADD THIS - the admin who ran the command
+                interaction.user.display_name  # ADD THIS - admin's display name
             )
 
             # Format nickname
@@ -1284,11 +1289,7 @@ class CallsignCog(commands.Cog):
                     break
 
             # Get HHStJ rank from user's roles
-            hhstj_prefix = None
-            for role_id, (rank_name, prefix) in HHSTJ_RANK_MAP.items():
-                if any(role.id == role_id for role in interaction.user.roles):
-                    hhstj_prefix = prefix
-                    break
+            hhstj_prefix = get_hhstj_prefix_from_roles(user.roles)
 
             if not fenz_prefix:
                 await interaction.followup.send(
@@ -1369,7 +1370,9 @@ class CallsignCog(commands.Cog):
             # FOR NON-HIGH COMMAND - Auto-accept with prefix
             await add_callsign_to_database(
                 callsign, interaction.user.id, str(interaction.user),
-                roblox_id, roblox_username, fenz_prefix, hhstj_prefix
+                roblox_id, roblox_username, fenz_prefix, hhstj_prefix,
+                interaction.user.id,  # Self-requested
+                interaction.user.display_name  # Self-requested
             )
 
             # Check for high command roles (for formatting)
@@ -1477,7 +1480,9 @@ class HighCommandPrefixChoice(discord.ui.View):
         await add_callsign_to_database(
             self.callsign, self.user.id, str(self.user),
             self.roblox_id, self.roblox_username,
-            self.fenz_prefix, self.hhstj_prefix
+            self.fenz_prefix, self.hhstj_prefix,
+            self.user.id,  # Self-requested
+            self.user.display_name  # Self-requested
         )
 
         is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in self.user.roles)
@@ -1535,7 +1540,9 @@ class HighCommandPrefixChoice(discord.ui.View):
         await add_callsign_to_database(
             self.callsign, self.user.id, str(self.user),
             self.roblox_id, self.roblox_username,
-            "", self.hhstj_prefix  # Empty prefix
+            self.fenz_prefix, self.hhstj_prefix,
+            self.user.id,  # Self-requested
+            self.user.display_name  # Self-requested
         )
 
         is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in self.user.roles)
