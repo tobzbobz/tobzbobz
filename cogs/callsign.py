@@ -697,10 +697,10 @@ class CallsignCog(commands.Cog):
     @app_commands.describe(
         user="The user to assign the callsign to",
         callsign="The callsign number (1-3 digits) or 'blank' for High Command",
-        use_prefix="Whether to use rank prefix (High Command only - defaults to True)"
+        use_affix="Whether to use rank prefix (High Command only - defaults to True)"
     )
     async def assign_callsign(self, interaction: discord.Interaction, user: discord.Member, callsign: str,
-                              use_prefix: bool = True):
+                              use_affix: bool = True):
         await interaction.response.defer(thinking=True)
 
         if db.pool is None:
@@ -788,79 +788,17 @@ class CallsignCog(commands.Cog):
                 )
                 return
 
-            # FOR HIGH COMMAND - Send choice message
-            if is_high_command and callsign != "BLANK":
-                embed = discord.Embed(
-                    title="🎖️ High Command Callsign Assignment",
-                    description=f"{user.mention}, you are being assigned callsign **{callsign}**.\n\n"
-                                f"As a **{fenz_rank_name}**, "
-                                f"you can choose whether to use your rank prefix or not.",
-                    color=discord.Color.gold()
-                )
-                embed.add_field(
-                    name="📋 Option 1: With Prefix",
-                    value=f"Your callsign will be: **{fenz_prefix}-{callsign}**\n"
-                          f"Example nickname: `{fenz_prefix}-{callsign} | {roblox_username}`",
-                    inline=False
-                )
-                embed.add_field(
-                    name="🔢 Option 2: Without Prefix",
-                    value=f"Your callsign will be: **{callsign}**\n"
-                          f"Example nickname: `{callsign} | {roblox_username}`",
-                    inline=False
-                )
-                embed.add_field(
-                    name="⏰ Time Limit",
-                    value="You have **5 minutes** to make your choice.",
-                    inline=False
-                )
-                embed.set_footer(text="Click one of the buttons below to make your choice")
-
-                # Create the view
-                view = HighCommandPrefixChoice(
-                    interaction.user.id, self, interaction, user, callsign,
-                    fenz_prefix, hhstj_prefix, roblox_id, roblox_username
-                )
-
-                # Send ephemeral message to HIGH COMMAND member
-                try:
-                    dm_message = await user.send(embed=embed, view=view)
-                    view.message = dm_message
-                    dm_sent = True
-                except discord.Forbidden:
-                    dm_sent = False
-
-                if dm_sent:
-                    await interaction.followup.send(
-                        f"📩 Sent a DM to {user.mention} to choose their callsign format!",
-                        ephemeral=True
-                    )
-                else:
-                    channel_message = await interaction.channel.send(
-                        content=f"{user.mention}",
-                        embed=embed,
-                        view=view
-                    )
-                    view.message = channel_message
-
-                    await interaction.followup.send(
-                        f"📌 Posted callsign choice for {user.mention} in channel (DMs are disabled).",
-                        ephemeral=True
-                    )
-
-                return
-
-            # Determine the prefix to use based on use_prefix parameter and rank
+            # Determine what to assign based on use_affix parameter and rank
             if callsign == "BLANK":
-                # Blank callsign - no number at all
-                final_fenz_prefix = fenz_prefix
+                # BLANK means: Rank prefix only, no number
+                final_fenz_prefix = fenz_prefix  # Always keep rank prefix
                 final_callsign = "BLANK"
-            elif is_high_command and not use_prefix:
-                # High command chose no prefix
-                final_fenz_prefix = ""
-                final_callsign = callsign
+            elif is_high_command and not use_affix:
+                # High command without number: Just rank prefix, no callsign number
+                final_fenz_prefix = fenz_prefix  # Keep rank prefix
+                final_callsign = "BLANK"  # No number
             else:
-                # Normal assignment with prefix
+                # Normal assignment: Rank prefix + number
                 final_fenz_prefix = fenz_prefix
                 final_callsign = callsign
 
