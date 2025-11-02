@@ -276,6 +276,7 @@ class CallsignCog(commands.Cog):
                             rank_type, rank_data = sheets_manager.determine_rank_type([])
                             is_command_rank = False
 
+                            # In sync_callsigns function, around line 668:
                             callsign_data.append({
                                 'fenz_prefix': record['fenz_prefix'] or '',
                                 'hhstj_prefix': record['hhstj_prefix'] or '',
@@ -284,9 +285,11 @@ class CallsignCog(commands.Cog):
                                 'discord_username': record['discord_username'],
                                 'roblox_user_id': record['roblox_user_id'],
                                 'roblox_username': record['roblox_username'],
-                                'is_command': is_command_rank
-                            })
-                            continue
+                                'is_command': is_command_rank,
+                                'strikes': sheets_manager.determine_strikes_value(member.roles) if member else None,
+                                'qualifications': sheets_manager.determine_qualifications(member.roles,
+                                                                                          is_command_rank) if member else None
+                            })                            continue
 
                         # ✅ CHECK FOR RANK CHANGES
                         is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
@@ -361,14 +364,17 @@ class CallsignCog(commands.Cog):
                         is_command_rank = (rank_type == 'command')
 
                         callsign_data.append({
-                            'fenz_prefix': current_fenz_prefix or '',
-                            'hhstj_prefix': current_hhstj_prefix or '',
+                            'fenz_prefix': record['fenz_prefix'] or '',
+                            'hhstj_prefix': record['hhstj_prefix'] or '',
                             'callsign': record['callsign'],
                             'discord_user_id': record['discord_user_id'],
                             'discord_username': record['discord_username'],
                             'roblox_user_id': record['roblox_user_id'],
                             'roblox_username': record['roblox_username'],
-                            'is_command': is_command_rank
+                            'is_command': is_command_rank,
+                            'strikes': sheets_manager.determine_strikes_value(member.roles) if member else None,
+                            'qualifications': sheets_manager.determine_qualifications(member.roles,
+                                                                                      is_command_rank) if member else None
                         })
 
                     # Sort by rank hierarchy
@@ -557,7 +563,10 @@ class CallsignCog(commands.Cog):
                     'discord_username': record['discord_username'],
                     'roblox_user_id': record['roblox_user_id'],
                     'roblox_username': record['roblox_username'],
-                    'is_command': is_command_rank
+                    'is_command': is_command_rank,
+                    'strikes': sheets_manager.determine_strikes_value(member.roles) if member else None,
+                    'qualifications': sheets_manager.determine_qualifications(member.roles,
+                                                                           is_command_rank) if member else None
                 })
 
             # Sort by rank hierarchy
@@ -1276,7 +1285,7 @@ class CallsignCog(commands.Cog):
                     fenz_prefix, hhstj_prefix, roblox_id, roblox_username
                 )
 
-                try: discord.Forbidden:
+                try:
                     # Post in channel if DM fails
                     channel_message = await interaction.channel.send(
                         content=f"{interaction.user.mention}",
@@ -1289,7 +1298,9 @@ class CallsignCog(commands.Cog):
                         f"Please respond to the message above.",
                         ephemeral=True
                     )
-                except:
+                    channel_message_sent=True
+                except discord.Forbidden:
+                    channel_message_sent=False
                     pass
                 return
 

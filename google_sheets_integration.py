@@ -25,8 +25,8 @@ HHSTJ_RANK_MAP = {
 # Strikes Mapping (Column F for Non-Command, Column D for Command)
 STRIKES_ROLES = {
     1432540488312950805: "Under Investigation",
-    1365536207726973060: "Strike 3",
-    1365536206892437545: "Strike 2",
+    1365536207726973060: "Strike 3!!",
+    1365536206892437545: "Strike 2!",
     1365536206083067927: "Strike 1",
 }
 
@@ -38,7 +38,7 @@ QUALIFICATIONS_ROLES = {
     1365538697604366418: "Technical Rescue",
     1411666839150395432: "OPS SUPPORT",
     1365538252039127101: "Rescue",
-    1420021808060436702: "Qualified medical responder",  # Command only
+    1420021808060436702: "FENZ medical responder",
 }
 
 # Rank Priority for Command sorting (lower number = higher priority)
@@ -279,13 +279,13 @@ class GoogleSheetsManager:
 
     def determine_strikes_value(self, member_roles) -> str:
         """
-        Determine strikes value based on roles (priority: Under Investigation > Strike 3 > Strike 2 > Strike 1 > Clear)
+        Determine strikes value based on roles (priority: Under Investigation > Strike 3!! > Strike 2! > Strike 1 > Clear)
         """
         # Check in priority order
         priority_order = [
             (1432540488312950805, "Under Investigation"),
-            (1365536207726973060, "Strike 3"),
-            (1365536206892437545, "Strike 2"),
+            (1365536207726973060, "Strike 3!!"),
+            (1365536206892437545, "Strike 2!"),
             (1365536206083067927, "Strike 1"),
         ]
 
@@ -312,7 +312,7 @@ class GoogleSheetsManager:
                 qualifications.append(qual)
 
         if not qualifications:
-            return "No additional qualifications"
+            return "No Additional Qualifications"
 
         # Return comma-separated list
         return ", ".join(qualifications)
@@ -502,8 +502,8 @@ class GoogleSheetsManager:
 
     async def batch_update_callsigns(self, callsign_data: list):
         """
-        Smart batch update - only updates what changed
-        Uses batch API to avoid rate limits
+        Smart batch update with automatic role detection
+        Automatically sets strikes and qualifications based on Discord roles
         """
         try:
             if not self.client:
@@ -525,39 +525,36 @@ class GoogleSheetsManager:
 
             # Build maps of existing data (Discord ID -> row data)
             existing_nc_map = {}
-            for i, row in enumerate(existing_non_command[1:], start=2):  # Start at row 2
-                if row and len(row) >= 7 and row[6]:  # Discord ID in column G
-                    existing_nc_map[row[6]] = {
-                        'row': i,
-                        'data': row
-                    }
+            for i, row in enumerate(existing_non_command[1:], start=2):
+                if row and len(row) >= 7 and row[6]:
+                    existing_nc_map[row[6]] = {'row': i, 'data': row}
 
             existing_cmd_map = {}
             for i, row in enumerate(existing_command[1:], start=2):
-                if row and len(row) >= 5 and row[4]:  # Discord ID in column E
-                    existing_cmd_map[row[4]] = {
-                        'row': i,
-                        'data': row
-                    }
+                if row and len(row) >= 5 and row[4]:
+                    existing_cmd_map[row[4]] = {'row': i, 'data': row}
 
-            # Track what needs updating
-            nc_updates = []  # Rows to update
-            nc_new = []  # New rows to add
+            nc_updates = []
+            nc_new = []
             cmd_updates = []
             cmd_new = []
-            nc_deletes = set(existing_nc_map.keys())  # Will remove as we find them
+            nc_deletes = set(existing_nc_map.keys())
             cmd_deletes = set(existing_cmd_map.keys())
 
             # Process callsign data
             for data in callsign_data:
                 fenz_prefix = data['fenz_prefix']
                 discord_id = str(data['discord_user_id'])
-                is_command = data.get('is_command', False)  # Use the flag from callsign data
+                is_command = data.get('is_command', False)
+
+                # ✅ NEW: Get strikes and qualifications from the passed data
+                # These should be calculated BEFORE calling this function
+                strikes = data.get('strikes', None)
+                qualifications = data.get('qualifications', None)
 
                 if is_command:
-                    # Remove from delete list (user still exists)
                     cmd_deletes.discard(discord_id)
-                    nc_deletes.discard(discord_id)  # Remove from NC if they transitioned
+                    nc_deletes.discard(discord_id)
 
                     full_callsign = f"{fenz_prefix}-{data['callsign']}" if fenz_prefix else data['callsign']
                     rank_priority = COMMAND_RANK_PRIORITY.get(fenz_prefix, 99)
@@ -565,42 +562,33 @@ class GoogleSheetsManager:
                     new_row = [
                         full_callsign,
                         data['roblox_username'],
-                        "No additional qualifications",
-                        "Good Boy",
+                        qualifications or "No Additional Qualifications",  # ✅ Use passed value
+                        strikes or "Good Boy",  # ✅ Use passed value
                         discord_id,
                         rank_priority
                     ]
 
-                    # Check if exists and needs update
                     if discord_id in existing_cmd_map:
                         existing = existing_cmd_map[discord_id]['data']
-
-                        # Ensure existing row has at least 6 columns, pad with empty strings if needed
                         while len(existing) < 6:
                             existing.append('')
 
-                        # Compare relevant fields (skip strikes/qualifications - manual edits)
-                        if (existing[0] != new_row[0] or  # Callsign
-                                existing[1] != new_row[1] or  # Roblox username
-                                existing[4] != new_row[4] or  # Discord ID
-                                str(existing[5]) != str(new_row[5])):  # Rank priority
-
-                            # Preserve manual edits for strikes (col D) and qualifications (col C)
-                            new_row[2] = existing[2] if len(existing) > 2 and existing[2] else new_row[2]
-                            new_row[3] = existing[3] if len(existing) > 3 and existing[3] else new_row[3]
-
+                        # ✅ Check if ANY field changed (including strikes/qualifications)
+                        if (existing[0] != new_row[0] or
+                                existing[1] != new_row[1] or
+                                existing[2] != new_row[2] or  # Qualifications
+                                existing[3] != new_row[3] or  # Strikes
+                                existing[4] != new_row[4] or
+                                str(existing[5]) != str(new_row[5])):
                             cmd_updates.append({
                                 'row': existing_cmd_map[discord_id]['row'],
                                 'data': new_row
                             })
-
-                        elif discord_id in existing_nc_map:
-                            # Rank transition: NC -> Command
-                            nc_deletes.add(discord_id)
-                            cmd_new.append(new_row)
-                        else:
-                            # Completely new
-                            cmd_new.append(new_row)
+                    elif discord_id in existing_nc_map:
+                        nc_deletes.add(discord_id)
+                        cmd_new.append(new_row)
+                    else:
+                        cmd_new.append(new_row)
 
                 else:  # Non-command
                     nc_deletes.discard(discord_id)
@@ -611,25 +599,35 @@ class GoogleSheetsManager:
                                         if prefix == fenz_prefix), 3)
 
                     new_row = [
-                        full_callsign, fenz_prefix, data['callsign'], data['roblox_username'],
-                        "", "Clear", discord_id, rank_number, "No additional qualifications"
+                        full_callsign,
+                        fenz_prefix,
+                        data['callsign'],
+                        data['roblox_username'],
+                        "",  # Column E (empty)
+                        strikes or "Clear",  # ✅ Use passed value
+                        discord_id,
+                        rank_number,
+                        qualifications or "No Additional Qualifications"  # ✅ Use passed value
                     ]
 
                     if discord_id in existing_nc_map:
                         existing = existing_nc_map[discord_id]['data']
-                        if (existing[0] != new_row[0] or existing[1] != new_row[1] or
-                                existing[2] != new_row[2] or existing[3] != new_row[3] or
-                                existing[6] != new_row[6] or existing[7] != str(new_row[7])):
-                            # Preserve strikes and qualifications
-                            new_row[5] = existing[5] if len(existing) > 5 else new_row[5]
-                            new_row[8] = existing[8] if len(existing) > 8 else new_row[8]
+
+                        # ✅ Check if ANY field changed (including strikes/qualifications)
+                        if (existing[0] != new_row[0] or
+                                existing[1] != new_row[1] or
+                                existing[2] != new_row[2] or
+                                existing[3] != new_row[3] or
+                                existing[5] != new_row[5] or  # Strikes
+                                existing[6] != new_row[6] or
+                                str(existing[7]) != str(new_row[7]) or
+                                existing[8] != new_row[8]):  # Qualifications
 
                             nc_updates.append({
                                 'row': existing_nc_map[discord_id]['row'],
                                 'data': new_row
                             })
                     elif discord_id in existing_cmd_map:
-                        # Rank transition: Command -> NC
                         cmd_deletes.add(discord_id)
                         nc_new.append(new_row)
                     else:
@@ -640,16 +638,16 @@ class GoogleSheetsManager:
             print(f"➕ New: {len(nc_new)} NC, {len(cmd_new)} CMD")
             print(f"🗑️ Delete: {len(nc_deletes)} NC, {len(cmd_deletes)} CMD")
 
-            # Delete removed users (from bottom to top to preserve row numbers)
+            # Delete removed users
             for discord_id in sorted(nc_deletes, key=lambda x: existing_nc_map[x]['row'], reverse=True):
                 non_command_sheet.delete_rows(existing_nc_map[discord_id]['row'])
-                await asyncio.sleep(0.3)  # Rate limit deletes
+                await asyncio.sleep(0.3)
 
             for discord_id in sorted(cmd_deletes, key=lambda x: existing_cmd_map[x]['row'], reverse=True):
                 command_sheet.delete_rows(existing_cmd_map[discord_id]['row'])
-                await asyncio.sleep(0.3)  # Rate limit deletes
+                await asyncio.sleep(0.3)
 
-            # ===== BATCH UPDATE EXISTING ROWS (Non-Command) =====
+            # BATCH UPDATE EXISTING ROWS (Non-Command)
             if nc_updates:
                 batch_data = []
                 for update in nc_updates:
@@ -658,19 +656,19 @@ class GoogleSheetsManager:
                         'values': [update['data']]
                     })
 
-                # Update in chunks of 50 to stay within limits
                 chunk_size = 50
                 for i in range(0, len(batch_data), chunk_size):
                     chunk = batch_data[i:i + chunk_size]
                     non_command_sheet.batch_update(chunk, value_input_option='RAW')
                     print(f"✅ Updated {len(chunk)} NC rows")
                     if i + chunk_size < len(batch_data):
-                        await asyncio.sleep(1)  # Delay between chunks
+                        await asyncio.sleep(1)
 
+                # ✅ Copy validations to updated rows
                 updated_rows = [update['row'] for update in nc_updates]
                 self.batch_copy_validations(non_command_sheet, 2, updated_rows, [6, 9])
 
-            # ===== BATCH UPDATE EXISTING ROWS (Command) =====
+            # BATCH UPDATE EXISTING ROWS (Command)
             if cmd_updates:
                 batch_data = []
                 for update in cmd_updates:
@@ -679,38 +677,36 @@ class GoogleSheetsManager:
                         'values': [update['data']]
                     })
 
-                # Update in chunks of 50
                 chunk_size = 50
                 for i in range(0, len(batch_data), chunk_size):
                     chunk = batch_data[i:i + chunk_size]
                     command_sheet.batch_update(chunk, value_input_option='RAW')
                     print(f"✅ Updated {len(chunk)} CMD rows")
                     if i + chunk_size < len(batch_data):
-                        await asyncio.sleep(1)  # Delay between chunks
+                        await asyncio.sleep(1)
 
-                updated_rows = [update['row'] for update in cmd_updates]  # Use cmd_updates not nc_updates
-                self.batch_copy_validations(command_sheet, 2, updated_rows,[3, 4])  # Use command_sheet not non_command_sheet
+                # ✅ Copy validations to updated rows
+                updated_rows = [update['row'] for update in cmd_updates]
+                self.batch_copy_validations(command_sheet, 2, updated_rows, [3, 4])
 
-            # ===== ADD NEW ROWS (existing code is fine for this) =====
+            # ADD NEW ROWS
             if nc_new:
                 start_row = len(existing_non_command) + 1
                 non_command_sheet.update(f'A{start_row}', nc_new, value_input_option='RAW')
-                # Copy validations
                 for i in range(len(nc_new)):
                     row_num = start_row + i
                     self.copy_data_validation_to_cell(non_command_sheet, 2, row_num, 6)
                     self.copy_data_validation_to_cell(non_command_sheet, 2, row_num, 9)
-                    await asyncio.sleep(0.2)  # Rate limit validation copies
+                    await asyncio.sleep(0.2)
 
             if cmd_new:
                 start_row = len(existing_command) + 1
                 command_sheet.update(f'A{start_row}', cmd_new, value_input_option='RAW')
-                # Copy validations
                 for i in range(len(cmd_new)):
                     row_num = start_row + i
                     self.copy_data_validation_to_cell(command_sheet, 2, row_num, 3)
                     self.copy_data_validation_to_cell(command_sheet, 2, row_num, 4)
-                    await asyncio.sleep(0.2)  # Rate limit validation copies
+                    await asyncio.sleep(0.2)
 
             # Sort both sheets
             print("📊 Sorting sheets...")

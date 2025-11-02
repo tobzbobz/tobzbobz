@@ -19,6 +19,7 @@ class ERLC(commands.GroupCog, name="erlc"):
         self.base_url = "https://api.policeroleplay.community"
         self.session: Optional[aiohttp.ClientSession] = None
         self.db = bot.db  # Access the bot's database instance
+        self.OWNER_ID = 678475709257089057
 
         # Cache configurations in memory for faster access
         self.guild_configs = {}
@@ -28,6 +29,16 @@ class ERLC(commands.GroupCog, name="erlc"):
 
         # Configurable log check interval (in seconds)
         self.log_check_interval = 30  # Change this to adjust check frequency
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """Check if the user is authorized to use ERLC commands."""
+        if interaction.user.id != self.OWNER_ID:
+            await interaction.response.send_message(
+                "❌ You are not authorized to use ERLC commands.",
+                ephemeral=True
+            )
+            return False
+        return True
 
     async def cog_load(self):
         """Initialize the aiohttp session and load configs from database."""

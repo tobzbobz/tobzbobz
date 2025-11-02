@@ -71,6 +71,7 @@ class Client(commands.Bot):
         self.loaded_cogs = []
         self.failed_cogs = []
         self.guild_cog_map = {}
+        self.db = db
 
     async def load_all_cogs(self):
         """Automatically load all cogs from the cogs folder"""
