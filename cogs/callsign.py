@@ -96,6 +96,10 @@ def get_rank_sort_key(fenz_prefix: str, hhstj_prefix: str) -> tuple:
 async def check_callsign_exists(callsign: str) -> dict:
     """Check if a callsign exists in the database"""
     async with db.pool.acquire() as conn:
+        # BLANK callsigns are allowed to be non-unique, skip check
+        if callsign == "BLANK":
+            return None
+
         row = await conn.fetchrow(
             'SELECT * FROM callsigns WHERE callsign = $1',
             callsign
@@ -125,13 +129,13 @@ async def add_callsign_to_database(callsign: str, discord_user_id: int, discord_
                 "replaced_at": int(datetime.utcnow().timestamp())
             })
 
-        # Delete ALL old callsigns for this user (not just different ones)
+        # Delete ALL old callsigns for this user
         await conn.execute(
             'DELETE FROM callsigns WHERE discord_user_id = $1',
             discord_user_id
         )
 
-        # NEW: Handle BLANK callsigns differently (no conflict check needed since we deleted old ones)
+        # Handle BLANK callsigns differently
         if callsign == "BLANK":
             await conn.execute(
                 '''INSERT INTO callsigns
@@ -165,19 +169,6 @@ async def add_callsign_to_database(callsign: str, discord_user_id: int, discord_
                 json.dumps(history)
             )
 
-
-async def check_callsign_exists(callsign: str) -> dict:
-    """Check if a callsign exists in the database"""
-    async with db.pool.acquire() as conn:
-        # BLANK callsigns are allowed to be non-unique, skip check
-        if callsign == "BLANK":
-            return None
-
-        row = await conn.fetchrow(
-            'SELECT * FROM callsigns WHERE callsign = $1',
-            callsign
-        )
-        return dict(row) if row else None
 
 def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_username: str,
                     has_fenz_high_command: bool = False, has_hhstj_high_command: bool = False) -> str:
@@ -262,6 +253,7 @@ def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_u
     # Last resort: truncate
     return new_nickname[:32]
 
+
 class CallsignCog(commands.Cog):
     callsign_group = app_commands.Group(name="callsign", description="Callsign management commands")
 
@@ -301,7 +293,6 @@ class CallsignCog(commands.Cog):
                             rank_type, rank_data = sheets_manager.determine_rank_type([])
                             is_command_rank = False
 
-                            # In sync_callsigns function, around line 668:
                             callsign_data.append({
                                 'fenz_prefix': record['fenz_prefix'] or '',
                                 'hhstj_prefix': record['hhstj_prefix'] or '',
@@ -311,13 +302,12 @@ class CallsignCog(commands.Cog):
                                 'roblox_user_id': record['roblox_user_id'],
                                 'roblox_username': record['roblox_username'],
                                 'is_command': is_command_rank,
-                                'strikes': sheets_manager.determine_strikes_value(member.roles) if member else None,
-                                'qualifications': sheets_manager.determine_qualifications(member.roles,
-                                                                                          is_command_rank) if member else None
+                                'strikes': None,
+                                'qualifications': None
                             })
                             continue
 
-                        # ✅ CHECK FOR RANK CHANGES
+                        # CHECK FOR RANK CHANGES
                         is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
                         is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
 
@@ -366,7 +356,7 @@ class CallsignCog(commands.Cog):
                             hhstj_changed = True
                             rank_updates += 1
 
-                        # ✅ UPDATE NICKNAME IF RANKS CHANGED OR NICKNAME IS WRONG
+                        # UPDATE NICKNAME IF RANKS CHANGED OR NICKNAME IS WRONG
                         expected_nickname = format_nickname(
                             current_fenz_prefix,
                             record['callsign'],
@@ -418,19 +408,6 @@ class CallsignCog(commands.Cog):
                 print(f'❌ Error in auto-sync for guild {guild.name}: {e}')
                 import traceback
                 traceback.print_exc()
-
-    @auto_sync_loop.before_loop
-    async def before_auto_sync(self):
-        """Wait for bot AND database to be ready before starting auto-sync"""
-        await self.bot.wait_until_ready()
-
-        # Wait for database connection to be established
-        import asyncio
-        while db.pool is None:
-            print("⏳ Auto-sync waiting for database connection...")
-            await asyncio.sleep(1)
-
-        print("✅ Auto-sync ready - database connected")
 
     @auto_sync_loop.before_loop
     async def before_auto_sync(self):
@@ -592,7 +569,7 @@ class CallsignCog(commands.Cog):
                     'is_command': is_command_rank,
                     'strikes': sheets_manager.determine_strikes_value(member.roles) if member else None,
                     'qualifications': sheets_manager.determine_qualifications(member.roles,
-                                                                           is_command_rank) if member else None
+                                                                              is_command_rank) if member else None
                 })
 
             # Sort by rank hierarchy
@@ -690,7 +667,7 @@ class CallsignCog(commands.Cog):
             # Build response
             response = f"<:Accepted:1426930333789585509> **Bidirectional Sync Complete!**\n"
             response += f"📊 Synced {len(db_callsigns)} callsigns to Google Sheets (sorted by rank hierarchy)\n"
-            response += f"📖 Updated {updated_count} Discord nicknames\n"
+            response += f"📝 Updated {updated_count} Discord nicknames\n"
 
             if added_from_sheets > 0:
                 response += f"➕ Added {added_from_sheets} callsigns from sheets to database\n"
@@ -717,6 +694,11 @@ class CallsignCog(commands.Cog):
     @callsign_group.command(name="assign", description="Assign a callsign to a user")
     @app_commands.checks.has_role(SYNC_ROLE_ID)
     @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.describe(
+        user="The user to assign the callsign to",
+        callsign="The callsign number (1-3 digits) or 'blank' for High Command",
+        use_prefix="Whether to use rank prefix (High Command only - defaults to True)"
+    )
     async def assign_callsign(self, interaction: discord.Interaction, user: discord.Member, callsign: str,
                               use_prefix: bool = True):
         await interaction.response.defer(thinking=True)
@@ -729,19 +711,20 @@ class CallsignCog(commands.Cog):
             return
 
         try:
-            # NEW: Allow "blank" for command ranks
+            # Check if user is high command
+            is_high_command = any(role.id in HIGH_COMMAND_RANKS for role in user.roles)
+
+            # Handle "blank" callsign
             if callsign.lower() == "blank":
-                # Verify user is high command
-                is_high_command = any(role.id in HIGH_COMMAND_RANKS for role in user.roles)
                 if not is_high_command:
                     await interaction.followup.send(
                         "<:Denied:1426930694633816248> Only High Command ranks can use 'blank' as a callsign.",
                         ephemeral=True
                     )
                     return
-                callsign = ""  # Set to empty string for blank
+                callsign = "BLANK"
             else:
-                # Validate callsign format (1-3 digits) - UPDATED
+                # Validate callsign format (1-3 digits)
                 if not callsign.isdigit() or len(callsign) > 3 or len(callsign) < 1:
                     await interaction.followup.send(
                         "<:Denied:1426930694633816248> Callsign must be a 1-3 digit number (e.g., 1, 42, 001) or 'blank' for High Command",
@@ -753,7 +736,7 @@ class CallsignCog(commands.Cog):
                 callsign = callsign.zfill(3)
 
             # Check if callsign already exists (skip if blank)
-            if callsign != "":
+            if callsign != "BLANK":
                 existing = await check_callsign_exists(callsign)
                 if existing and existing['discord_user_id'] != user.id:
                     await interaction.followup.send(
@@ -776,19 +759,19 @@ class CallsignCog(commands.Cog):
             roblox_username = await self.get_roblox_user_from_id(roblox_id)
 
             if not roblox_username:
-                await interaction.followup.send("<:Denied:1426930694633816248> Failed to fetch Roblox username.",
-                                                ephemeral=True)
+                await interaction.followup.send(
+                    "<:Denied:1426930694633816248> Failed to fetch Roblox username.",
+                    ephemeral=True
+                )
                 return
 
             # Get FENZ rank from user's roles
             fenz_prefix = None
-            is_high_command = False
-
+            fenz_rank_name = None
             for role_id, (rank_name, prefix) in FENZ_RANK_MAP.items():
                 if any(role.id == role_id for role in user.roles):
                     fenz_prefix = prefix
-                    if role_id in HIGH_COMMAND_RANKS:
-                        is_high_command = True
+                    fenz_rank_name = rank_name
                     break
 
             # Get HHStJ rank from user's roles
@@ -805,62 +788,12 @@ class CallsignCog(commands.Cog):
                 )
                 return
 
-            # NEW: Handle blank callsign for high command
-            if callsign == "":
-                if not is_high_command:
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> Only High Command can have a blank callsign.",
-                        ephemeral=True
-                    )
-                    return
-
-                # Save blank callsign to database
-                await add_callsign_to_database(
-                    "BLANK", user.id, str(user), roblox_id, roblox_username,
-                    fenz_prefix, hhstj_prefix
-                )
-
-                # Set nickname to just rank prefix and username
-                is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in user.roles)
-                is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in user.roles)
-
-                nickname_parts = []
-                if fenz_prefix:
-                    nickname_parts.append(fenz_prefix)
-                if hhstj_prefix and "-" not in hhstj_prefix:
-                    nickname_parts.append(hhstj_prefix)
-                if roblox_username:
-                    nickname_parts.append(roblox_username)
-
-                new_nickname = " | ".join(nickname_parts)
-
-                try:
-                    await user.edit(nick=new_nickname)
-                except discord.Forbidden:
-                    await interaction.followup.send(
-                        f"⚠️ Callsign set to blank but couldn't update nickname (lacking permissions). "
-                        f"Please manually set to: `{new_nickname}`",
-                        ephemeral=True
-                    )
-                    return
-
-                await interaction.followup.send(
-                    f"<:Accepted:1426930333789585509> Set callsign to **BLANK** for {user.mention}\n"
-                    f"🏷️ Nickname updated to: `{new_nickname}`\n"
-                    f"💡 Remember to run `/callsign sync` to update Google Sheets!",
-                    ephemeral=True
-                )
-                return
-
-            # FOR HIGH COMMAND - Send choice message (existing code continues...)
-            if is_high_command:
-                rank_name = [name for role_id, (name, _) in FENZ_RANK_MAP.items()
-                             if any(r.id == role_id for r in user.roles)][0]
-
+            # FOR HIGH COMMAND - Send choice message
+            if is_high_command and callsign != "BLANK":
                 embed = discord.Embed(
                     title="🎖️ High Command Callsign Assignment",
                     description=f"{user.mention}, you are being assigned callsign **{callsign}**.\n\n"
-                                f"As a **{rank_name}**, "
+                                f"As a **{fenz_rank_name}**, "
                                 f"you can choose whether to use your rank prefix or not.",
                     color=discord.Color.gold()
                 )
@@ -917,23 +850,51 @@ class CallsignCog(commands.Cog):
 
                 return
 
-            # FOR NON-HIGH COMMAND - Proceed normally with prefix
+            # Determine the prefix to use based on use_prefix parameter and rank
+            if callsign == "BLANK":
+                # Blank callsign - no number at all
+                final_fenz_prefix = fenz_prefix
+                final_callsign = "BLANK"
+            elif is_high_command and not use_prefix:
+                # High command chose no prefix
+                final_fenz_prefix = ""
+                final_callsign = callsign
+            else:
+                # Normal assignment with prefix
+                final_fenz_prefix = fenz_prefix
+                final_callsign = callsign
+
+            # Add to database
             await add_callsign_to_database(
-                callsign, user.id, str(user), roblox_id, roblox_username,
-                fenz_prefix, hhstj_prefix
+                final_callsign, user.id, str(user), roblox_id, roblox_username,
+                final_fenz_prefix, hhstj_prefix or ""
             )
 
+            # Format nickname
             is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in user.roles)
             is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in user.roles)
 
-            new_nickname = format_nickname(
-                fenz_prefix,
-                callsign,
-                hhstj_prefix,
-                roblox_username,
-                is_fenz_high_command,
-                is_hhstj_high_command
-            )
+            if callsign == "BLANK":
+                # Special formatting for BLANK callsigns
+                nickname_parts = []
+                if final_fenz_prefix:
+                    nickname_parts.append(final_fenz_prefix)
+                if hhstj_prefix and "-" not in hhstj_prefix:
+                    nickname_parts.append(hhstj_prefix)
+                if roblox_username:
+                    nickname_parts.append(roblox_username)
+                new_nickname = " | ".join(nickname_parts)
+            else:
+                new_nickname = format_nickname(
+                    final_fenz_prefix,
+                    final_callsign,
+                    hhstj_prefix or "",
+                    roblox_username,
+                    is_fenz_high_command,
+                    is_hhstj_high_command
+                )
+
+            # Update nickname
             try:
                 await user.edit(nick=new_nickname)
             except discord.Forbidden:
@@ -944,8 +905,16 @@ class CallsignCog(commands.Cog):
                 )
                 return
 
+            # Format response message
+            if callsign == "BLANK":
+                callsign_display = "**BLANK** (no callsign number)"
+            elif final_fenz_prefix:
+                callsign_display = f"**{final_fenz_prefix}-{final_callsign}**"
+            else:
+                callsign_display = f"**{final_callsign}** (no prefix)"
+
             await interaction.followup.send(
-                f"<:Accepted:1426930333789585509> Assigned callsign **{fenz_prefix}-{callsign}** to {user.mention}\n"
+                f"<:Accepted:1426930333789585509> Assigned callsign {callsign_display} to {user.mention}\n"
                 f"🏷️ Nickname updated to: `{new_nickname}`\n"
                 f"💡 Remember to run `/callsign sync` to update Google Sheets!",
                 ephemeral=True
@@ -953,6 +922,8 @@ class CallsignCog(commands.Cog):
 
         except Exception as e:
             await interaction.followup.send(f"<:Denied:1426930694633816248> Error assigning callsign: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
     @callsign_group.command(name="lookup", description="Look up a callsign")
     @app_commands.checks.has_role(1309021002675654700)
@@ -971,7 +942,7 @@ class CallsignCog(commands.Cog):
             results = []
 
             if callsign:
-                # FIXED: Handle BLANK callsign lookups
+                # Handle BLANK callsign lookups
                 if callsign.upper() == "BLANK":
                     await interaction.followup.send(
                         "<:Denied:1426930694633816248> Cannot look up BLANK callsigns. Please specify a user instead.",
@@ -1053,176 +1024,6 @@ class CallsignCog(commands.Cog):
 
         except Exception as e:
             await interaction.followup.send(f"<:Denied:1426930694633816248> Error looking up callsign: {str(e)}")
-            import traceback
-            traceback.print_exc()
-
-    @callsign_group.command(name="assign", description="Assign a callsign to a user")
-    @app_commands.checks.has_role(SYNC_ROLE_ID)
-    @app_commands.checks.has_permissions(administrator=True)
-    @app_commands.describe(
-        user="The user to assign the callsign to",
-        callsign="The callsign number (1-3 digits) or 'blank' for High Command",
-        use_prefix="Whether to use rank prefix (High Command only - defaults to True)"
-    )
-    async def assign_callsign(self, interaction: discord.Interaction, user: discord.Member, callsign: str,
-                              use_prefix: bool = True):
-        await interaction.response.defer(thinking=True)
-
-        if db.pool is None:
-            await interaction.followup.send(
-                "<:Denied:1426930694633816248> Database not connected. Please try again.",
-                ephemeral=True
-            )
-            return
-
-        try:
-            # Check if user is high command
-            is_high_command = any(role.id in HIGH_COMMAND_RANKS for role in user.roles)
-
-            # Handle "blank" callsign
-            if callsign.lower() == "blank":
-                if not is_high_command:
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> Only High Command ranks can use 'blank' as a callsign.",
-                        ephemeral=True
-                    )
-                    return
-                callsign = "BLANK"
-            else:
-                # Validate callsign format (1-3 digits)
-                if not callsign.isdigit() or len(callsign) > 3 or len(callsign) < 1:
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> Callsign must be a 1-3 digit number (e.g., 1, 42, 001) or 'blank' for High Command",
-                        ephemeral=True
-                    )
-                    return
-
-                # Pad to 3 digits for storage consistency
-                callsign = callsign.zfill(3)
-
-            # Check if callsign already exists (skip if blank)
-            if callsign != "BLANK":
-                existing = await check_callsign_exists(callsign)
-                if existing and existing['discord_user_id'] != user.id:
-                    await interaction.followup.send(
-                        f"<:Denied:1426930694633816248> Callsign {callsign} is already assigned to <@{existing['discord_user_id']}>",
-                        ephemeral=True
-                    )
-                    return
-
-            # Get user's Roblox info
-            bloxlink_data = await self.get_bloxlink_data(user.id, interaction.guild.id)
-            if not bloxlink_data:
-                await interaction.followup.send(
-                    f"<:Denied:1426930694633816248> Could not find Roblox account for {user.mention}. "
-                    "Please verify their Bloxlink connection.",
-                    ephemeral=True
-                )
-                return
-
-            roblox_id = bloxlink_data['id']
-            roblox_username = await self.get_roblox_user_from_id(roblox_id)
-
-            if not roblox_username:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> Failed to fetch Roblox username.",
-                    ephemeral=True
-                )
-                return
-
-            # Get FENZ rank from user's roles
-            fenz_prefix = None
-            for role_id, (rank_name, prefix) in FENZ_RANK_MAP.items():
-                if any(role.id == role_id for role in user.roles):
-                    fenz_prefix = prefix
-                    break
-
-            # Get HHStJ rank from user's roles
-            hhstj_prefix = None
-            for role_id, (rank_name, prefix) in HHSTJ_RANK_MAP.items():
-                if any(role.id == role_id for role in user.roles):
-                    hhstj_prefix = prefix
-                    break
-
-            if not fenz_prefix:
-                await interaction.followup.send(
-                    f"<:Denied:1426930694633816248> {user.mention} does not have a valid FENZ rank role.",
-                    ephemeral=True
-                )
-                return
-
-            # Determine the prefix to use based on use_prefix parameter and rank
-            if callsign == "BLANK":
-                # Blank callsign - no number at all
-                final_fenz_prefix = fenz_prefix
-                final_callsign = "BLANK"
-            elif is_high_command and not use_prefix:
-                # High command chose no prefix
-                final_fenz_prefix = ""
-                final_callsign = callsign
-            else:
-                # Normal assignment with prefix
-                final_fenz_prefix = fenz_prefix
-                final_callsign = callsign
-
-            # Add to database
-            await add_callsign_to_database(
-                final_callsign, user.id, str(user), roblox_id, roblox_username,
-                final_fenz_prefix, hhstj_prefix or ""
-            )
-
-            # Format nickname
-            is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in user.roles)
-            is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in user.roles)
-
-            if callsign == "BLANK":
-                # Special formatting for BLANK callsigns
-                nickname_parts = []
-                if final_fenz_prefix:
-                    nickname_parts.append(final_fenz_prefix)
-                if hhstj_prefix and "-" not in hhstj_prefix:
-                    nickname_parts.append(hhstj_prefix)
-                if roblox_username:
-                    nickname_parts.append(roblox_username)
-                new_nickname = " | ".join(nickname_parts)
-            else:
-                new_nickname = format_nickname(
-                    final_fenz_prefix,
-                    final_callsign,
-                    hhstj_prefix or "",
-                    roblox_username,
-                    is_fenz_high_command,
-                    is_hhstj_high_command
-                )
-
-            # Update nickname
-            try:
-                await user.edit(nick=new_nickname)
-            except discord.Forbidden:
-                await interaction.followup.send(
-                    f"⚠️ Callsign assigned but couldn't update nickname (lacking permissions). "
-                    f"Please manually set to: `{new_nickname}`",
-                    ephemeral=True
-                )
-                return
-
-            # Format response message
-            if callsign == "BLANK":
-                callsign_display = "**BLANK** (no callsign number)"
-            elif final_fenz_prefix:
-                callsign_display = f"**{final_fenz_prefix}-{final_callsign}**"
-            else:
-                callsign_display = f"**{final_callsign}** (no prefix)"
-
-            await interaction.followup.send(
-                f"<:Accepted:1426930333789585509> Assigned callsign {callsign_display} to {user.mention}\n"
-                f"🏷️ Nickname updated to: `{new_nickname}`\n"
-                f"💡 Remember to run `/callsign sync` to update Google Sheets!",
-                ephemeral=True
-            )
-
-        except Exception as e:
-            await interaction.followup.send(f"<:Denied:1426930694633816248> Error assigning callsign: {str(e)}")
             import traceback
             traceback.print_exc()
 
@@ -1330,7 +1131,7 @@ class CallsignCog(commands.Cog):
 
             if skipped:
                 embed.add_field(
-                    name=f"⏭️ Skipped ({len(skipped)})",
+                    name=f"⭐ Skipped ({len(skipped)})",
                     value=f"{len(skipped)} members already have correct nicknames",
                     inline=False
                 )
@@ -1367,6 +1168,140 @@ class CallsignCog(commands.Cog):
         except Exception as e:
             await interaction.followup.send(
                 f"<:Denied:1426930694633816248> Error during nickname sync: {str(e)}"
+            )
+            import traceback
+            traceback.print_exc()
+
+    @callsign_group.command(name="remove", description="Remove a callsign from a user")
+    @app_commands.checks.has_role(SYNC_ROLE_ID)
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.describe(user="The user whose callsign should be removed")
+    async def remove_callsign(self, interaction: discord.Interaction, user: discord.Member):
+        """Remove a callsign from a user and reset their nickname"""
+        await interaction.response.defer(thinking=True, ephemeral=True)
+
+        if db.pool is None:
+            await interaction.followup.send(
+                "<:Denied:1426930694633816248> Database not connected. Please try again.",
+                ephemeral=True
+            )
+            return
+
+        try:
+            # Check if user has a callsign
+            async with db.pool.acquire() as conn:
+                existing_callsign = await conn.fetchrow(
+                    'SELECT * FROM callsigns WHERE discord_user_id = $1',
+                    user.id
+                )
+
+            if not existing_callsign:
+                await interaction.followup.send(
+                    f"<:Denied:1426930694633816248> {user.mention} does not have a callsign assigned.",
+                    ephemeral=True
+                )
+                return
+
+            # Store callsign info for confirmation message
+            old_callsign = existing_callsign['callsign']
+            old_fenz_prefix = existing_callsign['fenz_prefix']
+            old_hhstj_prefix = existing_callsign['hhstj_prefix']
+
+            # Delete from database
+            async with db.pool.acquire() as conn:
+                await conn.execute(
+                    'DELETE FROM callsigns WHERE discord_user_id = $1',
+                    user.id
+                )
+
+            # Reset nickname to just Roblox username (or get from Bloxlink if needed)
+            try:
+                # Try to get Roblox username from stored data first
+                roblox_username = existing_callsign.get('roblox_username')
+
+                # If not available, fetch from Bloxlink
+                if not roblox_username:
+                    bloxlink_data = await self.get_bloxlink_data(user.id, interaction.guild.id)
+                    if bloxlink_data:
+                        roblox_id = bloxlink_data['id']
+                        roblox_username = await self.get_roblox_user_from_id(roblox_id)
+
+                # Reset nickname
+                if roblox_username:
+                    await user.edit(nick=roblox_username)
+                else:
+                    # Fallback: remove nickname entirely
+                    await user.edit(nick=None)
+
+                nickname_reset = True
+            except discord.Forbidden:
+                nickname_reset = False
+
+            # Remove from Google Sheets
+            try:
+                await sheets_manager.remove_callsign_from_sheets(user.id)
+            except Exception as e:
+                print(f"Warning: Could not remove from sheets: {e}")
+
+            # Build confirmation message
+            embed = discord.Embed(
+                title="🗑️ Callsign Removed",
+                description=f"Successfully removed callsign from {user.mention}",
+                color=discord.Color.orange()
+            )
+
+            # Show removed callsign
+            if old_callsign == "BLANK":
+                callsign_display = "BLANK (no callsign number)"
+            elif old_fenz_prefix:
+                callsign_display = f"{old_fenz_prefix}-{old_callsign}"
+            else:
+                callsign_display = old_callsign
+
+            embed.add_field(
+                name="Removed Callsign",
+                value=f"**{callsign_display}**",
+                inline=True
+            )
+
+            if old_hhstj_prefix:
+                embed.add_field(
+                    name="HHStJ Rank",
+                    value=old_hhstj_prefix,
+                    inline=True
+                )
+
+            # Nickname status
+            if nickname_reset:
+                embed.add_field(
+                    name="✅ Nickname Reset",
+                    value=f"Changed to: `{roblox_username if roblox_username else 'Default username'}`",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="⚠️ Nickname",
+                    value="Could not reset nickname (missing permissions). Please manually update.",
+                    inline=False
+                )
+
+            embed.add_field(
+                name="📝 Next Steps",
+                value="• Callsign removed from database\n"
+                      "• Run `/callsign sync` to update Google Sheets\n"
+                      "• The callsign is now available for reassignment",
+                inline=False
+            )
+
+            embed.set_footer(text=f"Removed by {interaction.user.display_name}")
+            embed.timestamp = datetime.utcnow()
+
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+        except Exception as e:
+            await interaction.followup.send(
+                f"<:Denied:1426930694633816248> Error removing callsign: {str(e)}",
+                ephemeral=True
             )
             import traceback
             traceback.print_exc()
@@ -1451,9 +1386,6 @@ class CallsignCog(commands.Cog):
                     interaction.user.id
                 )
 
-            # Note: We now allow users to request new callsigns even if they have one
-            # The add_callsign_to_database function will handle replacing the old one
-
             # Check if callsign already exists
             existing = await check_callsign_exists(callsign)
             if existing:
@@ -1464,7 +1396,7 @@ class CallsignCog(commands.Cog):
                 )
                 return
 
-            # ✅ AUTO-ACCEPT: Callsign is available!
+            # AUTO-ACCEPT: Callsign is available!
             # FOR HIGH COMMAND - Send choice message
             if is_high_command:
                 embed = discord.Embed(
@@ -1499,7 +1431,7 @@ class CallsignCog(commands.Cog):
                 )
 
                 try:
-                    # Post in channel if DM fails
+                    # Post in channel
                     channel_message = await interaction.channel.send(
                         content=f"{interaction.user.mention}",
                         embed=embed,
@@ -1511,9 +1443,7 @@ class CallsignCog(commands.Cog):
                         f"Please respond to the message above.",
                         ephemeral=True
                     )
-                    channel_message_sent=True
                 except discord.Forbidden:
-                    channel_message_sent=False
                     pass
                 return
 
@@ -1593,6 +1523,7 @@ class CallsignCog(commands.Cog):
             import traceback
             traceback.print_exc()
 
+
 class HighCommandPrefixChoice(discord.ui.View):
     def __init__(self, interaction_user_id: int, cog, original_interaction, user, callsign,
                  fenz_prefix, hhstj_prefix, roblox_id, roblox_username):
@@ -1630,7 +1561,6 @@ class HighCommandPrefixChoice(discord.ui.View):
             self.fenz_prefix, self.hhstj_prefix
         )
 
-        # In with_prefix_button:
         is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in self.user.roles)
         is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in self.user.roles)
 
@@ -1689,8 +1619,6 @@ class HighCommandPrefixChoice(discord.ui.View):
             "", self.hhstj_prefix  # Empty prefix
         )
 
-        # Update Discord nickname WITHOUT prefix
-        # In without_prefix_button:
         is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in self.user.roles)
         is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in self.user.roles)
 
@@ -1779,7 +1707,6 @@ class HighCommandPrefixChoice(discord.ui.View):
                 )
             except Exception as e:
                 print(f"Error in timeout handler: {e}")
-
 
 
 async def setup(bot):
