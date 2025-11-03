@@ -952,29 +952,34 @@ class ERLC(commands.GroupCog, name="erlc"):
                         timestamp=datetime.now(timezone.utc)
                     )
 
+                    ban_list = []
                     for ban in found:
                         ban_player = ban.get('Player', 'Unknown')
                         player_id = await self.get_player_id_from_name(ban_player)
                         player_link = self.format_player_link(ban_player, player_id)
 
-                        ban_info = [f"**Player:** {player_link}"]
+                        # Build ban details as a single line
+                        ban_line = f"• **Player:** {player_link}"
 
                         if ban.get('Reason'):
-                            ban_info.append(f"**Reason:** {ban.get('Reason')}")
+                            ban_line += f" | **Reason:** {ban.get('Reason')}"
                         if ban.get('Moderator'):
                             mod_name = ban.get('Moderator')
                             mod_id = await self.get_player_id_from_name(mod_name)
                             mod_link = self.format_player_link(mod_name, mod_id)
-                            ban_info.append(f"**Banned By:** {mod_link}")
+                            ban_line += f" | **By:** {mod_link}"
                         if ban.get('Timestamp'):
-                            ban_time = datetime.fromtimestamp(ban.get('Timestamp'), tz=timezone.utc)
-                            ban_info.append(f"**Date:** {ban_time.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+                            ban_time = self.format_timestamp(ban.get('Timestamp'))
+                            ban_line += f" | **Date:** {ban_time}"
 
-                        embed.add_field(
-                            name="Ban Details",
-                            value='\n'.join(ban_info),
-                            inline=False
-                        )
+                        ban_list.append(ban_line)
+
+                    # Add all bans to a single field or description
+                    embed.add_field(
+                        name="Ban Details",
+                        value='\n'.join(ban_list),
+                        inline=False
+                    )
                 else:
                     embed = discord.Embed(
                         title="✅ Ban Status: NOT BANNED",
@@ -983,6 +988,7 @@ class ERLC(commands.GroupCog, name="erlc"):
                         timestamp=datetime.now(timezone.utc)
                     )
             else:
+                # List all bans as bullet points
                 embed = discord.Embed(
                     title="🔨 Server Bans",
                     description=f"**Total Bans:** {len(data)}",
@@ -990,26 +996,62 @@ class ERLC(commands.GroupCog, name="erlc"):
                     timestamp=datetime.now(timezone.utc)
                 )
 
-                for i, ban in enumerate(data[:25]):
+                ban_list = []
+                for ban in data[:25]:  # Limit to 25 to avoid hitting embed limits
                     ban_player = ban.get('Player', 'Unknown')
                     player_id = await self.get_player_id_from_name(ban_player)
                     player_link = self.format_player_link(ban_player, player_id)
 
-                    ban_info = [f"**Player:** {player_link}"]
+                    # Build each ban as a bullet point
+                    ban_line = f"• {player_link}"
 
                     if ban.get('Reason'):
-                        ban_info.append(f"**Reason:** {ban.get('Reason')}")
+                        ban_line += f" - *{ban.get('Reason')}*"
                     if ban.get('Moderator'):
                         mod_name = ban.get('Moderator')
                         mod_id = await self.get_player_id_from_name(mod_name)
                         mod_link = self.format_player_link(mod_name, mod_id)
-                        ban_info.append(f"**By:** {mod_link}")
+                        ban_line += f" (by {mod_link})"
 
-                    embed.add_field(
-                        name=f"Ban {i + 1}",
-                        value='\n'.join(ban_info),
-                        inline=False
-                    )
+                    ban_list.append(ban_line)
+
+                # Split into multiple fields if needed (Discord has 1024 char limit per field)
+                if ban_list:
+                    # Join all bans
+                    full_ban_text = '\n'.join(ban_list)
+
+                    # If text is too long, split into chunks
+                    if len(full_ban_text) > 4000:  # Leave room for description
+                        # Split into chunks of ~1000 characters
+                        chunks = []
+                        current_chunk = []
+                        current_length = 0
+
+                        for ban_line in ban_list:
+                            if current_length + len(ban_line) + 1 > 1000:
+                                chunks.append('\n'.join(current_chunk))
+                                current_chunk = [ban_line]
+                                current_length = len(ban_line)
+                            else:
+                                current_chunk.append(ban_line)
+                                current_length += len(ban_line) + 1
+
+                        if current_chunk:
+                            chunks.append('\n'.join(current_chunk))
+
+                        # Add each chunk as a field
+                        for i, chunk in enumerate(chunks[:5]):  # Max 5 fields to be safe
+                            embed.add_field(
+                                name=f"Banned Players ({i * 25 + 1}-{min((i + 1) * 25, len(data))})" if i > 0 else "Banned Players",
+                                value=chunk,
+                                inline=False
+                            )
+                    else:
+                        embed.add_field(
+                            name="Banned Players",
+                            value=full_ban_text,
+                            inline=False
+                        )
 
                 if len(data) > 25:
                     embed.add_field(
