@@ -1994,14 +1994,15 @@ class WatchCog(commands.Cog):
 
             # Update switch history
             switch_timestamp = int(discord.utils.utcnow().timestamp())
-            switch_history = self.normalize_switch_history(watch_data.get('switch_history'))
-            if isinstance(switch_history, str):
+            # Ensure switch_history is always a list
+            switch_history = watch_data.get('switch_history')
+            if switch_history is None:
+                switch_history = []
+            elif isinstance(switch_history, str):
                 try:
                     switch_history = json.loads(switch_history) if switch_history else []
                 except (json.JSONDecodeError, TypeError):
                     switch_history = []
-            elif switch_history is None:
-                switch_history = []
             elif not isinstance(switch_history, list):
                 switch_history = []
 

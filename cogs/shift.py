@@ -851,7 +851,7 @@ class ShiftManagementCog(commands.Cog):
             )
             import traceback
             traceback.print_exc()
-            
+
     @shift_group.command(name="active", description="View all active shifts")
     async def shift_active(self, interaction: discord.Interaction):
         """Show all currently active shifts categorized by type"""
@@ -903,7 +903,7 @@ class ShiftManagementCog(commands.Cog):
             embed = discord.Embed(
                 title="🚨 HNZRP | FENZ & HHStJ",
                 description="🕒 **Active Shifts**",
-                color=discord.Color.blue()
+                color=discord.Color(0xffffff)
             )
 
             # Add each shift type section
@@ -1071,7 +1071,7 @@ class ShiftManagementCog(commands.Cog):
         embed = discord.Embed(
             title="<:Checklist:1434948670226432171> **All Time Information**",
             description=f"**Shift Count:** {str(stats['count'])}\n**Total Duration:** {self.format_duration(stats['total_duration'])}\n**Average Duration:** {self.format_duration(stats['average_duration'])}",
-            color=discord.Color.blue()
+            color=discord.Color(0xffffff)
         )
         embed.set_author(name="Shift Management", icon_url=interaction.user.display_avatar.url)
 
@@ -1179,7 +1179,7 @@ class ShiftManagementCog(commands.Cog):
         embed = discord.Embed(
             title="<:Checklist:1434948670226432171> **All Time Information**",
             description=f"**Shift Count:** {str(stats['count'])}\n**Total Duration:** {self.format_duration(stats['total_duration'])}\n**Average Duration:** {self.format_duration(stats['average_duration'])}",
-            color=discord.Color.blue()
+            color=discord.Color(0xffffff)
         )
         embed.set_author(name="Shift Management", icon_url=interaction.user.display_avatar.url)
 
@@ -1220,7 +1220,7 @@ class ShiftManagementCog(commands.Cog):
         embed = discord.Embed(
             title="<:Checklist:1434948670226432171> **All Time Information**",
             description=f"**Shift Count:** {str(stats['count'])}\n**Total Duration:** {self.format_duration(stats['total_duration'])}\n**Average Duration:** {self.format_duration(stats['average_duration'])}",
-            color=discord.Color.blue()
+            color=discord.Color(0xffffff)
         )
         embed.set_author(
             name=f"Shift Management: {user.display_name}",
@@ -1481,7 +1481,7 @@ class ShiftActiveView(discord.ui.View):
             embed = discord.Embed(
                 title="<:Checklist:1434948670226432171> **All Time Information**",
                 description=f"**Shift Count:** {str(stats['count'])}\n**Total Duration:** {self.cog.format_duration(stats['total_duration'])}\n**Average Duration:** self.cog.format_duration(stats['average_duration'])",
-                color=discord.Color.blue()
+                color=discord.Color(0xffffff)
             )
             embed.set_author(name="Shift Management", icon_url=interaction.user.display_avatar.url)
 
@@ -1640,7 +1640,7 @@ class ShiftBreakView(discord.ui.View):
             embed = discord.Embed(
                 title="<:Checklist:1434948670226432171> **All Time Information**",
                 description=f"**Shift Count:** {str(stats['count'])}\n**Total Duration:** {self.cog.format_duration(stats['total_duration'])}\n**Average Duration:** self.cog.format_duration(stats['average_duration'])",
-                color=discord.Color.blue()
+                color=discord.Color(0xffffff)
             )
 
             embed.set_footer(text=f"Shift Type: {self.shift['shift_type']}")
@@ -2163,7 +2163,7 @@ class ShiftListView(discord.ui.View):
             embed = discord.Embed(
                 title=f"**<:List:1434953240155525201> Shift List**",
                 description="No completed shifts found.",
-                color=discord.Color.blue()
+                color=discord.Color(0xffffff)
             )
             await interaction.followup.send(embed=embed)
             return
@@ -2176,7 +2176,7 @@ class ShiftListView(discord.ui.View):
 
         embed = discord.Embed(
             title=f"**<:List:1434953240155525201> Shift List**",
-            color=discord.Color.blue()
+            color=discord.Color(0xffffff)
         )
 
         for shift in page_shifts:
@@ -2310,7 +2310,7 @@ class ModifyShiftSelectView(discord.ui.View):
         embed = discord.Embed(
             title=f"**Modify Shift**",
             description=f"**Status:** <:Offline:1434951694319620197> Ended\n**Duration:** {self.cog.format_duration(active_duration)}",
-            color=discord.Color.blue()
+            color=discord.Color(0x00000)
         )
         embed.set_footer(text=f"{shift['id']} • Shift Type: {shift['shift_type']}")
 

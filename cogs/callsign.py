@@ -305,6 +305,7 @@ class CallsignCog(commands.Cog):
             self.active_watches = await conn.fetch("SELECT * FROM callsigns;")
         print("✅ Reloaded callsigns cache")
 
+    @staticmethod
     def strip_shift_prefixes(nickname: str) -> str:
         """
         Remove shift-related prefixes from nicknames before comparison
@@ -483,9 +484,9 @@ class CallsignCog(commands.Cog):
                                     is_hhstj_high_command
                                 )
 
-                            # ✅ NEW: Strip shift prefixes before comparison
-                            current_nick_stripped = strip_shift_prefixes(member.nick) if member.nick else member.name
-                            expected_nick_stripped = strip_shift_prefixes(expected_nickname)
+                            current_nick_stripped = self.strip_shift_prefixes(
+                                member.nick) if member.nick else member.name
+                            expected_nick_stripped = self.strip_shift_prefixes(expected_nickname)
 
                             # Only update if the stripped versions don't match
                             if current_nick_stripped != expected_nick_stripped:
@@ -574,6 +575,7 @@ class CallsignCog(commands.Cog):
                 import traceback
                 traceback.print_exc()
 
+    @staticmethod
     async def send_sync_log(bot, title: str, description: str, fields: list, color: discord.Color):
         """Send sync logs to designated channel"""
         try:
@@ -996,7 +998,7 @@ class CallsignCog(commands.Cog):
                     break
 
             # Get HHStJ rank from user's roles
-            hhstj_prefix = get_hhstj_prefix_from_roles(member.roles)
+            hhstj_prefix = get_hhstj_prefix_from_roles(user.roles)
 
 
             if not fenz_prefix:
@@ -1520,7 +1522,7 @@ class CallsignCog(commands.Cog):
                     break
 
             # Get HHStJ rank from user's roles
-            hhstj_prefix = get_hhstj_prefix_from_roles(member.roles)
+            hhstj_prefix = get_hhstj_prefix_from_roles(interaction.user.roles)
 
             if not fenz_prefix:
                 await interaction.followup.send(
