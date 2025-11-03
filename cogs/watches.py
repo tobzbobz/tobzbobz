@@ -379,6 +379,60 @@ class MissedVoteConfirmationView(discord.ui.View):
             await interaction.followup.send(f'<:Denied:1426930694633816248> Error: {e}', ephemeral=True)
 
 
+class WatchRegulationsDropdown(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.select(
+        placeholder="Click here to view the Watch Regulations!",
+        options=[
+            discord.SelectOption(
+                label="Watch Regulations",
+                description="View the official watch rules and regulations",
+                emoji="<:FENZ:1389200656090533970>"
+            )
+        ],
+        custom_id="watch_regulations_dropdown"
+    )
+    async def regulations_dropdown(self, interaction: discord.Interaction, select: discord.ui.Select):
+        try:
+            regulations_embed = discord.Embed(
+                title="<:FENZ:1389200656090533970> | FENZ Watch Regulations",
+                description="All colour watches refer to a set of different appliances run out of X station. Instead of the IRL 4 on 4 off system, each station can have different watches that refer to what vehicles to be run. When Supervisory intend to be online for more than 30 minutes, they can call \"Watch (insert colour here)\" and all vehicles will be automatically known.",
+                colour=discord.Colour(0xffffff)
+            )
+
+            # Add your regulations here
+            regulations_embed.add_field(
+                name="Positions during the Watch:",
+                value="- Watch Manager (Person hosting the watch, SO+)\n- FIRE COMMS (Dispatch, needs COMMS Cert. or SO+)\n- Active Station Officer (Assigned OIC from each station, must be SO+)\n-FFs (Anyone can take this positon, there is no limit to the amount of FFs online. Should be proportionally spread between S1 and S2 if both stations have an active watch.",
+                inline=False
+            )
+
+            regulations_embed.add_field(
+                name="Other Watch Rules",
+                value="- All vehicles can be spawned at any station. If only S2's Watch Red is active and HAM415 is required, HAM415 can be spawned from either station independent of Watch Red's appliance designations. When going K1, the radio callout would be \"FIRE COMMS, HAM415, K1 delayed turnout due to distance\" regardless of which station it was spawned from. HAM415 should wait a short moment/take a longer route to the call to create a realistic approach.\n- S1 and S2 can be active at the same time. This would mean 2 different watches active at the same time - which we believe can be possible. Preferably, there would be at least one SO+ at S1, and one SO+ at S2 - not a strong requirement.\n- Even if 2 watches are online at the same time, there would still only be one person on FIRE COMMS. The station they are assigned to is irrelevant.\n- Only SO+ can host a watch. This relies on you being able to properly perform sit-reps at most calls, even if you are also FIRE COMMS. When you are FIRE COMMS as well as making a sit-rep, you simply voice both yourself as SO-XXX and FIRE COMMS respectively, but with a RTO break in-between as well as an initial name callout performed normally.\n- The person that runs FIRE COMMS does not need to be a person hosting a Watch.\n- Upon joining the FD team and starting your shift in Discord, you should still ask the Watch Manager which appliance you can operate (if any).",
+                inline=False
+            )
+
+            regulations_embed.add_field(
+                name="Quick Rules",
+                value="- Any FENZ Supervisor+ can host a watch.\n- Watches should not remain ongoing with less than three people on.\n- Before the watch, the watch must be started using `/watch start` or `/watch vote` and after the watch, ended using `/watch end`.\n- At any time during the watch you may boost it using `/watch low`.\n- Click Watch Ping to be notified of when watches occur!",
+                inline=False
+            )
+
+            regulations_embed.set_image(url="https://cdn.discordapp.com/attachments/1425358898831036507/1434782301031501958/image.png?ex=690994a5&is=69084325&hm=39fb6a254591d565c210a63738f5c83b9283680353c5d16dd654dd8bdc9022f3&")
+
+            await interaction.response.send_message(embed=regulations_embed, ephemeral=True)
+
+        except Exception as e:
+            print(f'Error showing regulations: {e}')
+            error_embed = discord.Embed(
+                description=f'<:Denied:1426930694633816248> Error: {e}',
+                colour=discord.Colour(0xf24d4d)
+            )
+            await interaction.response.send_message(embed=error_embed, ephemeral=True)
+
 class WatchCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -444,6 +498,153 @@ class WatchCog(commands.Cog):
 
     watch_group = app_commands.Group(name='watch', description='Watch management commands')
 
+    async def calculate_watch_statistics(self) -> dict:
+        """Calculate statistics from completed watches"""
+        try:
+            completed_watches = await load_completed_watches()
+
+            if not completed_watches:
+                return {
+                    'total_watches': 0,
+                    'longest_duration': 'N/A',
+                    'most_attendees': 'N/A',
+                    'most_common_colour': 'N/A',
+                    'most_active_station': 'N/A',
+                    'average_duration': 'N/A'
+                }
+
+            # Filter out failed watches
+            successful_watches = [w for w in completed_watches.values() if w.get('status') != 'failed']
+
+            total_watches = len(successful_watches)
+
+            # Calculate longest duration
+            longest_duration_seconds = 0
+            for watch in successful_watches:
+                duration = watch.get('ended_at', 0) - watch.get('started_at', 0)
+                if duration > longest_duration_seconds:
+                    longest_duration_seconds = duration
+
+            hours = longest_duration_seconds // 3600
+            minutes = (longest_duration_seconds % 3600) // 60
+            longest_duration = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
+            # Calculate most attendees
+            most_attendees = max([watch.get('attendees', 0) for watch in successful_watches], default=0)
+
+            # Most common colour
+            colour_counts = {}
+            for watch in successful_watches:
+                colour = watch.get('colour', 'Unknown')
+                colour_counts[colour] = colour_counts.get(colour, 0) + 1
+            most_common_colour = max(colour_counts.items(), key=lambda x: x[1])[0] if colour_counts else 'N/A'
+
+            # Most active station
+            station_counts = {}
+            for watch in successful_watches:
+                station = watch.get('station', 'Unknown')
+                station_counts[station] = station_counts.get(station, 0) + 1
+            most_active_station = max(station_counts.items(), key=lambda x: x[1])[0] if station_counts else 'N/A'
+
+            # Average duration
+            total_duration = sum(
+                [watch.get('ended_at', 0) - watch.get('started_at', 0) for watch in successful_watches])
+            avg_duration_seconds = total_duration // total_watches if total_watches > 0 else 0
+            avg_hours = avg_duration_seconds // 3600
+            avg_minutes = (avg_duration_seconds % 3600) // 60
+            average_duration = f"{avg_hours}h {avg_minutes}m" if avg_hours > 0 else f"{avg_minutes}m"
+
+            return {
+                'total_watches': total_watches,
+                'longest_duration': longest_duration,
+                'most_attendees': most_attendees,
+                'most_common_colour': most_common_colour,
+                'most_active_station': most_active_station,
+                'average_duration': average_duration
+            }
+
+        except Exception as e:
+            print(f'Error calculating statistics: {e}')
+            return {
+                'total_watches': 0,
+                'longest_duration': 'Error',
+                'most_attendees': 'Error',
+                'most_common_colour': 'Error',
+                'most_active_station': 'Error',
+                'average_duration': 'Error'
+            }
+
+    async def update_stats_embed(self, channel: discord.TextChannel):
+        """Find and update the statistics embed in the channel"""
+        try:
+            # Find existing stats embed
+            stats_message = None
+            async for message in channel.history(limit=100):
+                if message.author.bot and message.embeds:
+                    if any(embed.title and "Watch Statistics" in embed.title for embed in message.embeds):
+                        stats_message = message
+                        break
+
+            if not stats_message:
+                print("No stats embed found to update")
+                return
+
+            # Calculate new statistics
+            stats = await self.calculate_watch_statistics()
+
+            # Create updated embed
+            stats_embed = discord.Embed(
+                title="📊 Watch Statistics 📊",
+                description="Live statistics for all completed FENZ watches",
+                colour=discord.Colour.blue()
+            )
+
+            stats_embed.add_field(
+                name="🔢 Total Watches",
+                value=f"`{stats['total_watches']}`",
+                inline=True
+            )
+
+            stats_embed.add_field(
+                name="⏱️ Longest Watch",
+                value=f"`{stats['longest_duration']}`",
+                inline=True
+            )
+
+            stats_embed.add_field(
+                name="👥 Most Attendees",
+                value=f"`{stats['most_attendees']}`",
+                inline=True
+            )
+
+            stats_embed.add_field(
+                name="🎨 Most Common Colour",
+                value=f"`{stats['most_common_colour']}`",
+                inline=True
+            )
+
+            stats_embed.add_field(
+                name="📍 Most Active Station",
+                value=f"`{stats['most_active_station']}`",
+                inline=True
+            )
+
+            stats_embed.add_field(
+                name="📈 Average Duration",
+                value=f"`{stats['average_duration']}`",
+                inline=True
+            )
+
+            stats_embed.set_footer(text="Use the dropdown below for watch regulations")
+            stats_embed.set_thumbnail(url='https://cdn.discordapp.com/emojis/1389200656090533970.webp?size=128')
+
+            # Update the message (keep the same view)
+            await stats_message.edit(embed=stats_embed)
+            print("✅ Stats embed updated successfully")
+
+        except Exception as e:
+            print(f'Error updating stats embed: {e}')
+
     @watch_group.command(name='start', description='Declares the start of a FENZ watch without a vote.')
     @app_commands.default_permissions(manage_nicknames=True)
     @app_commands.describe(
@@ -506,6 +707,10 @@ class WatchCog(commands.Cog):
                 deleted_count = 0
                 async for message in watch_channel.history(limit=100):
                     try:
+                        # Skip the persistent stats embed
+                        if message.author.bot and message.embeds:
+                            if any(embed.title and "Watch Statistics" in embed.title for embed in message.embeds):
+                                continue
                         await message.delete()
                         deleted_count += 1
                     except (discord.Forbidden, discord.NotFound):
@@ -791,6 +996,7 @@ class WatchCog(commands.Cog):
                 )
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
                 await db.remove_active_watch(int(watch))
+                await self.update_stats_embed(channel)
                 del active_watches[watch]
                 return
 
@@ -875,6 +1081,7 @@ class WatchCog(commands.Cog):
 
             # SEND NEW MESSAGE (no ping)
             await channel.send(embed=embed, view=WatchRoleButton(0))
+            await self.update_watch_channel_name(channel, watch_data['colour'], watch_data['station'], 'ended')
 
             # Save to completed watches database
             await db.add_completed_watch(
@@ -1312,6 +1519,10 @@ class WatchCog(commands.Cog):
                 deleted_count = 0
                 async for message in watch_channel.history(limit=100):
                     try:
+                        # Skip the persistent stats embed
+                        if message.author.bot and message.embeds:
+                            if any(embed.title and "Watch Statistics" in embed.title for embed in message.embeds):
+                                continue
                         await message.delete()
                         deleted_count += 1
                     except (discord.Forbidden, discord.NotFound):
@@ -1368,6 +1579,8 @@ class WatchCog(commands.Cog):
             )
 
             view.message_id = msg.id
+            await self.update_watch_channel_name(watch_channel, colour, station, 'active')
+            await self.update_watch_channel_name(watch_channel, vote_data['colour'], vote_data['station'], 'voting')
 
             # Schedule auto-cancel ONLY if time_minutes is set (not immediate)
             if vote_data.get('time_minutes'):
@@ -2048,6 +2261,97 @@ class WatchCog(commands.Cog):
             print("⚠️ Missing permissions to rename channel.")
         except Exception as e:
             print(f"⚠️ Error renaming channel: {e}")
+
+    @watch_group.command(name='embed', description='Create/update the watch statistics embed.')
+    @app_commands.default_permissions(manage_nicknames=True)
+    async def watch_embed(self, interaction: discord.Interaction):
+        try:
+            allowed_role_ids = [1389550689113473024]
+            user_roles = [role.id for role in interaction.user.roles]
+
+            if not any(role_id in user_roles for role_id in allowed_role_ids):
+                permission_embed = discord.Embed(
+                    description='<:Denied:1426930694633816248> You do not have permission to use this command!',
+                    colour=discord.Colour(0xf24d4d)
+                )
+                await interaction.response.send_message(embed=permission_embed, ephemeral=True)
+                return
+
+            await interaction.response.defer(ephemeral=True)
+
+            guild_config = get_guild_config(interaction.guild.id)
+            watch_channel_id = guild_config.get('watch_channel_id')
+
+            if not watch_channel_id:
+                error_embed = discord.Embed(
+                    description='<:Denied:1426930694633816248> Watch channel not configured for this server!',
+                    colour=discord.Colour(0xf24d4d)
+                )
+                await interaction.followup.send(embed=error_embed, ephemeral=True)
+                return
+
+            watch_channel = interaction.guild.get_channel(watch_channel_id)
+            if not watch_channel:
+                error_embed = discord.Embed(
+                    description='<:Denied:1426930694633816248> Watch channel not found!',
+                    colour=discord.Colour(0xf24d4d)
+                )
+                await interaction.followup.send(embed=error_embed, ephemeral=True)
+                return
+
+            # Delete existing stats embeds
+            async for message in watch_channel.history(limit=100):
+                if message.author.bot and message.embeds:
+                    if any(embed.title and "Watch Statistics" in embed.title for embed in message.embeds):
+                        try:
+                            await message.delete()
+                        except:
+                            pass
+
+            # Calculate statistics
+            stats = await self.calculate_watch_statistics()
+
+            # Create the embed
+            stats_embed = discord.Embed(
+                title="<:FENZ:1389200656090533970> | FENZ Watches",
+                description="FENZ watches are a system of organising large player activity sessions on FENZ. These can be hosted by FENZ Suervisors and Leadership and we encourage you to click the Watch Ping button to get notified when we host watches!",
+                colour=discord.Colour(0xffffff)
+            )
+
+            stats_embed.add_field(
+                name="⚪ | Watch Status",
+                value="⚫ - **No watch is active.**\n> Please make sure it is SSU and wait for a FENZ Superisor or Leadership member to start a watch!\n\n🗳️ - **A watch vote is occuring.**\n> A watch vote is happening. Vote up if you want to participate in the watch!\n\n🟠 - **A watch will be active soon.**\n> A watch vote has succeeded, and is waiting its designated start time!\n\n🔴 / 🟡 / 🔵 / 🟤 - **Watch Colour.**\n> A watch of this colour has been started!\n\n1️⃣ / 2️⃣ - **Watch Station.**\n> A watch at this station has been started!\n",
+                inline=False
+            )
+
+            stats_embed.add_field(
+                name="🏆 | Watch Records",
+                value=f"**Total Watches:**\n> {stats['total_watches']}\n\n**Longest Watch:**\n> {stats['longest_duration']}\n\n**Most Attendees:\n> {stats['most_attendees']}\n\n**Most Common Watch Colour:**\n> {stats['most_common_colour']}\n\n**Most Active Station:**\n> {stats['most_active_station']}\n\n**Average Watch Duration:**\n> {stats['average_duration']}",
+                inline=True
+            )
+
+            regulations_embed.set_image(url="https://cdn.discordapp.com/attachments/1425358898831036507/1434782301031501958/image.png?ex=690994a5&is=69084325&hm=39fb6a254591d565c210a63738f5c83b9283680353c5d16dd654dd8bdc9022f3&")
+
+            # Create the dropdown view
+            view = WatchRegulationsDropdown()
+
+            # Send the embed
+            await watch_channel.send(embed=stats_embed, view=view)
+
+            success_embed = discord.Embed(
+                description=f'<:Accepted:1426930333789585509> Watch statistics embed created in {watch_channel.mention}!',
+                colour=discord.Colour(0x2ecc71)
+            )
+            await interaction.followup.send(embed=success_embed, ephemeral=True)
+
+        except Exception as e:
+            print(f'Error creating watch embed: {e}')
+            error_embed = discord.Embed(
+                description=f'<:Denied:1426930694633816248> Error: {e}',
+                colour=discord.Colour(0xf24d4d)
+            )
+            await interaction.followup.send(embed=error_embed, ephemeral=True)
+            raise
 
 async def setup(bot):
     await bot.add_cog(WatchCog(bot))

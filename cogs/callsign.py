@@ -519,7 +519,7 @@ class CallsignCog(commands.Cog):
                         log_fields.append({'name': f'🔄 Callsigns Reset ({len(callsigns_reset)})', 'value': reset_list,
                                            'inline': False})
 
-                    await send_sync_log(
+                    await self.send_sync_log(
                         self.bot,
                         "🔄 Auto-Sync Completed",
                         f"Automatic sync completed for **{guild.name}**",
@@ -535,6 +535,11 @@ class CallsignCog(commands.Cog):
                         print(f"   ➕ {added_from_sheets} added from sheets")
                     if callsigns_reset:
                         print(f"   🔄 {len(callsigns_reset)} callsigns reset due to rank changes")
+
+            except Exception as e:
+                print(f"❌ Error during auto-sync for {guild.name}: {e}")
+                import traceback
+                traceback.print_exc()
 
     async def send_sync_log(bot, title: str, description: str, fields: list, color: discord.Color):
         """Send sync logs to designated channel"""
