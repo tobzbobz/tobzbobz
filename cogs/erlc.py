@@ -1010,7 +1010,7 @@ class ERLC(commands.GroupCog, name="erlc"):
                         value='\n'.join(ban_info),
                         inline=False
                     )
-                    
+
                 if len(data) > 25:
                     embed.add_field(
                         name="⚠️ Note",

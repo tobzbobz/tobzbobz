@@ -142,8 +142,7 @@ def format_duplicate_callsign_message(callsign: str, existing_data: dict) -> str
 
     # When assigned
     if existing_data.get('approved_at'):
-        message += f"**Assigned:** < t: {int(existing_data['approved_at'].timestamp())}:R >\n
-        "
+        message += f"**Assigned:** < t: {int(existing_data['approved_at'].timestamp())}:R >\n"
 
     # What to do next
     message += f"\n'**What to do:**\n"
