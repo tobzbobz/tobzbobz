@@ -186,52 +186,33 @@ class Database:
                                user_id: int, user_name: str, colour: str, station: str,
                                started_at, has_voters_embed: bool = False,
                                original_colour: str = None, original_station: str = None,
-                               switch_history: str = None, related_messages: list = None):
+                               switch_history: str = None, related_messages: list = None,
+                               comms_status: str = 'active'):  # Add this parameter
         """Add an active watch to the database"""
         async with self.pool.acquire() as conn:
-            # Convert to timezone-AWARE datetime for PostgreSQL timestamptz
-            if isinstance(started_at, int):
-                # Unix timestamp - convert to UTC datetime
-                started_at_dt = datetime.fromtimestamp(started_at, tz=timezone.utc)
-            elif isinstance(started_at, datetime):
-                # Already a datetime
-                if started_at.tzinfo is None:
-                    # NAIVE datetime - add UTC timezone explicitly
-                    started_at_dt = started_at.replace(tzinfo=timezone.utc)
-                else:
-                    # Already timezone-aware - use as-is
-                    started_at_dt = started_at
-            else:
-                # Invalid type - use current time
-                print(f"❌ Error: Invalid started_at type {type(started_at)}, using current time")
-                started_at_dt = datetime.now(timezone.utc)
+            # [datetime conversion code stays the same]
 
             try:
-                print(f"💾 Saving active watch {message_id} to database")
-                print(f"   - started_at: {started_at_dt.isoformat()}")
-
                 await conn.execute(
                     '''INSERT INTO active_watches
                        (message_id, guild_id, channel_id, user_id, user_name, colour, station,
                         started_at, has_voters_embed, original_colour, original_station,
-                        switch_history, related_messages)
+                        switch_history, related_messages, comms_status)
                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb,
-                               $13) ON CONFLICT (message_id) DO
+                               $13, $14) ON CONFLICT (message_id) DO
                     UPDATE SET
                         colour = EXCLUDED.colour,
                         station = EXCLUDED.station,
                         switch_history = EXCLUDED.switch_history,
-                        related_messages = EXCLUDED.related_messages''',
+                        related_messages = EXCLUDED.related_messages,
+                        comms_status = EXCLUDED.comms_status''',
                     message_id, guild_id, channel_id, user_id, user_name, colour, station,
                     started_at_dt, has_voters_embed, original_colour, original_station,
-                    switch_history, related_messages or [message_id]
+                    switch_history, related_messages or [message_id], comms_status
                 )
-                print(f"✅ Successfully saved active watch {message_id}")
                 return True
             except Exception as e:
-                print(f"❌ Error saving active watch {message_id}: {e}")
-                import traceback
-                traceback.print_exc()
+                print(f"❌ Error saving active watch: {e}")
                 raise
 
     async def add_completed_watch(self, message_id: int, guild_id: int, channel_id: int,
@@ -363,44 +344,24 @@ class Database:
     # === SCHEDULED VOTES ===
     async def add_scheduled_vote(self, vote_id: str, guild_id: int, channel_id: int,
                                  watch_role_id: int, user_id: int, colour: str, station: str,
-                                 votes: int, time_minutes: int, scheduled_time, created_at):
-        """Add a scheduled vote (PostgreSQL safe version — no to_timestamp)"""
+                                 votes: int, time_minutes: int, scheduled_time, created_at,
+                                 comms_status: str = 'active'):  # Add this parameter
+        """Add a scheduled vote (PostgreSQL safe version)"""
         async with self.pool.acquire() as conn:
             try:
-                # Convert timestamps to timezone-aware datetimes
-                if isinstance(scheduled_time, int):
-                    scheduled_time_dt = datetime.fromtimestamp(scheduled_time, tz=timezone.utc)
-                elif isinstance(scheduled_time, datetime):
-                    scheduled_time_dt = (
-                        scheduled_time.replace(tzinfo=timezone.utc)
-                        if scheduled_time.tzinfo is None else scheduled_time
-                    )
-                else:
-                    print(f"⚠️ Invalid scheduled_time type {type(scheduled_time)}, using current time")
-                    scheduled_time_dt = datetime.now(timezone.utc)
-
-                if isinstance(created_at, int):
-                    created_at_dt = datetime.fromtimestamp(created_at, tz=timezone.utc)
-                elif isinstance(created_at, datetime):
-                    created_at_dt = (
-                        created_at.replace(tzinfo=timezone.utc)
-                        if created_at.tzinfo is None else created_at
-                    )
-                else:
-                    print(f"⚠️ Invalid created_at type {type(created_at)}, using current time")
-                    created_at_dt = datetime.now(timezone.utc)
+                # [timestamp conversion code stays the same]
 
                 await conn.execute(
                     '''INSERT INTO scheduled_votes
                        (vote_id, guild_id, channel_id, watch_role_id, user_id, colour, station,
-                        votes, time_minutes, scheduled_time, created_at)
-                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT (vote_id) DO
+                        votes, time_minutes, scheduled_time, created_at, comms_status)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) ON CONFLICT (vote_id) DO
                     UPDATE SET
                         guild_id = $2, channel_id = $3, watch_role_id = $4, user_id = $5,
                         colour = $6, station = $7, votes = $8, time_minutes = $9,
-                        scheduled_time = $10, created_at = $11''',
+                        scheduled_time = $10, created_at = $11, comms_status = $12''',
                     vote_id, guild_id, channel_id, watch_role_id, user_id, colour, station,
-                    votes, time_minutes, scheduled_time_dt, created_at_dt
+                    votes, time_minutes, scheduled_time_dt, created_at_dt, comms_status
                 )
                 return True
             except Exception as e:
@@ -410,7 +371,7 @@ class Database:
                 return False
 
     async def get_scheduled_votes(self) -> Dict:
-        """Get all scheduled votes (returns dict with vote_id as key for compatibility)"""
+        """Get all scheduled votes"""
         async with self.pool.acquire() as conn:
             rows = await conn.fetch('SELECT * FROM scheduled_votes ORDER BY scheduled_time')
 
@@ -426,7 +387,8 @@ class Database:
                     'votes': row['votes'],
                     'time_minutes': row['time_minutes'],
                     'scheduled_time': int(row['scheduled_time'].timestamp()),
-                    'created_at': int(row['created_at'].timestamp())
+                    'created_at': int(row['created_at'].timestamp()),
+                    'comms_status': row.get('comms_status', 'active')  # Add this
                 }
             return votes
 
@@ -514,21 +476,7 @@ async def load_watches():
         rows = await conn.fetch('SELECT * FROM active_watches')
         watches = {}
         for row in rows:
-            import json
-
-            # Handle started_at - convert datetime to timestamp integer
-            started_at = row['started_at']
-            if hasattr(started_at, 'timestamp'):
-                started_at = int(started_at.timestamp())
-
-            # Handle switch_history JSON
-            switch_history = row.get('switch_history', [])
-            if isinstance(switch_history, str):
-                try:
-                    switch_history = json.loads(switch_history)
-                except:
-                    switch_history = []
-
+            # [existing code...]
             watches[str(row['message_id'])] = {
                 'user_id': row['user_id'],
                 'user_name': row['user_name'],
@@ -540,7 +488,8 @@ async def load_watches():
                 'original_colour': row.get('original_colour'),
                 'original_station': row.get('original_station'),
                 'switch_history': switch_history,
-                'related_messages': row.get('related_messages', [row['message_id']])
+                'related_messages': row.get('related_messages', [row['message_id']]),
+                'comms_status': row.get('comms_status', 'active')  # Add this
             }
         return watches
 
@@ -589,4 +538,79 @@ async def update_watch_related_messages(self, message_id: int, related_messages:
             return True
         except Exception as e:
             print(f"❌ Error updating related_messages: {e}")
+            return False
+
+
+# Add this method to the Database class in database.py
+
+async def update_watch_related_messages(self, message_id: int, related_messages: list):
+    """Update the related_messages array for a watch"""
+    async with self.pool.acquire() as conn:
+        try:
+            await conn.execute(
+                'UPDATE active_watches SET related_messages = $1 WHERE message_id = $2',
+                related_messages, message_id
+            )
+            print(f"✅ Updated related_messages for watch {message_id}")
+            return True
+        except Exception as e:
+            print(f"❌ Error updating related_messages: {e}")
+            return False
+
+
+async def update_active_watch(self, message_id: int, user_id: int = None,
+                              user_name: str = None, colour: str = None,
+                              station: str = None, comms_status: str = None,
+                              switch_history: str = None):
+    """Update an active watch with new values"""
+    async with self.pool.acquire() as conn:
+        try:
+            # Build dynamic update query
+            updates = []
+            params = []
+            param_count = 1
+
+            if user_id is not None:
+                updates.append(f'user_id = ${param_count}')
+                params.append(user_id)
+                param_count += 1
+
+            if user_name is not None:
+                updates.append(f'user_name = ${param_count}')
+                params.append(user_name)
+                param_count += 1
+
+            if colour is not None:
+                updates.append(f'colour = ${param_count}')
+                params.append(colour)
+                param_count += 1
+
+            if station is not None:
+                updates.append(f'station = ${param_count}')
+                params.append(station)
+                param_count += 1
+
+            if comms_status is not None:
+                updates.append(f'comms_status = ${param_count}')
+                params.append(comms_status)
+                param_count += 1
+
+            if switch_history is not None:
+                updates.append(f'switch_history = ${param_count}::jsonb')
+                params.append(switch_history)
+                param_count += 1
+
+            if not updates:
+                return True
+
+            params.append(message_id)
+            query = f"UPDATE active_watches SET {', '.join(updates)} WHERE message_id = ${param_count}"
+
+            await conn.execute(query, *params)
+            print(f"✅ Updated active watch {message_id}")
+            return True
+        except Exception as e:
+            print(f"❌ Error updating active watch: {e}")
+            import traceback
+            traceback.print_exc()
             return False

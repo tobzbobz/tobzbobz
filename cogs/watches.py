@@ -7,6 +7,7 @@ from discord import app_commands
 from discord.ext import tasks
 import asyncio
 import datetime
+from datetime import timezone
 import json
 
 # Import database
@@ -55,7 +56,7 @@ active_watches = {}
 # Vote button and view
 class VoteButton(discord.ui.View):
     def __init__(self, message_id: int, required_votes: int, colour: str, station: str, time_minutes: int = None,
-                 guild=None, channel=None, cog=None):
+                 guild=None, channel=None, cog=None, comms_status: str = 'active'):
         super().__init__(timeout=None)
         self.message_id = message_id
         self.required_votes = required_votes
@@ -68,161 +69,170 @@ class VoteButton(discord.ui.View):
         self.channel = channel
         self.cog = cog
         self.cancelled = False
+        self.comms_status = comms_status
+        self._vote_lock = asyncio.Lock()  # Add this
 
     @discord.ui.button(label='0', style=discord.ButtonStyle.green,
                        custom_id='vote_button', emoji='<:FENZ:1389200656090533970>')
     async def vote_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            # Toggle vote - if already voted, remove vote; otherwise add vote
-            if interaction.user.id in self.voted_users:
-                # Remove vote
-                self.voted_users.remove(interaction.user.id)
-                self.vote_count -= 1
+        async with self._vote_lock:
+            try:
+                # Toggle vote - if already voted, remove vote; otherwise add vote
+                if interaction.user.id in self.voted_users:
+                    # Remove vote
+                    self.voted_users.remove(interaction.user.id)
+                    self.vote_count -= 1
+                    button.label = f'{self.vote_count}'
+
+                    await interaction.response.edit_message(view=self)
+                    removed_embed = discord.Embed(
+                        description=f'<:Accepted:1426930333789585509> Vote removed! ({self.vote_count}/{self.required_votes})',
+                        colour=discord.Colour(0x2ecc71)
+                    )
+                    await interaction.followup.send(embed=removed_embed, ephemeral=True)
+                    return
+
+                # Add vote
+                self.voted_users.add(interaction.user.id)
+                self.vote_count += 1
                 button.label = f'{self.vote_count}'
 
-                await interaction.response.edit_message(view=self)
-                removed_embed = discord.Embed(
-                    description=f'<:Accepted:1426930333789585509> Vote removed! ({self.vote_count}/{self.required_votes})',
-                    colour=discord.Colour(0x2ecc71)
-                )
-                await interaction.followup.send(embed=removed_embed, ephemeral=True)
-                return
+                if self.vote_count >= self.required_votes:
+                    # Cancel auto-cancel task if it exists
+                    if self.cog and f"auto_cancel_{self.message_id}" in self.cog.vote_timeout_tasks:
+                        self.cog.vote_timeout_tasks[f"auto_cancel_{self.message_id}"].cancel()
+                        del self.cog.vote_timeout_tasks[f"auto_cancel_{self.message_id}"]
 
-            # Add vote
-            self.voted_users.add(interaction.user.id)
-            self.vote_count += 1
-            button.label = f'{self.vote_count}'
+                    colour_map = {
+                        'Yellow': discord.Colour.gold(),
+                        'Blue': discord.Colour.blue(),
+                        'Brown': discord.Colour(0x8B4513),
+                        'Red': discord.Colour.red()
+                    }
+                    embed_colour = colour_map.get(self.colour, discord.Colour.orange())
 
-            if self.vote_count >= self.required_votes:
-                # Cancel auto-cancel task if it exists
-                if self.cog and f"auto_cancel_{self.message_id}" in self.cog.vote_timeout_tasks:
-                    self.cog.vote_timeout_tasks[f"auto_cancel_{self.message_id}"].cancel()
-                    del self.cog.vote_timeout_tasks[f"auto_cancel_{self.message_id}"]
+                    # Calculate watch start time
+                    if self.time_minutes:
+                        watch_start_time = discord.utils.utcnow() + datetime.timedelta(minutes=self.time_minutes)
+                        watch_start_timestamp = int(watch_start_time.timestamp())
+                    else:
+                        watch_start_time = discord.utils.utcnow()
+                        watch_start_timestamp = int(watch_start_time.timestamp())
 
-                colour_map = {
-                    'Yellow': discord.Colour.gold(),
-                    'Blue': discord.Colour.blue(),
-                    'Brown': discord.Colour(0x8B4513),
-                    'Red': discord.Colour.red()
-                }
-                embed_colour = colour_map.get(self.colour, discord.Colour.orange())
+                    # Create watch start embed (skip the "Vote Passed" intermediate step)
+                    start_embed = discord.Embed(title=f'🚨 {self.colour} Watch Announcement 🚨', colour=embed_colour)
+                    start_embed.add_field(name='Station', value=f'`{self.station}`', inline=True)
 
-                # Calculate watch start time
-                if self.time_minutes:
-                    watch_start_time = discord.utils.utcnow() + datetime.timedelta(minutes=self.time_minutes)
-                    watch_start_timestamp = int(watch_start_time.timestamp())
-                else:
-                    watch_start_time = discord.utils.utcnow()
-                    watch_start_timestamp = int(watch_start_time.timestamp())
+                    if self.time_minutes:
+                        start_embed.add_field(name='Time', value=f'<t:{watch_start_timestamp}:R>', inline=True)
+                    else:
+                        start_embed.add_field(name='Time',
+                                              value=discord.utils.format_dt(discord.utils.utcnow(), style='R'),
+                                              inline=True)
 
-                # Create watch start embed (skip the "Vote Passed" intermediate step)
-                start_embed = discord.Embed(title=f'🚨 {self.colour} Watch Announcement 🚨', colour=embed_colour)
-                start_embed.add_field(name='Station', value=f'`{self.station}`', inline=True)
-
-                if self.time_minutes:
-                    start_embed.add_field(name='Time', value=f'<t:{watch_start_timestamp}:R>', inline=True)
-                else:
-                    start_embed.add_field(name='Time', value=discord.utils.format_dt(discord.utils.utcnow(), style='R'),
+                    start_embed.add_field(name='Watch Leader', value=interaction.user.mention, inline=True)
+                    comms_status = getattr(self, 'comms_status', 'active')
+                    comms_emoji = '<:Denied:1426930694633816248>' if comms_status == 'inactive' else '<:Accepted:1426930333789585509>'
+                    start_embed.add_field(name='FIRE COMMS', value=f'{comms_emoji} {comms_status.capitalize()}',
                                           inline=True)
+                    start_embed.add_field(name='​',
+                                          value='No need to vote just hop in!!\nIf you are joining, please join Fenz RTO 🙌',
+                                          inline=False)
+                    start_embed.add_field(name='​',
+                                          value='**Select the below reaction role to be notified of any future watches!**',
+                                          inline=False)
+                    start_embed.set_image(
+                        url='https://cdn.discordapp.com/attachments/1425867714160758896/1426932258694238258/image.png?ex=68f4eeb9&is=68f39d39&hm=b69f7f8bad7dcd7c7bde4dab731ca7e23e27d32d864cad9fc7224dcbb0648840')
+                    start_embed.set_thumbnail(url='https://cdn.discordapp.com/emojis/1389200656090533970.webp?size=128')
+                    start_embed.set_author(name=f'Requested by {interaction.user.display_name}',
+                                           icon_url=interaction.user.display_avatar.url)
 
-                start_embed.add_field(name='Watch Leader', value=interaction.user.mention, inline=True)
-                start_embed.add_field(name='​',
-                                      value='No need to vote just hop in!!\nIf you are joining, please join Fenz RTO 🙌',
-                                      inline=False)
-                start_embed.add_field(name='​',
-                                      value='**Select the below reaction role to be notified of any future watches!**',
-                                      inline=False)
-                start_embed.set_image(
-                    url='https://cdn.discordapp.com/attachments/1425867714160758896/1426932258694238258/image.png?ex=68f4eeb9&is=68f39d39&hm=b69f7f8bad7dcd7c7bde4dab731ca7e23e27d32d864cad9fc7224dcbb0648840')
-                start_embed.set_thumbnail(url='https://cdn.discordapp.com/emojis/1389200656090533970.webp?size=128')
-                start_embed.set_author(name=f'Requested by {interaction.user.display_name}',
-                                       icon_url=interaction.user.display_avatar.url)
+                    # Add voters embed
+                    voters_embed = discord.Embed(title='Voters:', colour=embed_colour)
+                    voter_mentions = []
+                    for user_id in self.voted_users:
+                        user = interaction.guild.get_member(user_id)
+                        if user:
+                            voter_mentions.append(user.mention)
+                    voters_embed.description = '\n'.join(voter_mentions)
 
-                # Add voters embed
-                voters_embed = discord.Embed(title='Voters:', colour=embed_colour)
-                voter_mentions = []
-                for user_id in self.voted_users:
-                    user = interaction.guild.get_member(user_id)
-                    if user:
-                        voter_mentions.append(user.mention)
-                voters_embed.description = '\n'.join(voter_mentions)
+                    watch_view = WatchRoleButton(self.message_id)
+                    guild_config = get_guild_config(interaction.guild.id)
+                    watch_role_id = guild_config.get('watch_role_id')
 
-                watch_view = WatchRoleButton(self.message_id)
-                guild_config = get_guild_config(interaction.guild.id)
-                watch_role_id = guild_config.get('watch_role_id')
-
-                # SINGLE response - edit message to watch state
-                await interaction.response.edit_message(
-                    content=f'-# ||<@&{watch_role_id}> {interaction.user.mention} <@&1285474077556998196> <@&1365536209681514636>||' if watch_role_id else '',
-                    embeds=[start_embed, voters_embed],
-                    view=watch_view
-                )
-
-                # Save to database
-                await db.add_active_watch(
-                    message_id=self.message_id,
-                    guild_id=interaction.guild.id,
-                    channel_id=interaction.channel.id,
-                    user_id=interaction.user.id,
-                    user_name=interaction.user.display_name,
-                    colour=self.colour,
-                    station=self.station,
-                    started_at=interaction.created_at,
-                    has_voters_embed=True
-                )
-
-                # Update in-memory cache
-                active_watches[str(self.message_id)] = {
-                    'user_id': interaction.user.id,
-                    'user_name': interaction.user.display_name,
-                    'channel_id': interaction.channel.id,
-                    'colour': self.colour,
-                    'station': self.station,
-                    'started_at': int(interaction.created_at.timestamp()),
-                    'has_voters_embed': True
-                }
-
-                # Cancel vote timeout task since vote passed
-                if self.cog and str(self.message_id) in self.cog.vote_timeout_tasks:
-                    self.cog.vote_timeout_tasks[str(self.message_id)].cancel()
-                    del self.cog.vote_timeout_tasks[str(self.message_id)]
-
-                # Schedule the actual watch start (if delayed)
-                if self.cog and self.time_minutes:
-                    delay_seconds = self.time_minutes * 60
-                    start_task = asyncio.create_task(
-                        self.cog.start_watch_after_vote(
-                            channel=self.channel,
-                            message_id=self.message_id,
-                            user_id=interaction.user.id,
-                            user_name=interaction.user.display_name,
-                            colour=self.colour,
-                            station=self.station,
-                            watch_role_id=watch_role_id,
-                            voters=list(self.voted_users),
-                            delay_seconds=delay_seconds
-                        )
+                    # SINGLE response - edit message to watch state
+                    await interaction.response.edit_message(
+                        content=f'-# ||<@&{watch_role_id}> {interaction.user.mention} <@&1285474077556998196> <@&1365536209681514636>||' if watch_role_id else '',
+                        embeds=[start_embed, voters_embed],
+                        view=watch_view
                     )
-                    self.cog.vote_timeout_tasks[f"start_{self.message_id}"] = start_task
 
-            else:
-                # Vote not yet passed - just update the button
-                await interaction.response.edit_message(view=self)
-                voted_embed = discord.Embed(
-                    description=f'<:Accepted:1426930333789585509> Vote recorded! ({self.vote_count}/{self.required_votes})',
-                    colour=discord.Colour(0x2ecc71)
-                )
-                await interaction.followup.send(embed=voted_embed, ephemeral=True)
+                    await db.add_active_watch(
+                        message_id=self.message_id,
+                        guild_id=interaction.guild.id,
+                        channel_id=interaction.channel.id,
+                        user_id=interaction.user.id,
+                        user_name=interaction.user.display_name,
+                        colour=self.colour,
+                        station=self.station,
+                        started_at=interaction.created_at,
+                        has_voters_embed=True,
+                        comms_status=self.comms_status
+                    )
 
-        except Exception as e:
-            error_embed = discord.Embed(description=f'<:Denied:1426930694633816248> Error: {e}',
-                                        colour=discord.Colour(0xf24d4d))
-            if not interaction.response.is_done():
-                await interaction.response.send_message(embed=error_embed, ephemeral=True)
-            else:
-                await interaction.followup.send(embed=error_embed, ephemeral=True)
-            print(f'Error processing vote: {e}')
-            raise
+                    # Update in-memory cache
+                    active_watches[str(self.message_id)] = {
+                        'user_id': interaction.user.id,
+                        'user_name': interaction.user.display_name,
+                        'channel_id': interaction.channel.id,
+                        'colour': self.colour,
+                        'station': self.station,
+                        'started_at': int(interaction.created_at.timestamp()),
+                        'has_voters_embed': True,
+                        'comms_status': self.comms_status
+                    }
+
+                    # Cancel vote timeout task since vote passed
+                    if self.cog and str(self.message_id) in self.cog.vote_timeout_tasks:
+                        self.cog.vote_timeout_tasks[str(self.message_id)].cancel()
+                        del self.cog.vote_timeout_tasks[str(self.message_id)]
+
+                    # Schedule the actual watch start (if delayed)
+                    if self.cog and self.time_minutes:
+                        delay_seconds = self.time_minutes * 60
+                        start_task = asyncio.create_task(
+                            self.cog.start_watch_after_vote(
+                                channel=self.channel,
+                                message_id=self.message_id,
+                                user_id=interaction.user.id,
+                                user_name=interaction.user.display_name,
+                                colour=self.colour,
+                                station=self.station,
+                                watch_role_id=watch_role_id,
+                                voters=list(self.voted_users),
+                                delay_seconds=delay_seconds
+                            )
+                        )
+                        self.cog.vote_timeout_tasks[f"start_{self.message_id}"] = start_task
+
+                else:
+                    # Vote not yet passed - just update the button
+                    await interaction.response.edit_message(view=self)
+                    voted_embed = discord.Embed(
+                        description=f'<:Accepted:1426930333789585509> Vote recorded! ({self.vote_count}/{self.required_votes})',
+                        colour=discord.Colour(0x2ecc71)
+                    )
+                    await interaction.followup.send(embed=voted_embed, ephemeral=True)
+
+            except Exception as e:
+                error_embed = discord.Embed(description=f'<:Denied:1426930694633816248> Error: {e}',
+                                            colour=discord.Colour(0xf24d4d))
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(embed=error_embed, ephemeral=True)
+                else:
+                    await interaction.followup.send(embed=error_embed, ephemeral=True)
+                print(f'Error processing vote: {e}')
+                raise
 
 class WatchRoleButton(discord.ui.View):
     def __init__(self, message_id: int):
@@ -654,9 +664,10 @@ class WatchCog(commands.Cog):
     @app_commands.default_permissions(manage_nicknames=True)
     @app_commands.describe(
         colour='The colour watch you want to start.',
-        station='The station you are declaring the watch colour for.'
+        station='The station you are declaring the watch colour for.',
+        comms='Whether FIRE COMMS is active or inactive (default: inactive).'
     )
-    async def watch_start(self, interaction: discord.Interaction, colour: str, station: str):
+    async def watch_start(self, interaction: discord.Interaction, colour: str, station: str, comms: str = 'active'):
         try:
             allowed_role_ids = [1285474077556998196, 1389550689113473024, 1365536209681514636]
             user_roles = [role.id for role in interaction.user.roles]
@@ -764,6 +775,8 @@ class WatchCog(commands.Cog):
             embed.add_field(name='Station', value=f'`{station}`', inline=True)
             embed.add_field(name='Time', value=f'<t:{int(interaction.created_at.timestamp())}:R>', inline=True)
             embed.add_field(name='Watch Leader', value=interaction.user.mention, inline=True)
+            comms_emoji = '<:Denied:1426930694633816248>' if comms.lower() == 'inactive' else '<:Accepted:1426930333789585509>'
+            embed.add_field(name='FIRE COMMS', value=f'{comms_emoji} {comms.capitalize()}', inline=True)
             embed.add_field(name='‎', value='No need to vote just hop in!!\nIf you are joining, please join Fenz RTO 🙌',
                             inline=False)
             embed.add_field(name='‎', value='**Select the below reaction role to be notified of any future watches!**',
@@ -784,8 +797,6 @@ class WatchCog(commands.Cog):
             view.message_id = msg.id
 
             # Save to database
-            # Save to database
-            # Save to database
             try:
                 await db.add_active_watch(
                     message_id=msg.id,
@@ -795,11 +806,11 @@ class WatchCog(commands.Cog):
                     user_name=interaction.user.display_name,
                     colour=colour,
                     station=station,
-                    started_at=interaction.created_at,  # ✅ Pass the datetime object directly
+                    started_at=interaction.created_at,
                     has_voters_embed=False,
-                    related_messages=[msg.id]
+                    related_messages=[msg.id],
+                    comms_status=comms.lower()  # Add this
                 )
-
 
                 # Update in-memory cache
                 active_watches[str(msg.id)] = {
@@ -810,7 +821,8 @@ class WatchCog(commands.Cog):
                     'station': station,
                     'started_at': int(interaction.created_at.timestamp()),
                     'has_voters_embed': False,
-                    'related_messages': [msg.id]
+                    'related_messages': [msg.id],
+                    'comms_status': comms.lower()  # Add this
                 }
 
             except Exception as e:
@@ -834,6 +846,11 @@ class WatchCog(commands.Cog):
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
             raise
 
+    @watch_start.autocomplete('comms')
+    async def comms_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        statuses = ['active', 'inactive']
+        return [app_commands.Choice(name=status.capitalize(), value=status) for status in statuses if current.lower() in status.lower()]
+
     @watch_start.autocomplete('colour')
     async def colour_autocomplete(self, interaction: discord.Interaction, current: str) -> list[
         app_commands.Choice[str]]:
@@ -848,16 +865,18 @@ class WatchCog(commands.Cog):
         return [app_commands.Choice(name=station, value=station) for station in stations if
                 current.lower() in station.lower()]
 
+
     @watch_group.command(name='vote', description='Start a vote for a FENZ watch.')
     @app_commands.default_permissions(manage_nicknames=True)
     @app_commands.describe(
         colour='The colour watch you want to vote for.',
         station='The station you are voting for.',
         time='Time in minutes from now (optional).',
-        votes='Required number of votes to pass.'
+        votes='Required number of votes to pass.',
+        comms='Whether FIRE COMMS is active or inactive (default: active).'
     )
     async def watch_vote(self, interaction: discord.Interaction, colour: str, station: str, votes: int,
-                         time: int = None):
+                         time: int = None, comms: str = 'active'):
         try:
             allowed_role_ids = [1285474077556998196, 1389550689113473024, 1365536209681514636]
             user_roles = [role.id for role in interaction.user.roles]
@@ -909,7 +928,8 @@ class WatchCog(commands.Cog):
                 votes=votes,
                 time_minutes=time,
                 scheduled_time=scheduled_time,
-                created_at=current_time
+                created_at=current_time,
+                comms_status=comms.lower()  # This is already correct in your code
             )
 
             if not time:
@@ -923,7 +943,8 @@ class WatchCog(commands.Cog):
                     "votes": votes,
                     "time_minutes": None,
                     "scheduled_time": scheduled_time,
-                    "created_at": current_time
+                    "created_at": current_time,
+                    "comms_status": comms.lower()  # Add this
                 })
                 await db.remove_scheduled_vote(vote_id)
 
@@ -948,6 +969,14 @@ class WatchCog(commands.Cog):
             await interaction.followup.send(embed=error_embed, ephemeral=True)
             raise
 
+
+    @watch_vote.autocomplete('comms')
+    async def vote_comms_autocomplete(self, interaction: discord.Interaction, current: str) -> list[
+        app_commands.Choice[str]]:
+        statuses = ['active', 'inactive']
+        return [app_commands.Choice(name=status.capitalize(), value=status) for status in statuses if
+                current.lower() in status.lower()]
+
     @watch_vote.autocomplete('colour')
     async def vote_colour_autocomplete(self, interaction: discord.Interaction, current: str) -> list[
         app_commands.Choice[str]]:
@@ -970,6 +999,7 @@ class WatchCog(commands.Cog):
     )
     async def watch_end(self, interaction: discord.Interaction, watch: str, attendees: int):
         try:
+
             allowed_role_ids = [1285474077556998196, 1389550689113473024, 1365536209681514636]
             user_roles = [role.id for role in interaction.user.roles]
 
@@ -1324,7 +1354,7 @@ class WatchCog(commands.Cog):
             station = log_data.get('station', 'Unknown')
             ended_at = log_data.get('ended_at', 0)
 
-            ended_datetime = datetime.datetime.datetime.fromtimestamp(ended_at, tz=datetime.timezone.utc)
+            ended_datetime = datetime.datetime.fromtimestamp(ended_at, tz=datetime.timezone.utc)
             formatted_time = ended_datetime.strftime('%b %d, %Y at %I:%M %p UTC')
 
             # Delete from database
@@ -1573,7 +1603,8 @@ class WatchCog(commands.Cog):
                 time_minutes=vote_data.get('time_minutes'),
                 guild=guild,
                 channel=watch_channel,
-                cog=self
+                cog=self,
+                comms_status=vote_data.get('comms_status', 'active')  # Add this
             )
 
             msg = await watch_channel.send(
@@ -1727,7 +1758,7 @@ class WatchCog(commands.Cog):
 
     async def start_watch_after_vote(self, channel, message_id: int, user_id: int, user_name: str,
                                      colour: str, station: str, watch_role_id: int, voters: list,
-                                     delay_seconds: int):
+                                     delay_seconds: int, comms_status: str = 'active'):
         """Start a watch after the vote delay period"""
         try:
             # Wait for the delay period
@@ -1757,6 +1788,11 @@ class WatchCog(commands.Cog):
             start_embed.add_field(name='Time', value=discord.utils.format_dt(discord.utils.utcnow(), style='R'),
                                   inline=True)
             start_embed.add_field(name='Watch Leader', value=f'<@{user_id}>', inline=True)
+
+            # Add FIRE COMMS status
+            comms_emoji = '<:Denied:1426930694633816248>' if comms_status == 'inactive' else '<:Accepted:1426930333789585509>'
+            start_embed.add_field(name='FIRE COMMS', value=f'{comms_emoji} {comms_status.capitalize()}', inline=True)
+
             start_embed.add_field(name='​',
                                   value='No need to vote just hop in!!\nIf you are joining, please join Fenz RTO 🙌',
                                   inline=False)
@@ -1766,7 +1802,15 @@ class WatchCog(commands.Cog):
             start_embed.set_image(
                 url='https://cdn.discordapp.com/attachments/1425867714160758896/1426932258694238258/image.png?ex=68f4eeb9&is=68f39d39&hm=b69f7f8bad7dcd7c7bde4dab731ca7e23e27d32d864cad9fc7224dcbb0648840')
             start_embed.set_thumbnail(url='https://cdn.discordapp.com/emojis/1389200656090533970.webp?size=128')
-            start_embed.set_author(name=f'Requested by {interaction.user.display_name}', icon_url=interaction.user.display_avatar.url)
+
+            # ✅ FIXED: Get user from guild instead of using non-existent interaction
+            user = channel.guild.get_member(user_id)
+            if user:
+                start_embed.set_author(name=f'Requested by {user.display_name}',
+                                       icon_url=user.display_avatar.url)
+            else:
+                # Fallback if user left the server
+                start_embed.set_author(name=f'Requested by {user_name}')
 
             # Add voters embed
             voters_embed = discord.Embed(title='Voters:', colour=embed_colour)
@@ -1786,6 +1830,9 @@ class WatchCog(commands.Cog):
 
             view.message_id = msg.id
 
+            # ✅ FIXED: Added current timestamp for started_at
+            current_timestamp = int(discord.utils.utcnow().timestamp())
+
             # Save to database as active watch
             await db.add_active_watch(
                 message_id=msg.id,
@@ -1795,9 +1842,10 @@ class WatchCog(commands.Cog):
                 user_name=user_name,
                 colour=colour,
                 station=station,
-                started_at=discord.utils.utcnow(),
-                has_voters_embed=True,
-                related_messages=[msg.id]
+                started_at=current_timestamp,
+                has_voters_embed=True,  # Changed to True since we have voters
+                related_messages=[msg.id],
+                comms_status=comms_status
             )
 
             # Update in-memory cache
@@ -1807,14 +1855,17 @@ class WatchCog(commands.Cog):
                 'channel_id': channel.id,
                 'colour': colour,
                 'station': station,
-                'started_at': int(discord.utils.utcnow().timestamp()),
+                'started_at': current_timestamp,
                 'has_voters_embed': True,
-                'related_messages': [msg.id]
+                'related_messages': [msg.id],
+                'comms_status': comms_status
             }
 
             # Clean up the task from tracking
             if f"start_{message_id}" in self.vote_timeout_tasks:
                 del self.vote_timeout_tasks[f"start_{message_id}"]
+
+            print(f"✅ Successfully started watch {msg.id} after vote delay")
 
         except asyncio.CancelledError:
             pass
@@ -1823,15 +1874,19 @@ class WatchCog(commands.Cog):
             import traceback
             traceback.print_exc()
 
-    @watch_group.command(name='switch', description='Switch an active watch to a different colour/station.')
+    @watch_group.command(name='switch',
+                         description='Switch an active watch to a different colour/station/leader/comms.')
     @app_commands.default_permissions(manage_nicknames=True)
     @app_commands.describe(
         watch='The active watch to switch.',
         new_colour='New colour for the watch (optional).',
-        new_station='New station for the watch (optional).'
+        new_station='New station for the watch (optional).',
+        new_leader='New watch leader (mention a user, optional).',
+        new_comms='New COMMS status: active or inactive (optional).'
     )
     async def watch_switch(self, interaction: discord.Interaction, watch: str,
-                           new_colour: str = None, new_station: str = None):
+                           new_colour: str = None, new_station: str = None,
+                           new_leader: discord.Member = None, new_comms: str = None):
         try:
             allowed_role_ids = [1285474077556998196, 1389550689113473024, 1365536209681514636]
             user_roles = [role.id for role in interaction.user.roles]
@@ -1844,9 +1899,9 @@ class WatchCog(commands.Cog):
                 await interaction.response.send_message(embed=permission_embed, ephemeral=True)
                 return
 
-            if new_colour is None and new_station is None:
+            if new_colour is None and new_station is None and new_leader is None and new_comms is None:
                 error_embed = discord.Embed(
-                    description='<:Denied:1426930694633816248> You must specify at least one parameter to switch (colour or station)!',
+                    description='<:Denied:1426930694633816248> You must specify at least one parameter to switch!',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
@@ -1865,22 +1920,32 @@ class WatchCog(commands.Cog):
             watch_data = active_watches[watch]
             old_colour = watch_data['colour']
             old_station = watch_data['station']
+            old_leader_id = watch_data['user_id']
+            old_leader_name = watch_data['user_name']
+            old_comms = watch_data.get('comms_status', 'active')
 
             # Use old values if new ones not provided
             final_colour = new_colour if new_colour else old_colour
             final_station = new_station if new_station else old_station
+            final_leader_id = new_leader.id if new_leader else old_leader_id
+            final_leader_name = new_leader.display_name if new_leader else old_leader_name
+            final_comms = new_comms.lower() if new_comms else old_comms
 
-            # Check if switching to the EXACT SAME watch (no changes at all)
-            if final_colour == old_colour and final_station == old_station:
+            # Check if switching to the EXACT SAME watch
+            if (final_colour == old_colour and final_station == old_station and
+                    final_leader_id == old_leader_id and final_comms == old_comms):
                 error_embed = discord.Embed(
-                    description='<:Denied:1426930694633816248> This watch is already that colour and station! No changes to make.',
+                    description='<:Denied:1426930694633816248> No changes specified!',
                     colour=discord.Colour(0xf24d4d)
                 )
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
                 return
 
-            # Check if only switching colour (station stays the same) but that colour already exists at this station
-            if final_station == old_station and final_colour != old_colour:
+            # Determine if minor or major switch
+            is_minor_switch = (final_colour == old_colour and final_station == old_station)
+
+            # Check for conflicts only if colour or station changed
+            if not is_minor_switch:
                 for msg_id, other_watch in active_watches.items():
                     if (msg_id != watch and
                             other_watch.get('colour') == final_colour and
@@ -1892,51 +1957,8 @@ class WatchCog(commands.Cog):
                             'Red': discord.Colour.red()
                         }
                         embed_colour = colour_map.get(final_colour, discord.Colour.orange())
-
                         conflict_embed = discord.Embed(
-                            description=f'<:Denied:1426930694633816248> A {final_colour} Watch for `{final_station}` is already active! End it first before switching to this colour.',
-                            colour=embed_colour
-                        )
-                        await interaction.followup.send(embed=conflict_embed, ephemeral=True)
-                        return
-
-            # Check if only switching station (colour stays the same) but that station already has this colour
-            if final_colour == old_colour and final_station != old_station:
-                for msg_id, other_watch in active_watches.items():
-                    if (msg_id != watch and
-                            other_watch.get('colour') == final_colour and
-                            other_watch.get('station') == final_station):
-                        colour_map = {
-                            'Yellow': discord.Colour.gold(),
-                            'Blue': discord.Colour.blue(),
-                            'Brown': discord.Colour(0x8B4513),
-                            'Red': discord.Colour.red()
-                        }
-                        embed_colour = colour_map.get(final_colour, discord.Colour.orange())
-
-                        conflict_embed = discord.Embed(
-                            description=f'<:Denied:1426930694633816248> A {final_colour} Watch for `{final_station}` is already active! End it first before switching to this station.',
-                            colour=embed_colour
-                        )
-                        await interaction.followup.send(embed=conflict_embed, ephemeral=True)
-                        return
-
-            # Check if switching BOTH colour AND station - validate the new combination doesn't exist
-            if final_colour != old_colour and final_station != old_station:
-                for msg_id, other_watch in active_watches.items():
-                    if (msg_id != watch and
-                            other_watch.get('colour') == final_colour and
-                            other_watch.get('station') == final_station):
-                        colour_map = {
-                            'Yellow': discord.Colour.gold(),
-                            'Blue': discord.Colour.blue(),
-                            'Brown': discord.Colour(0x8B4513),
-                            'Red': discord.Colour.red()
-                        }
-                        embed_colour = colour_map.get(final_colour, discord.Colour.orange())
-
-                        conflict_embed = discord.Embed(
-                            description=f'<:Denied:1426930694633816248> A {final_colour} Watch for `{final_station}` is already active! End it first before switching to this combination.',
+                            description=f'<:Denied:1426930694633816248> A {final_colour} Watch for `{final_station}` is already active!',
                             colour=embed_colour
                         )
                         await interaction.followup.send(embed=conflict_embed, ephemeral=True)
@@ -1951,19 +1973,6 @@ class WatchCog(commands.Cog):
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
                 return
 
-            guild_config = get_guild_config(interaction.guild.id)
-            watch_channel_id = guild_config.get('watch_channel_id')
-
-            # Delete the original watch message
-            try:
-                original_message = await channel.fetch_message(int(watch))
-                await original_message.delete()
-            except discord.NotFound:
-                pass
-            except Exception as e:
-                print(f'Error deleting original watch message: {e}')
-
-            # Create new watch announcement
             colour_map = {
                 'Yellow': discord.Colour.gold(),
                 'Blue': discord.Colour.blue(),
@@ -1972,49 +1981,30 @@ class WatchCog(commands.Cog):
             }
             embed_colour = colour_map.get(final_colour, discord.Colour.orange())
 
-            embed = discord.Embed(title=f'🚨 {final_colour} Watch Announcement 🚨', colour=embed_colour)
-            embed.add_field(name='Station', value=f'`{final_station}`', inline=True)
-            embed.add_field(name='Time', value=f'<t:{watch_data["started_at"]}:R>', inline=True)
-            embed.add_field(name='Watch Leader', value=f'<@{watch_data["user_id"]}>', inline=True)
-            embed.add_field(name='‎', value='No need to vote just hop in!!\nIf you are joining, please join Fenz RTO 🙌',
-                            inline=False)
-
-            # Add switch information
+            # Build switch info
             switch_info = []
             if new_colour and new_colour != old_colour:
                 switch_info.append(f'**Colour changed:** {old_colour} → {final_colour}')
             if new_station and new_station != old_station:
                 switch_info.append(f'**Station changed:** {old_station} → {final_station}')
+            if new_leader and new_leader.id != old_leader_id:
+                switch_info.append(f'**Watch Leader changed:** {old_leader_name} → {final_leader_name}')
+            if new_comms and new_comms.lower() != old_comms:
+                switch_info.append(f'**FIRE COMMS changed:** {old_comms.capitalize()} → {final_comms.capitalize()}')
 
-            embed.add_field(name='‎', value='**Select the below reaction role to be notified of any future watches!**',
-                            inline=False)
-            embed.set_image(
-                url='https://cdn.discordapp.com/attachments/1425867714160758896/1426932258694238258/image.png?ex=68f4eeb9&is=68f39d39&hm=b69f7f8bad7dcd7c7bde4dab731ca7e23e27d32d864cad9fc7224dcbb0648840')
-            embed.set_thumbnail(url='https://cdn.discordapp.com/emojis/1389200656090533970.webp?size=128')
-            embed.set_author(name=f'Switched by {interaction.user.display_name}',
-                             icon_url=interaction.user.display_avatar.url)
-
-            view = WatchRoleButton(0)
-
-            # Only ping specific roles for switch
-            msg = await channel.send(
-                content=f'-# ||<@&1285474077556998196><@&1365536209681514636><@&1390867686170300456><@{watch_data["user_id"]}><@{interaction.user.id}>||',
-                embed=embed,
-                view=view
-            )
-
-            view.message_id = msg.id
-
-            # Update database with switch information
+            # Update switch history
             switch_timestamp = int(discord.utils.utcnow().timestamp())
-            import json
-
-            # Get existing switch history
-            switch_history = watch_data.get('switch_history', [])
+            switch_history = self.normalize_switch_history(watch_data.get('switch_history'))
             if isinstance(switch_history, str):
-                switch_history = json.loads(switch_history) if switch_history else []
+                try:
+                    switch_history = json.loads(switch_history) if switch_history else []
+                except (json.JSONDecodeError, TypeError):
+                    switch_history = []
+            elif switch_history is None:
+                switch_history = []
+            elif not isinstance(switch_history, list):
+                switch_history = []
 
-            # Add new switch entry
             switch_entry = {
                 'timestamp': switch_timestamp,
                 'switched_by': interaction.user.id,
@@ -2026,69 +2016,165 @@ class WatchCog(commands.Cog):
             if new_station:
                 switch_entry['from_station'] = old_station
                 switch_entry['to_station'] = final_station
+            if new_leader:
+                switch_entry['from_leader'] = old_leader_id
+                switch_entry['to_leader'] = final_leader_id
+            if new_comms:
+                switch_entry['from_comms'] = old_comms
+                switch_entry['to_comms'] = final_comms
 
             switch_history.append(switch_entry)
 
-            # Update active watch with new message ID and switch data
-            await db.remove_active_watch(int(watch))
-            # Update active watch with new message ID and switch data
-            await db.remove_active_watch(int(watch))
-
-            try:
-                await db.add_active_watch(
-                    message_id=msg.id,
-                    guild_id=interaction.guild.id,
-                    channel_id=channel.id,
-                    user_id=watch_data['user_id'],
-                    user_name=watch_data['user_name'],
-                    colour=final_colour,
-                    station=final_station,
-                    started_at=watch_data['started_at'],
-                    has_voters_embed=watch_data.get('has_voters_embed', False),
-                    original_colour=watch_data.get('original_colour', old_colour),
-                    original_station=watch_data.get('original_station', old_station),
-                    switch_history=json.dumps(switch_history)
-                )
-
-                # Update in-memory cache
-                del active_watches[watch]
-                active_watches[str(msg.id)] = {
-                    'user_id': watch_data['user_id'],
-                    'user_name': watch_data['user_name'],
-                    'channel_id': channel.id,
-                    'colour': final_colour,
-                    'station': final_station,
-                    'started_at': watch_data['started_at'],
-                    'has_voters_embed': watch_data.get('has_voters_embed', False),
-                    'original_colour': watch_data.get('original_colour', old_colour),
-                    'original_station': watch_data.get('original_station', old_station),
-                    'switch_history': switch_history
-                }
-
-                print(f"✅ Successfully saved switched watch {msg.id}")
-
-            except Exception as e:
-                # Database save failed - critical error
-                import traceback
-                traceback.print_exc()
-                print(f"❌ CRITICAL: Failed to save switched watch {msg.id}: {e}")
-
-                # Delete the watch message since we couldn't save it
+            if is_minor_switch:
+                # EDIT EXISTING MESSAGE
                 try:
-                    await msg.delete()
-                except:
+                    original_message = await channel.fetch_message(int(watch))
+
+                    embed = discord.Embed(title=f'🚨 {final_colour} Watch Announcement 🚨', colour=embed_colour)
+                    embed.add_field(name='Station', value=f'`{final_station}`', inline=True)
+                    embed.add_field(name='Time', value=f'<t:{watch_data["started_at"]}:R>', inline=True)
+                    embed.add_field(name='Watch Leader', value=f'<@{final_leader_id}>', inline=True)
+
+                    comms_emoji = '<:Accepted:1426930333789585509>' if final_comms == 'active' else '<:Denied:1426930694633816248>'
+                    embed.add_field(name='FIRE COMMS', value=f'{comms_emoji} {final_comms.capitalize()}', inline=True)
+
+                    embed.add_field(name='​',
+                                    value='No need to vote just hop in!!\nIf you are joining, please join Fenz RTO 🙌',
+                                    inline=False)
+                    embed.add_field(name='​',
+                                    value='**Select the below reaction role to be notified of any future watches!**',
+                                    inline=False)
+                    embed.set_image(
+                        url='https://cdn.discordapp.com/attachments/1425867714160758896/1426932258694238258/image.png?ex=68f4eeb9&is=68f39d39&hm=b69f7f8bad7dcd7c7bde4dab731ca7e23e27d32d864cad9fc7224dcbb0648840')
+                    embed.set_thumbnail(url='https://cdn.discordapp.com/emojis/1389200656090533970.webp?size=128')
+                    embed.set_author(name=f'Updated by {interaction.user.display_name}',
+                                     icon_url=interaction.user.display_avatar.url)
+
+                    await original_message.edit(embed=embed)
+
+                    # Update database
+                    await db.update_active_watch(
+                        message_id=int(watch),
+                        user_id=final_leader_id,
+                        user_name=final_leader_name,
+                        comms_status=final_comms,
+                        switch_history=json.dumps(switch_history)
+                    )
+
+                    # Update in-memory cache
+                    active_watches[watch]['user_id'] = final_leader_id
+                    active_watches[watch]['user_name'] = final_leader_name
+                    active_watches[watch]['comms_status'] = final_comms
+                    active_watches[watch]['switch_history'] = switch_history
+
+                    print(f"✅ Successfully updated watch {watch} (minor switch)")
+
+                except discord.NotFound:
+                    error_embed = discord.Embed(
+                        description='<:Denied:1426930694633816248> Watch message not found!',
+                        colour=discord.Colour(0xf24d4d)
+                    )
+                    await interaction.followup.send(embed=error_embed, ephemeral=True)
+                    return
+
+            else:
+                # DELETE AND RESEND MESSAGE
+                try:
+                    original_message = await channel.fetch_message(int(watch))
+                    await original_message.delete()
+                except discord.NotFound:
                     pass
+                except Exception as e:
+                    print(f'Error deleting original watch message: {e}')
 
-                error_embed = discord.Embed(
-                    description=f'<:Denied:1426930694633816248> Failed to save watch to database. Please try again.',
-                    colour=discord.Colour(0xf24d4d)
+                embed = discord.Embed(title=f'🚨 {final_colour} Watch Announcement 🚨', colour=embed_colour)
+                embed.add_field(name='Station', value=f'`{final_station}`', inline=True)
+                embed.add_field(name='Time', value=f'<t:{watch_data["started_at"]}:R>', inline=True)
+                embed.add_field(name='Watch Leader', value=f'<@{final_leader_id}>', inline=True)
+
+                comms_emoji = '<:Accepted:1426930333789585509>' if final_comms == 'active' else '<:Denied:1426930694633816248>'
+                embed.add_field(name='FIRE COMMS', value=f'{comms_emoji} {final_comms.capitalize()}', inline=True)
+
+                embed.add_field(name='​',
+                                value='No need to vote just hop in!!\nIf you are joining, please join Fenz RTO 🙌',
+                                inline=False)
+                embed.add_field(name='​',
+                                value='**Select the below reaction role to be notified of any future watches!**',
+                                inline=False)
+                embed.set_image(
+                    url='https://cdn.discordapp.com/attachments/1425867714160758896/1426932258694238258/image.png?ex=68f4eeb9&is=68f39d39&hm=b69f7f8bad7dcd7c7bde4dab731ca7e23e27d32d864cad9fc7224dcbb0648840')
+                embed.set_thumbnail(url='https://cdn.discordapp.com/emojis/1389200656090533970.webp?size=128')
+                embed.set_author(name=f'Switched by {interaction.user.display_name}',
+                                 icon_url=interaction.user.display_avatar.url)
+
+                view = WatchRoleButton(0)
+
+                msg = await channel.send(
+                    content=f'-# ||<@&1285474077556998196><@&1365536209681514636><@&1390867686170300456><@{final_leader_id}><@{interaction.user.id}>||',
+                    embed=embed,
+                    view=view
                 )
-                await interaction.followup.send(embed=error_embed, ephemeral=True)
-                return  # Exit early
 
-                # THIS IS OUTSIDE THE TRY-EXCEPT - runs if everything succeeded
+                view.message_id = msg.id
+
+                # Remove old from database
+                await db.remove_active_watch(int(watch))
+
+                try:
+                    await db.add_active_watch(
+                        message_id=msg.id,
+                        guild_id=interaction.guild.id,
+                        channel_id=channel.id,
+                        user_id=final_leader_id,
+                        user_name=final_leader_name,
+                        colour=final_colour,
+                        station=final_station,
+                        started_at=watch_data['started_at'],
+                        has_voters_embed=watch_data.get('has_voters_embed', False),
+                        original_colour=watch_data.get('original_colour', old_colour),
+                        original_station=watch_data.get('original_station', old_station),
+                        switch_history=json.dumps(switch_history),
+                        comms_status=final_comms
+                    )
+
+                    # Update in-memory cache
+                    del active_watches[watch]
+                    active_watches[str(msg.id)] = {
+                        'user_id': final_leader_id,
+                        'user_name': final_leader_name,
+                        'channel_id': channel.id,
+                        'colour': final_colour,
+                        'station': final_station,
+                        'started_at': watch_data['started_at'],
+                        'has_voters_embed': watch_data.get('has_voters_embed', False),
+                        'original_colour': watch_data.get('original_colour', old_colour),
+                        'original_station': watch_data.get('original_station', old_station),
+                        'switch_history': switch_history,
+                        'comms_status': final_comms
+                    }
+
+                    print(f"✅ Successfully saved switched watch {msg.id}")
+
+                except Exception as e:
+                    import traceback
+                    traceback.print_exc()
+                    print(f"❌ CRITICAL: Failed to save switched watch {msg.id}: {e}")
+
+                    try:
+                        await msg.delete()
+                    except:
+                        pass
+
+                    error_embed = discord.Embed(
+                        description=f'<:Denied:1426930694633816248> Failed to save watch to database.',
+                        colour=discord.Colour(0xf24d4d)
+                    )
+                    await interaction.followup.send(embed=error_embed, ephemeral=True)
+                    return
+
             success_embed = discord.Embed(
-                description=f'<:Accepted:1426930333789585509> Watch switched successfully!\n' + '\n'.join(switch_info),
+                description=f'<:Accepted:1426930333789585509> Watch {"updated" if is_minor_switch else "switched"} successfully!\n' + '\n'.join(
+                    switch_info),
                 colour=discord.Colour(0x2ecc71)
             )
             await interaction.followup.send(embed=success_embed, ephemeral=True)
@@ -2104,6 +2190,27 @@ class WatchCog(commands.Cog):
             else:
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
             raise
+
+    def normalize_switch_history(self, switch_history):
+        """Ensure switch_history is always a list"""
+        if switch_history is None:
+            return []
+        if isinstance(switch_history, str):
+            try:
+                return json.loads(switch_history) if switch_history else []
+            except (json.JSONDecodeError, TypeError):
+                return []
+        if isinstance(switch_history, list):
+            return switch_history
+        return []
+
+
+    @watch_switch.autocomplete('new_comms')
+    async def switch_comms_autocomplete(self, interaction: discord.Interaction, current: str) -> list[
+        app_commands.Choice[str]]:
+        statuses = ['active', 'inactive']
+        return [app_commands.Choice(name=status.capitalize(), value=status) for status in statuses if
+                current.lower() in status.lower()]
 
     @watch_switch.autocomplete('watch')
     async def switch_watch_autocomplete(self, interaction: discord.Interaction, current: str) -> list[
@@ -2319,23 +2426,42 @@ class WatchCog(commands.Cog):
             # Create the embed
             stats_embed = discord.Embed(
                 title="<:FENZ:1389200656090533970> | FENZ Watches",
-                description="FENZ watches are a system of organising large player activity sessions on FENZ. These can be hosted by FENZ Suervisors and Leadership and we encourage you to click the Watch Ping button to get notified when we host watches!",
+                description="FENZ watches are a system of organising large player activity sessions on FENZ. These can be hosted by FENZ Supervisors and Leadership and we encourage you to click the Watch Ping button to get notified when we host watches!",
                 colour=discord.Colour(0xffffff)
             )
 
             stats_embed.add_field(
-                name="⚪ | Watch Status",
-                value="⚫ - **No watch is active.**\n> Please make sure it is SSU and wait for a FENZ Superisor or Leadership member to start a watch!\n\n🗳️ - **A watch vote is occuring.**\n> A watch vote is happening. Vote up if you want to participate in the watch!\n\n🟠 - **A watch will be active soon.**\n> A watch vote has succeeded, and is waiting its designated start time!\n\n🔴 / 🟡 / 🔵 / 🟤 - **Watch Colour.**\n> A watch of this colour has been started!\n\n1️⃣ / 2️⃣ - **Watch Station.**\n> A watch at this station has been started!\n",
+                name="âšª | Watch Status",
+                value=(
+                    "⚫ - **No watch is active.**\n"
+                    "> Please make sure it is SSU and wait for a FENZ Supervisor or Leadership member to start a watch!\n\n"
+                    "🗳️¸ - **A watch vote is occurring.**\n"
+                    "> A watch vote is happening. Vote up if you want to participate in the watch!\n\n"
+                    "🟠  - **A watch will be active soon.**\n"
+                    "> A watch vote has succeeded, and is waiting its designated start time!\n\n"
+                    "🔴 / 🟡 / 🔵 / 🟤 - **Watch Colour.**\n"
+                "> A watch of this colour has been started!\n\n"
+                "1️⃣ / 2️⃣ - **Watch Station.**\n"
+                "> A watch at this station has been started!\n"
+                ),
                 inline=False
             )
 
             stats_embed.add_field(
                 name="🏆 | Watch Records",
-                value=f"**Total Watches:**\n> {stats['total_watches']}\n\n**Longest Watch:**\n> {stats['longest_duration']}\n\n**Most Attendees:\n> {stats['most_attendees']}\n\n**Most Common Watch Colour:**\n> {stats['most_common_colour']}\n\n**Most Active Station:**\n> {stats['most_active_station']}\n\n**Average Watch Duration:**\n> {stats['average_duration']}",
+                value=(
+                    f"**Total Watches:** {stats['total_watches']}\n"
+                    f"**Longest Watch:** {stats['longest_duration']}\n"
+                    f"**Most Attendees:** {stats['most_attendees']}\n"
+                    f"**Most Common Watch Colour:** {stats['most_common_colour']}\n"
+                    f"**Most Active Station:** {stats['most_active_station']}\n"
+                    f"**Average Watch Duration:** {stats['average_duration']}"
+                ),
                 inline=True
             )
 
-            stats_embed.set_image(url="https://cdn.discordapp.com/attachments/1425358898831036507/1434782301031501958/image.png?ex=690994a5&is=69084325&hm=39fb6a254591d565c210a63738f5c83b9283680353c5d16dd654dd8bdc9022f3&")
+            stats_embed.set_image(
+                url="https://cdn.discordapp.com/attachments/1425358898831036507/1434782301031501958/image.png?ex=690994a5&is=69084325&hm=39fb6a254591d565c210a63738f5c83b9283680353c5d16dd654dd8bdc9022f3&")
 
             # Create the dropdown view
             view = WatchRegulationsDropdown()

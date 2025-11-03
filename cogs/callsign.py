@@ -305,6 +305,18 @@ class CallsignCog(commands.Cog):
             self.active_watches = await conn.fetch("SELECT * FROM callsigns;")
         print("✅ Reloaded callsigns cache")
 
+    def strip_shift_prefixes(nickname: str) -> str:
+        """
+        Remove shift-related prefixes from nicknames before comparison
+        Returns the nickname without DUTY, BRK, or LOA prefixes
+        """
+        prefixes_to_strip = ["DUTY | ", "BRK | ", "LOA | "]
+
+        for prefix in prefixes_to_strip:
+            if nickname.startswith(prefix):
+                return nickname[len(prefix):]
+
+        return nickname
 
     @tasks.loop(minutes=60)
     async def auto_sync_loop(self):
@@ -461,24 +473,40 @@ class CallsignCog(commands.Cog):
                                     nickname_parts.append(record['roblox_username'])
                                 expected_nickname = " | ".join(nickname_parts) if nickname_parts else record[
                                     'roblox_username']
-                        else:
-                            expected_nickname = format_nickname(
-                                current_fenz_prefix,
-                                current_callsign,
-                                current_hhstj_prefix,
-                                record['roblox_username'],
-                                is_fenz_high_command,
-                                is_hhstj_high_command
-                            )
+                            else:
+                                expected_nickname = format_nickname(
+                                    current_fenz_prefix,
+                                    current_callsign,
+                                    current_hhstj_prefix,
+                                    record['roblox_username'],
+                                    is_fenz_high_command,
+                                    is_hhstj_high_command
+                                )
 
-                        if member.nick != expected_nickname:
-                            try:
-                                await member.edit(nick=expected_nickname)
-                                nickname_updates += 1
-                            except discord.Forbidden:
-                                print(f"⚠️ Cannot update nickname for {member.display_name}")
-                            except Exception as e:
-                                print(f"⚠️ Error updating nickname for {member.display_name}: {e}")
+                            # ✅ NEW: Strip shift prefixes before comparison
+                            current_nick_stripped = strip_shift_prefixes(member.nick) if member.nick else member.name
+                            expected_nick_stripped = strip_shift_prefixes(expected_nickname)
+
+                            # Only update if the stripped versions don't match
+                            if current_nick_stripped != expected_nick_stripped:
+                                try:
+                                    # ✅ IMPORTANT: Preserve shift prefix if it exists
+                                    shift_prefix = ""
+                                    if member.nick:
+                                        for prefix in ["DUTY | ", "BRK | ", "LOA | "]:
+                                            if member.nick.startswith(prefix):
+                                                shift_prefix = prefix
+                                                break
+
+                                    # Apply shift prefix back to new nickname
+                                    final_nickname = shift_prefix + expected_nickname
+
+                                    await member.edit(nick=final_nickname)
+                                    nickname_updates += 1
+                                except discord.Forbidden:
+                                    print(f"⚠️ Cannot update nickname for {member.display_name}")
+                                except Exception as e:
+                                    print(f"⚠️ Error updating nickname for {member.display_name}: {e}")
 
                         # Determine rank type for sheets
                         rank_type, rank_data = sheets_manager.determine_rank_type(member.roles)
@@ -1646,6 +1674,302 @@ class CallsignCog(commands.Cog):
             import traceback
             traceback.print_exc()
 
+    @callsign_group.command(name="audit", description="[OWNER] Find users without callsigns or incomplete data")
+    @app_commands.describe(
+        show_incomplete="Show users with incomplete data (missing callsign number)",
+        show_missing="Show users not in database at all"
+    )
+    async def audit_callsigns(
+            self,
+            interaction: discord.Interaction,
+            show_incomplete: bool = True,
+            show_missing: bool = True
+    ):
+        """Owner-only: Audit callsign database and find issues"""
+
+        OWNER_ID = 678475709257089057
+
+        if interaction.user.id != OWNER_ID:
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> This command is restricted to the bot owner only!",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(thinking=True)
+
+        try:
+            # Get all users with FENZ roles
+            fenz_members = set()
+            for role_id in FENZ_RANK_MAP.keys():
+                role = interaction.guild.get_role(role_id)
+                if role:
+                    fenz_members.update(role.members)
+
+            # Get all callsigns from database
+            async with db.pool.acquire() as conn:
+                db_callsigns = await conn.fetch('SELECT * FROM callsigns')
+
+            db_user_ids = {record['discord_user_id'] for record in db_callsigns}
+
+            # Track issues
+            missing_from_db = []
+            incomplete_data = []
+
+            for member in fenz_members:
+                # Check if in database
+                if member.id not in db_user_ids:
+                    # Get Roblox info
+                    bloxlink_data = await self.get_bloxlink_data(member.id, interaction.guild.id)
+
+                    if bloxlink_data:
+                        roblox_id = bloxlink_data['id']
+                        roblox_username = await self.get_roblox_user_from_id(roblox_id)
+                    else:
+                        roblox_id = None
+                        roblox_username = None
+
+                    # Get FENZ rank
+                    fenz_prefix = None
+                    fenz_rank_name = None
+                    for role_id, (rank_name, prefix) in FENZ_RANK_MAP.items():
+                        if any(role.id == role_id for role in member.roles):
+                            fenz_prefix = prefix
+                            fenz_rank_name = rank_name
+                            break
+
+                    missing_from_db.append({
+                        'member': member,
+                        'fenz_rank': fenz_rank_name,
+                        'fenz_prefix': fenz_prefix,
+                        'roblox_username': roblox_username,
+                        'roblox_id': roblox_id,
+                        'has_bloxlink': bool(bloxlink_data)
+                    })
+                else:
+                    # Check for incomplete data
+                    user_record = next((r for r in db_callsigns if r['discord_user_id'] == member.id), None)
+                    if user_record:
+                        issues = []
+                        if user_record['callsign'] in ['###', 'BLANK', None]:
+                            issues.append("No callsign number")
+                        if not user_record['roblox_username']:
+                            issues.append("Missing Roblox username")
+                        if not user_record['roblox_user_id']:
+                            issues.append("Missing Roblox ID")
+
+                        if issues:
+                            incomplete_data.append({
+                                'member': member,
+                                'record': dict(user_record),
+                                'issues': issues
+                            })
+
+            # Build response embeds
+            embeds = []
+
+            if show_missing and missing_from_db:
+                # Create pages for missing users (10 per page)
+                chunk_size = 10
+                for i in range(0, len(missing_from_db), chunk_size):
+                    chunk = missing_from_db[i:i + chunk_size]
+
+                    embed = discord.Embed(
+                        title=f"🔍 Users Missing from Database ({i + 1}-{min(i + chunk_size, len(missing_from_db))} of {len(missing_from_db)})",
+                        description="These users have FENZ roles but no callsign in the database",
+                        color=discord.Color.red()
+                    )
+
+                    for user_data in chunk:
+                        member = user_data['member']
+                        status_icons = []
+
+                        if user_data['has_bloxlink']:
+                            status_icons.append("✅ Bloxlink")
+                        else:
+                            status_icons.append("❌ No Bloxlink")
+
+                        if user_data['roblox_username']:
+                            status_icons.append(f"Roblox: {user_data['roblox_username']}")
+
+                        embed.add_field(
+                            name=f"{member.display_name} ({member.id})",
+                            value=f"**Rank:** {user_data['fenz_rank'] or 'Unknown'}\n"
+                                  f"**Status:** {' | '.join(status_icons)}\n"
+                                  f"**Action:** Use `/callsign assign` to add them",
+                            inline=False
+                        )
+
+                    embeds.append(embed)
+
+            if show_incomplete and incomplete_data:
+                # Create pages for incomplete data (10 per page)
+                chunk_size = 10
+                for i in range(0, len(incomplete_data), chunk_size):
+                    chunk = incomplete_data[i:i + chunk_size]
+
+                    embed = discord.Embed(
+                        title=f"⚠️ Incomplete Callsign Data ({i + 1}-{min(i + chunk_size, len(incomplete_data))} of {len(incomplete_data)})",
+                        description="These users are in the database but have incomplete information",
+                        color=discord.Color.orange()
+                    )
+
+                    for user_data in chunk:
+                        member = user_data['member']
+                        record = user_data['record']
+
+                        current_callsign = "None"
+                        if record['fenz_prefix'] and record['callsign']:
+                            current_callsign = f"{record['fenz_prefix']}-{record['callsign']}"
+                        elif record['callsign']:
+                            current_callsign = record['callsign']
+
+                        embed.add_field(
+                            name=f"{member.display_name} ({member.id})",
+                            value=f"**Current:** {current_callsign}\n"
+                                  f"**Issues:** {', '.join(user_data['issues'])}\n"
+                                  f"**Roblox:** {record.get('roblox_username') or 'Missing'}",
+                            inline=False
+                        )
+
+                    embeds.append(embed)
+
+            # Summary embed
+            summary_embed = discord.Embed(
+                title="📊 Callsign Audit Summary",
+                color=discord.Color.blue()
+            )
+
+            summary_embed.add_field(
+                name="Total FENZ Members",
+                value=str(len(fenz_members)),
+                inline=True
+            )
+            summary_embed.add_field(
+                name="In Database",
+                value=str(len(db_user_ids)),
+                inline=True
+            )
+            summary_embed.add_field(
+                name="Missing from DB",
+                value=str(len(missing_from_db)),
+                inline=True
+            )
+            summary_embed.add_field(
+                name="Incomplete Data",
+                value=str(len(incomplete_data)),
+                inline=True
+            )
+
+            if missing_from_db or incomplete_data:
+                summary_embed.add_field(
+                    name="📝 Next Steps",
+                    value="• Use `/callsign assign` to add missing users\n"
+                          "• Use `/callsign assign` to fix incomplete data\n"
+                          "• Run `/callsign sync` after making changes",
+                    inline=False
+                )
+            else:
+                summary_embed.add_field(
+                    name="✅ Status",
+                    value="All FENZ members have complete callsign data!",
+                    inline=False
+                )
+
+            embeds.insert(0, summary_embed)
+
+            # Send embeds
+            if len(embeds) == 1:
+                await interaction.followup.send(embed=embeds[0], ephemeral=True)
+            else:
+                # Send summary first
+                await interaction.followup.send(embed=embeds[0], ephemeral=True)
+
+                # Send other embeds
+                for embed in embeds[1:]:
+                    await interaction.followup.send(embed=embed, ephemeral=True)
+
+        except Exception as e:
+            await interaction.followup.send(
+                f"<:Denied:1426930694633816248> Error during audit: {str(e)}",
+                ephemeral=True
+            )
+            import traceback
+            traceback.print_exc()
+
+    @callsign_group.command(name="bulk-assign", description="[OWNER] Assign callsigns to multiple users at once")
+    async def bulk_assign(self, interaction: discord.Interaction):
+        """Owner-only: Interactive bulk callsign assignment"""
+
+        OWNER_ID = 678475709257089057
+
+        if interaction.user.id != OWNER_ID:
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> This command is restricted to the bot owner only!",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(thinking=True)
+
+        try:
+            # Get all users with FENZ roles but no callsign
+            fenz_members = set()
+            for role_id in FENZ_RANK_MAP.keys():
+                role = interaction.guild.get_role(role_id)
+                if role:
+                    fenz_members.update(role.members)
+
+            # Get all callsigns from database
+            async with db.pool.acquire() as conn:
+                db_callsigns = await conn.fetch('SELECT * FROM callsigns')
+
+            db_user_ids = {record['discord_user_id'] for record in db_callsigns}
+
+            # Find users without callsigns
+            users_without_callsigns = []
+            for member in fenz_members:
+                if member.id not in db_user_ids:
+                    # Get Roblox info
+                    bloxlink_data = await self.get_bloxlink_data(member.id, interaction.guild.id)
+                    if bloxlink_data:
+                        roblox_id = bloxlink_data['id']
+                        roblox_username = await self.get_roblox_user_from_id(roblox_id)
+
+                        if roblox_username:
+                            # Get FENZ rank
+                            fenz_prefix = None
+                            for role_id, (rank_name, prefix) in FENZ_RANK_MAP.items():
+                                if any(role.id == role_id for role in member.roles):
+                                    fenz_prefix = prefix
+                                    break
+
+                            if fenz_prefix:
+                                users_without_callsigns.append({
+                                    'member': member,
+                                    'fenz_prefix': fenz_prefix,
+                                    'roblox_id': roblox_id,
+                                    'roblox_username': roblox_username
+                                })
+
+            if not users_without_callsigns:
+                await interaction.followup.send(
+                    "✅ All FENZ members with valid Bloxlink connections already have callsigns!",
+                    ephemeral=True
+                )
+                return
+
+            # Create view for bulk assignment
+            view = BulkAssignView(self, interaction, users_without_callsigns)
+            await view.start()
+
+        except Exception as e:
+            await interaction.followup.send(
+                f"<:Denied:1426930694633816248> Error: {str(e)}",
+                ephemeral=True
+            )
+            import traceback
+            traceback.print_exc()
 
 class HighCommandPrefixChoice(discord.ui.View):
     def __init__(self, interaction_user_id: int, cog, original_interaction, user, callsign,
@@ -1835,6 +2159,214 @@ class HighCommandPrefixChoice(discord.ui.View):
             except Exception as e:
                 print(f"Error in timeout handler: {e}")
 
+    class BulkAssignView(discord.ui.View):
+        """Interactive view for bulk callsign assignment"""
+
+        def __init__(self, cog, interaction, users_data):
+            super().__init__(timeout=600)  # 10 minute timeout
+            self.cog = cog
+            self.interaction = interaction
+            self.users_data = users_data
+            self.current_index = 0
+            self.assigned_count = 0
+            self.skipped_count = 0
+
+        async def start(self):
+            """Start the bulk assignment process"""
+            if not self.users_data:
+                await self.interaction.followup.send("No users to assign!", ephemeral=True)
+                return
+
+            await self.show_current_user()
+
+        async def show_current_user(self):
+            """Show the current user for assignment"""
+            if self.current_index >= len(self.users_data):
+                # Finished!
+                await self.finish()
+                return
+
+            user_data = self.users_data[self.current_index]
+            member = user_data['member']
+
+            embed = discord.Embed(
+                title=f"📝 Bulk Callsign Assignment ({self.current_index + 1}/{len(self.users_data)})",
+                description=f"Assign a callsign to {member.mention}",
+                color=discord.Color.blue()
+            )
+
+            embed.add_field(
+                name="Discord User",
+                value=f"{member.display_name} ({member.id})",
+                inline=False
+            )
+            embed.add_field(
+                name="Roblox User",
+                value=user_data['roblox_username'],
+                inline=True
+            )
+            embed.add_field(
+                name="FENZ Rank",
+                value=user_data['fenz_prefix'],
+                inline=True
+            )
+            embed.add_field(
+                name="📊 Progress",
+                value=f"Assigned: {self.assigned_count} | Skipped: {self.skipped_count}",
+                inline=False
+            )
+
+            embed.set_footer(text="Click 'Assign' to enter a callsign, 'Skip' to skip this user, or 'Finish' to end")
+
+            if self.current_index == 0:
+                await self.interaction.followup.send(embed=embed, view=self, ephemeral=True)
+            else:
+                await self.interaction.edit_original_response(embed=embed, view=self)
+
+        async def finish(self):
+            """Finish the bulk assignment process"""
+            embed = discord.Embed(
+                title="✅ Bulk Assignment Complete!",
+                color=discord.Color.green()
+            )
+
+            embed.add_field(
+                name="Summary",
+                value=f"**Assigned:** {self.assigned_count} callsigns\n"
+                      f"**Skipped:** {self.skipped_count} users\n"
+                      f"**Total Processed:** {self.current_index} / {len(self.users_data)}",
+                inline=False
+            )
+
+            if self.assigned_count > 0:
+                embed.add_field(
+                    name="📝 Next Steps",
+                    value="Run `/callsign sync` to update Google Sheets",
+                    inline=False
+                )
+
+            # Disable all buttons
+            for item in self.children:
+                item.disabled = True
+
+            await self.interaction.edit_original_response(embed=embed, view=self)
+            self.stop()
+
+        @discord.ui.button(label="Assign Callsign", style=discord.ButtonStyle.success, emoji="✅")
+        async def assign_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+            """Show modal to assign callsign"""
+            user_data = self.users_data[self.current_index]
+            modal = BulkAssignModal(self, user_data)
+            await interaction.response.send_modal(modal)
+
+        @discord.ui.button(label="Skip", style=discord.ButtonStyle.secondary, emoji="⏭️")
+        async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+            """Skip this user"""
+            await interaction.response.defer()
+            self.skipped_count += 1
+            self.current_index += 1
+            await self.show_current_user()
+
+        @discord.ui.button(label="Finish", style=discord.ButtonStyle.danger, emoji="🏁")
+        async def finish_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+            """End bulk assignment"""
+            await interaction.response.defer()
+            await self.finish()
+
+class BulkAssignModal(discord.ui.Modal):
+    """Modal for entering callsign during bulk assignment"""
+
+    def __init__(self, view: "BulkAssignView", user_data: dict):
+        super().__init__(title="Bulk Assign Callsigns")
+        self.view = view
+        self.user_data = user_data
+
+        self.callsign_input = discord.ui.TextInput(
+            label="Callsign Number",
+            placeholder="Enter 1-3 digit number (e.g., 1, 42, 123)",
+            required=True,
+            max_length=3
+        )
+        self.add_item(self.callsign_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+
+        try:
+            callsign = self.callsign_input.value.strip()
+
+            # Validate
+            if not callsign.isdigit() or len(callsign) > 3:
+                await interaction.followup.send(
+                   "<:Denied:1426930694633816248> Invalid callsign! Must be 1-3 digits.",
+                    ephemeral=True
+                )
+                return
+
+            # Check if exists
+            existing = await check_callsign_exists(callsign)
+            if existing:
+                await interaction.followup.send(
+                    f"<:Denied:1426930694633816248> Callsign {callsign} is already taken by <@{existing['discord_user_id']}>!",
+                    ephemeral=True
+                )
+                return
+
+            # Assign callsign
+            member = self.user_data['member']
+
+            # Get HHStJ prefix
+            hhstj_prefix = get_hhstj_prefix_from_roles(member.roles)
+
+            await add_callsign_to_database(
+                callsign,
+                member.id,
+                str(member),
+                self.user_data['roblox_id'],
+                self.user_data['roblox_username'],
+                self.user_data['fenz_prefix'],
+                hhstj_prefix or '',
+                interaction.user.id,
+                interaction.user.display_name
+            )
+
+            # Update nickname
+            is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
+            is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
+
+            new_nickname = format_nickname(
+                self.user_data['fenz_prefix'],
+                callsign,
+                hhstj_prefix or '',
+                self.user_data['roblox_username'],
+                is_fenz_high_command,
+                is_hhstj_high_command
+            )
+
+            try:
+                await member.edit(nick=new_nickname)
+            except discord.Forbidden:
+                pass
+
+            # Success!
+            self.view.assigned_count += 1
+            self.view.current_index += 1
+
+            await interaction.followup.send(
+                f"✅ Assigned {self.user_data['fenz_prefix']}-{callsign} to {member.mention}",
+                ephemeral=True
+            )
+
+            # Show next user
+            await self.view.show_current_user()
+
+        except Exception as e:
+            await interaction.followup.send(
+                f"<:Denied:1426930694633816248> Error: {str(e)}",
+                ephemeral=True
+            )
+            import traceback
+            traceback.print_exc()
 
 async def setup(bot):
     await bot.add_cog(CallsignCog(bot))
