@@ -2330,7 +2330,7 @@ class WatchCog(commands.Cog):
                 inline=True
             )
 
-            regulations_embed.set_image(url="https://cdn.discordapp.com/attachments/1425358898831036507/1434782301031501958/image.png?ex=690994a5&is=69084325&hm=39fb6a254591d565c210a63738f5c83b9283680353c5d16dd654dd8bdc9022f3&")
+            stats_embed.set_image(url="https://cdn.discordapp.com/attachments/1425358898831036507/1434782301031501958/image.png?ex=690994a5&is=69084325&hm=39fb6a254591d565c210a63738f5c83b9283680353c5d16dd654dd8bdc9022f3&")
 
             # Create the dropdown view
             view = WatchRegulationsDropdown()
