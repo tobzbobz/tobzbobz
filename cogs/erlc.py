@@ -768,8 +768,12 @@ class ERLC(commands.GroupCog, name="erlc"):
                 embed.description = f"**Total Players:** {len(filtered_data)}"
 
             for i, p in enumerate(filtered_data[:25]):
+                player_name = p.get('Player', 'Unknown')
+                player_id = await self.get_player_id_from_name(player_name)
+                player_link = self.format_player_link(player_name, player_id)
+
                 player_info = []
-                player_info.append(f"**Player:** {p.get('Player', 'Unknown')}")
+                player_info.append(f"**Player:** {player_link}")
                 player_info.append(f"**Permission:** {p.get('Permission', 'N/A')}")
                 if p.get('Team'):
                     player_info.append(f"**Team:** {p.get('Team')}")
@@ -842,10 +846,14 @@ class ERLC(commands.GroupCog, name="erlc"):
                 embed.description = f"**Total Vehicles:** {len(filtered_data)}"
 
             for i, v in enumerate(filtered_data[:25]):
+                owner_name = v.get('Owner', 'N/A')
+                owner_id = await self.get_player_id_from_name(owner_name) if owner_name != 'N/A' else None
+                owner_link = self.format_player_link(owner_name, owner_id) if owner_name != 'N/A' else 'N/A'
+
                 vehicle_info = []
                 vehicle_info.append(f"**Name:** {v.get('Name', 'Unknown')}")
                 vehicle_info.append(f"**Livery:** {v.get('Texture', 'N/A')}")
-                vehicle_info.append(f"**Owner:** {v.get('Owner', 'N/A')}")
+                vehicle_info.append(f"**Owner:** {owner_link}")
 
                 embed.add_field(
                     name=f"Vehicle {i + 1}",
@@ -878,7 +886,41 @@ class ERLC(commands.GroupCog, name="erlc"):
         await interaction.response.defer()
 
         data = await self.make_request('/v1/server/staff', config['server_key'])
-        embed = self.create_embed("👮 Server Staff", data)
+
+        if isinstance(data, list):
+            embed = discord.Embed(
+                title="👮 Server Staff",
+                description=f"**Total Staff:** {len(data)}",
+                color=discord.Color.blue(),
+                timestamp=datetime.now(timezone.utc)
+            )
+
+            for i, staff in enumerate(data[:25]):
+                staff_name = staff.get('Player', 'Unknown')
+                staff_id = await self.get_player_id_from_name(staff_name)
+                staff_link = self.format_player_link(staff_name, staff_id)
+
+                staff_info = [f"**Player:** {staff_link}"]
+
+                if staff.get('Permission'):
+                    staff_info.append(f"**Role:** {staff.get('Permission')}")
+
+                embed.add_field(
+                    name=f"Staff {i + 1}",
+                    value='\n'.join(staff_info),
+                    inline=False
+                )
+
+            if len(data) > 25:
+                embed.add_field(
+                    name="⚠️ Note",
+                    value=f"Showing first 25 of {len(data)} staff members",
+                    inline=False
+                )
+
+            embed.set_footer(text="ER:LC API")
+        else:
+            embed = self.create_embed("👮 Server Staff", data)
 
         await interaction.followup.send(embed=embed)
         await self.send_to_channel(interaction.guild_id, embed)
@@ -920,7 +962,10 @@ class ERLC(commands.GroupCog, name="erlc"):
                         if ban.get('Reason'):
                             ban_info.append(f"**Reason:** {ban.get('Reason')}")
                         if ban.get('Moderator'):
-                            ban_info.append(f"**Banned By:** {ban.get('Moderator')}")
+                            mod_name = ban.get('Moderator')
+                            mod_id = await self.get_player_id_from_name(mod_name)
+                            mod_link = self.format_player_link(mod_name, mod_id)
+                            ban_info.append(f"**Banned By:** {mod_link}")
                         if ban.get('Timestamp'):
                             ban_time = datetime.fromtimestamp(ban.get('Timestamp'), tz=timezone.utc)
                             ban_info.append(f"**Date:** {ban_time.strftime('%Y-%m-%d %H:%M:%S UTC')}")
@@ -955,14 +1000,17 @@ class ERLC(commands.GroupCog, name="erlc"):
                     if ban.get('Reason'):
                         ban_info.append(f"**Reason:** {ban.get('Reason')}")
                     if ban.get('Moderator'):
-                        ban_info.append(f"**By:** {ban.get('Moderator')}")
+                        mod_name = ban.get('Moderator')
+                        mod_id = await self.get_player_id_from_name(mod_name)
+                        mod_link = self.format_player_link(mod_name, mod_id)
+                        ban_info.append(f"**By:** {mod_link}")
 
                     embed.add_field(
                         name=f"Ban {i + 1}",
                         value='\n'.join(ban_info),
                         inline=False
                     )
-
+                    
                 if len(data) > 25:
                     embed.add_field(
                         name="⚠️ Note",

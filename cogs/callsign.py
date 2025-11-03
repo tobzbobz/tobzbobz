@@ -123,6 +123,37 @@ def get_hhstj_prefix_from_roles(roles) -> str:
 
     return ""
 
+
+def format_duplicate_callsign_message(callsign: str, existing_data: dict) -> str:
+    """Format a user-friendly message when a callsign is already taken"""
+    # Build the full callsign display
+    if existing_data['fenz_prefix']:
+        full_callsign = f"{existing_data['fenz_prefix']}-{callsign}"
+    else:
+        full_callsign = callsign
+
+    # Base message
+    message = f"<:Denied:1426930694633816248> **Sorry, callsign {full_callsign} is already assigned!**\n\n"
+
+    # Who has it
+    message += f"**Currently assigned to:** <@{existing_data['discord_user_id']}>\n"
+    message += f"**Discord:** {existing_data['discord_username']}\n"
+    message += f"**Roblox:** {existing_data['[roblox_username](https://www.roblox.com/users/roblox_id/profile)']}\n"
+
+    # When assigned
+    if existing_data.get('approved_at'):
+        message += f"**Assigned:** < t: {int(existing_data['approved_at'].timestamp())}:R >\n
+        "
+
+    # What to do next
+    message += f"\n'**What to do:**\n"
+    message += f"Try a different callsign number\n"
+    message += f"Use `/callsign lookup callsign:{callsign}` to verify\n"
+    message += f"Contact an admin if you believe this is an error"
+
+    return message
+
+
 async def add_callsign_to_database(callsign: str, discord_user_id: int, discord_username: str,
                                    roblox_user_id: str, roblox_username: str, fenz_prefix: str,
                                    hhstj_prefix: str, approved_by_id: int, approved_by_name: str):
@@ -726,13 +757,13 @@ class CallsignCog(commands.Cog):
                     return
 
             # Check if callsign already exists (skip if blank)
+            # Check if callsign already exists (skip if blank)
             if callsign != "BLANK":
                 existing = await check_callsign_exists(callsign)
                 if existing and existing['discord_user_id'] != user.id:
-                    await interaction.followup.send(
-                        f"<:Denied:1426930694633816248> Callsign {callsign} is already assigned to <@{existing['discord_user_id']}>",
-                        ephemeral=True
-                    )
+                    # Use the new formatted message
+                    error_message = format_duplicate_callsign_message(callsign, existing)
+                    await interaction.followup.send(error_message, ephemeral=True)
                     return
 
             # Get user's Roblox info
@@ -1309,11 +1340,9 @@ class CallsignCog(commands.Cog):
             # Check if callsign already exists
             existing = await check_callsign_exists(callsign)
             if existing:
-                await interaction.followup.send(
-                    f"<:Denied:1426930694633816248> Callsign **{existing['fenz_prefix']}-{callsign}** is already assigned to <@{existing['discord_user_id']}>.\n"
-                    f"Please choose a different callsign.",
-                    ephemeral=True
-                )
+                # Use the new formatted message
+                error_message = format_duplicate_callsign_message(callsign, existing)
+                await interaction.followup.send(error_message, ephemeral=True)
                 return
 
             # AUTO-ACCEPT: Callsign is available!
