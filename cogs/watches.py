@@ -498,6 +498,11 @@ class WatchCog(commands.Cog):
 
     watch_group = app_commands.Group(name='watch', description='Watch management commands')
 
+    async def reload_data(self):
+        async with db.pool.acquire() as conn:
+            self.active_watches = await conn.fetch("SELECT * FROM active_watches;")
+        print("✅ Reloaded active watch cache")
+
     async def calculate_watch_statistics(self) -> dict:
         """Calculate statistics from completed watches"""
         try:

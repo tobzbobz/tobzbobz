@@ -83,7 +83,6 @@ HHSTJ_RANK_HIERARCHY = [
 # Sync role required
 SYNC_ROLE_ID = 1389550689113473024
 
-
 def get_rank_sort_key(fenz_prefix: str, hhstj_prefix: str) -> tuple:
     """
     Generate a sort key based on rank hierarchy.
@@ -300,6 +299,12 @@ class CallsignCog(commands.Cog):
     def cog_unload(self):
         """Stop the auto-sync loop when cog is unloaded"""
         self.auto_sync_loop.cancel()
+
+    async def reload_data(self):
+        async with db.pool.acquire() as conn:
+            self.active_watches = await conn.fetch("SELECT * FROM callsigns;")
+        print("✅ Reloaded callsigns cache")
+
 
     @tasks.loop(minutes=60)
     async def auto_sync_loop(self):
