@@ -110,6 +110,55 @@ class ExecCog(commands.Cog):
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    @app_commands.command(name="xsync", description="Sync database changes to the bot without restarting (Owner only)")
+    async def reload_database(self, interaction: discord.Interaction):
+        """Reload bot data and resync caches from the database."""
+        if interaction.user.id != OWNER_ID:
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> This command is restricted to the bot owner only!",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        import inspect
+        reloaded = []
+        failed = []
+
+        # ✅ Iterate through all cogs and call reload/load/sync functions if present
+        for name, cog in self.bot.cogs.items():
+            for method_name in ("reload_data", "load_data", "refresh_cache", "sync_db"):
+                method = getattr(cog, method_name, None)
+                if method and inspect.iscoroutinefunction(method):
+                    try:
+                        await method()
+                        reloaded.append(f"{name}.{method_name}()")
+                    except Exception as e:
+                        failed.append(f"{name}.{method_name}() → {e.__class__.__name__}: {e}")
+
+        # ✅ Optional: reload global bot-level data
+        if hasattr(self.bot, "reload_data") and inspect.iscoroutinefunction(self.bot.reload_data):
+            try:
+                await self.bot.reload_data()
+                reloaded.append("bot.reload_data()")
+            except Exception as e:
+                failed.append(f"bot.reload_data() → {e.__class__.__name__}: {e}")
+
+        embed = discord.Embed(
+            title="🔄 Database Sync Complete",
+            color=discord.Color.green() if not failed else discord.Color.orange()
+        )
+
+        if reloaded:
+            embed.add_field(name="✅ Reloaded", value="\n".join(reloaded)[:1000], inline=False)
+        if failed:
+            embed.add_field(name="⚠️ Failed", value="\n".join(failed)[:1000], inline=False)
+        if not reloaded and not failed:
+            embed.description = "No reloadable methods found."
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
 
 async def setup(bot):
     await bot.add_cog(ExecCog(bot))
