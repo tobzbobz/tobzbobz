@@ -1924,15 +1924,39 @@ class CallsignCog(commands.Cog):
 
             # Get all callsigns from database
             async with db.pool.acquire() as conn:
-                db_callsigns = await conn.fetch('SELECT * FROM callsigns')
+                db_callsigns = await conn.fetch('SELECT discord_user_id FROM callsigns')
 
             db_user_ids = {record['discord_user_id'] for record in db_callsigns}
 
             # Find users without callsigns
+            members_without_callsigns = [member for member in fenz_members if member.id not in db_user_ids]
+
+            if not members_without_callsigns:
+                await interaction.followup.send(
+                    "✅ All FENZ members already have callsigns or are being processed!",
+                    ephemeral=True
+                )
+                return
+
+            # Send initial status message
+            status_embed = discord.Embed(
+                title="<a:Load:1430912797469970444> Fetching callsign data...",
+                description=f"Checking Bloxlink data for {len(members_without_callsigns)} members...",
+                color=discord.Color.blue()
+            )
+            await interaction.followup.send(embed=status_embed, ephemeral=True)
+
+            # Process users in batches with progress updates
             users_without_callsigns = []
-            for member in fenz_members:
-                if member.id not in db_user_ids:
-                    # Get Roblox info
+            processed = 0
+            batch_size = 10
+
+            for i in range(0, len(members_without_callsigns), batch_size):
+                batch = members_without_callsigns[i:i + batch_size]
+
+                # Process batch
+                for member in batch:
+                    # Get Bloxlink info
                     bloxlink_data = await self.get_bloxlink_data(member.id, interaction.guild.id)
                     if bloxlink_data:
                         roblox_id = bloxlink_data['id']
@@ -1954,15 +1978,57 @@ class CallsignCog(commands.Cog):
                                     'roblox_username': roblox_username
                                 })
 
+                    processed += 1
+
+                # Update progress every batch
+                if i + batch_size < len(members_without_callsigns):
+                    progress_embed = discord.Embed(
+                        title="<a:Load:1430912797469970444> Fetching callsign data...",
+                        description=f"Processed {processed}/{len(members_without_callsigns)} members...\n"
+                                    f"Found {len(users_without_callsigns)} eligible for assignment.",
+                        color=discord.Color.blue()
+                    )
+                    try:
+                        await interaction.edit_original_response(embed=progress_embed)
+                    except:
+                        pass
+
             if not users_without_callsigns:
-                await interaction.followup.send(
-                    "✅ All FENZ members with valid Bloxlink connections already have callsigns!",
-                    ephemeral=True
+                await interaction.edit_original_response(
+                    content="⚠️ No members found that are eligible for bulk assignment.\n"
+                            "Members need:\n"
+                            "• Valid FENZ rank role\n"
+                            "• Linked Bloxlink account\n"
+                            "• Valid Roblox username",
+                    embed=None
                 )
                 return
 
+            # Create summary embed
+            summary_embed = discord.Embed(
+                title="✅ Ready for Bulk Assignment",
+                description=f"Found **{len(users_without_callsigns)}** members eligible for callsign assignment.",
+                color=discord.Color.green()
+            )
+
+            # Show breakdown by rank
+            rank_breakdown = {}
+            for user_data in users_without_callsigns:
+                prefix = user_data['fenz_prefix']
+                rank_breakdown[prefix] = rank_breakdown.get(prefix, 0) + 1
+
+            breakdown_text = "\n".join([f"**{prefix}**: {count}" for prefix, count in sorted(rank_breakdown.items())])
+            summary_embed.add_field(
+                name="📊 By Rank",
+                value=breakdown_text or "None",
+                inline=False
+            )
+
+            summary_embed.set_footer(text="Click 'Start Assignment' to begin the interactive process")
+
             # Create view for bulk assignment
             view = BulkAssignView(self, interaction, users_without_callsigns)
+            await interaction.edit_original_response(content=None, embed=summary_embed, view=None)
             await view.start()
 
         except Exception as e:
