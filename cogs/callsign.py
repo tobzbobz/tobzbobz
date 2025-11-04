@@ -2227,8 +2227,10 @@ class HighCommandPrefixChoice(discord.ui.View):
             except Exception as e:
                 print(f"Error in timeout handler: {e}")
 
+
 class BulkAssignView(discord.ui.View):
     """Interactive view for bulk callsign assignment"""
+
     def __init__(self, cog, interaction, users_data):
         super().__init__(timeout=600)  # 10 minute timeout
         self.cog = cog
@@ -2237,6 +2239,7 @@ class BulkAssignView(discord.ui.View):
         self.current_index = 0
         self.assigned_count = 0
         self.skipped_count = 0
+        self.nil_count = 0  # Track NIL assignments
 
     async def start(self):
         """Start the bulk assignment process"""
@@ -2257,7 +2260,7 @@ class BulkAssignView(discord.ui.View):
         member = user_data['member']
 
         embed = discord.Embed(
-            title=f"📝 Bulk Callsign Assignment ({self.current_index + 1}/{len(self.users_data)})",
+            title=f"📋 Bulk Callsign Assignment ({self.current_index + 1}/{len(self.users_data)})",
             description=f"Assign a callsign to {member.mention}",
             color=discord.Color.blue()
         )
@@ -2282,11 +2285,12 @@ class BulkAssignView(discord.ui.View):
 
         embed.add_field(
             name="📊 Progress",
-            value=f"Assigned: {self.assigned_count} | Skipped: {self.skipped_count}",
+            value=f"Assigned: {self.assigned_count} | NIL: {self.nil_count} | Skipped: {self.skipped_count}",
             inline=False
         )
 
-        embed.set_footer(text="Click 'Assign' to enter a callsign, 'Skip' to skip this user, or 'Finish' to end")
+        embed.set_footer(
+            text="Click 'Assign' to enter a callsign, 'NIL' to set ###, 'Skip' to skip, or 'Finish' to end")
 
         if self.current_index == 0:
             await self.interaction.followup.send(embed=embed, view=self, ephemeral=True)
@@ -2303,12 +2307,13 @@ class BulkAssignView(discord.ui.View):
         embed.add_field(
             name="Summary",
             value=f"**Assigned:** {self.assigned_count} callsigns\n"
+                  f"**Set to NIL (###):** {self.nil_count} users\n"
                   f"**Skipped:** {self.skipped_count} users\n"
                   f"**Total Processed:** {self.current_index} / {len(self.users_data)}",
             inline=False
         )
 
-        if self.assigned_count > 0:
+        if self.assigned_count > 0 or self.nil_count > 0:
             embed.add_field(
                 name="📝 Next Steps",
                 value="Run `/callsign sync` to update Google Sheets",
@@ -2322,12 +2327,74 @@ class BulkAssignView(discord.ui.View):
         await self.interaction.edit_original_response(embed=embed, view=self)
         self.stop()
 
-    @discord.ui.button(label="Assign Callsign", style=discord.ButtonStyle.success, emoji="<:Accepted:1426930333789585509>")
+    @discord.ui.button(label="Assign Callsign", style=discord.ButtonStyle.success,
+                       emoji="<:Accepted:1426930333789585509>")
     async def assign_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Show modal to assign callsign"""
         user_data = self.users_data[self.current_index]
         modal = BulkAssignModal(self, user_data)
         await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="NIL (###)", style=discord.ButtonStyle.primary, emoji="🚫")
+    async def nil_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Set callsign to ### (NIL/default)"""
+        await interaction.response.defer()
+
+        try:
+            user_data = self.users_data[self.current_index]
+            member = user_data['member']
+
+            # Get HHStJ prefix
+            hhstj_prefix = get_hhstj_prefix_from_roles(member.roles)
+
+            # Add to database with ### as callsign
+            await add_callsign_to_database(
+                "###",  # NIL callsign
+                member.id,
+                str(member),
+                user_data['roblox_id'],
+                user_data['roblox_username'],
+                user_data['fenz_prefix'],
+                hhstj_prefix or '',
+                interaction.user.id,
+                interaction.user.display_name
+            )
+
+            # Update nickname to PREFIX-###
+            nickname_parts = []
+            if user_data['fenz_prefix']:
+                nickname_parts.append(f"{user_data['fenz_prefix']}-###")
+            if hhstj_prefix and "-" not in hhstj_prefix:
+                nickname_parts.append(hhstj_prefix)
+            if user_data['roblox_username']:
+                nickname_parts.append(user_data['roblox_username'])
+
+            new_nickname = " | ".join(nickname_parts) if nickname_parts else user_data['roblox_username']
+
+            try:
+                await member.edit(nick=new_nickname)
+            except discord.Forbidden:
+                pass
+
+            # Success!
+            self.nil_count += 1
+            self.current_index += 1
+
+            await interaction.followup.send(
+                f"🚫 Set {member.mention} to NIL ({user_data['fenz_prefix']}-###)",
+                ephemeral=True
+            )
+
+            # Show next user
+            await self.show_current_user()
+
+        except Exception as e:
+            await interaction.followup.send(
+                f"<:Denied:1426930694633816248> Error: {str(e)}",
+                ephemeral=True
+            )
+            import traceback
+            traceback.print_exc()
 
     @discord.ui.button(label="Skip", style=discord.ButtonStyle.secondary, emoji="<:RightSkip:1434962167660281926>")
     async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
