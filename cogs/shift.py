@@ -4,6 +4,7 @@ from discord import app_commands
 from datetime import datetime, timedelta
 
 from database import db, ensure_database_connected
+from your_db_module import initialize_database
 await db.connect()
 
 import asyncio
@@ -96,6 +97,8 @@ class ShiftManagementCog(commands.Cog):
         # Wait for bot to be ready
         await ensure_database_connected()
         await self.bot.wait_until_ready()
+
+        await initialize_database()
 
         # Clean up stale shifts
         await self.cleanup_stale_shifts(self.bot)

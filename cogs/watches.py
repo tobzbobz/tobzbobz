@@ -48,44 +48,44 @@ WATCH_INFO_BOXES = {
         "Red": {
             "title": "🔴1️⃣ Vehicle Info",
             "Active": "‎\n**Active Vehicles**\nHAM411 - Pump\nHAM412 — Pump\nHAM415 — Aerial",
-            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM4111 — City Tanker\nHAM4118 — HAZMAT/Command\nHAM4121 — ISV\nHAM4120 - OSU"
+            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM4111 — City Tanker\nHAM4118 — HAZMAT/Command\nHAM4121 — ISV\nHAM4126 - OSU"
         },
         "Blue": {
             "title": "🔵1️⃣ Vehicle Info",
             "Active": "‎\n**Active Vehicles**\nHAM411 - Pump\nHAM412 — Pump\nHAM415 — Aerial\nHAM4118 — HAZMAT/Command\nHAM4121 — ISV",
-            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM4111 — City Tanker\nHAM4120 - OSU"
+            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM4111 — City Tanker\nHAM4126 - OSU"
         },
         "Yellow": {
             "title": "🟡1️⃣ Vehicle Info",
             "Active": "‎\n**Active Vehicles**\nHAM411 - Pump\nHAM412 — Pump\nHAM415 — Aerial\nHAM4118 — HAZMAT/Command",
-            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM4111 — City Tanker\nHAM4121 — ISV\nHAM4120 - OSU"
+            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM4111 — City Tanker\nHAM4121 — ISV\nHAM4126 - OSU"
         },
         "Brown": {
             "title": "🟤1️⃣ Vehicle Info",
             "Active": "‎\n**Active Vehicles**\nHAM411 - Pump\nHAM415 — Aerial\nHAM4118 — HAZMAT/Command",
-            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM412 — Pump\nHAM4111 — City Tanker\nHAM4121 — ISV\nHAM4120 - OSU"
+            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM412 — Pump\nHAM4111 — City Tanker\nHAM4121 — ISV\nHAM4126 - OSU"
         }
     },
     "Station 2": {
         "Red": {
             "title": "🔴2️⃣ Vehicle Info",
-            "Active": "‎\n**Active Vehicles**\nCAM411 - Pump\nCAM447 — Pump\nCAM4411 — Aerial",
-            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM4111 — City Tanker\nHAM4118 — HAZMAT/Command\nHAM4121 — ISV\nHAM4120 - OSU\nCHA427 - Pump\nCHA4271 - Pump\nCHA4275 - Rural Tanker\nDJ8817 - Pump"
+            "Active": "‎\n**Active Vehicles**\nCAM411 - Pump\nCAM447 — Pump\nCAM4411 — Tanker",
+            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM4111 — City Tanker\nHAM4118 — HAZMAT/Command\nHAM4121 — ISV\nOSWAIKA - OSU\nCHA427 - Pump\nCHA4271 - Rural Pump\nCHA4275 - Rural Tanker\nDJ8817 - Pump"
         },
         "Blue": {
             "title": "🔵2️⃣ Vehicle Info",
             "Active": "‎\n**Active Vehicles**\nCHA427 - Pump\nCHA4275 — Rural Tanker",
-            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM4111 — City Tanker\nHAM4120 - OSU\nCAM411 - Pump\nCAM447 — Pump\nCAM4411 — Aerial\nCHA4271 - Pump"
+            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM4111 — City Tanker\nOSWAIKA - OSU\nCAM411 - Pump\nCAM447 — Pump\nCAM4411 — Tanker\nCHA4271 - Rural Pump"
         },
         "Yellow": {
             "title": "🟡2️⃣ Vehicle Info",
-            "Active": "‎\n**Active Vehicles**\nCHA427 - Pump\nCHA4271 - Pump\nCHA4275 - Rural Tanker",
-            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM4111 — City Tanker\nHAM4121 — ISV\nHAM4120 - OSU\nCAM411 - Pump\nCAM447 — Pump\nCAM4411 — Aerial\nDJ8817 - Pump"
+            "Active": "‎\n**Active Vehicles**\nCHA427 - Pump\nCHA4271 - Rural Pump\nCHA4275 - Rural Tanker",
+            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM4111 — City Tanker\nHAM4121 — ISV\nOSWAIKA - OSU\nCAM411 - Pump\nCAM447 — Pump\nCAM4411 — Tanker\nDJ8817 - Pump"
         },
         "Brown": {
             "title": "🟤2️⃣ Vehicle Info",
             "Active": "‎\n**Active Vehicles**\nDJ8817 - Pump\nCAM411 - Pump",
-            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM412 — Pump\nHAM4111 — City Tanker\nHAM4121 — ISV\nHAM4120 - OSU\nCAM447 — Pump\nCAM4411 — Aerial\nCHA427 - Pump\nCHA4271 - Pump\nCHA4275 - Rural Tanker"
+            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM412 — Pump\nHAM4111 — City Tanker\nHAM4121 — ISV\nOSWAIKA - OSU\nCAM447 — Pump\nCAM4411 — Tanker\nCHA427 - Pump\nCHA4271 - Rural Pump\nCHA4275 - Rural Tanker"
         }
     }
 }
