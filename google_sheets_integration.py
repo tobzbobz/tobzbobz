@@ -542,13 +542,20 @@ class GoogleSheetsManager:
             cmd_deletes = set(existing_cmd_map.keys())
 
             # Process callsign data
+            # Process callsign data
             for data in callsign_data:
                 fenz_prefix = data['fenz_prefix']
                 discord_id = str(data['discord_user_id'])
                 is_command = data.get('is_command', False)
 
-                # ✅ NEW: Get strikes and qualifications from the passed data
-                # These should be calculated BEFORE calling this function
+                # ✅ Skip RFF-### from being synced to sheets
+                if data['callsign'] == '###' and fenz_prefix == 'RFF':
+                    # If it exists in sheets, mark for deletion
+                    if discord_id in existing_nc_map:
+                        nc_deletes.add(discord_id)
+                    continue  # Skip to next callsign
+
+                # Get strikes and qualifications from the passed data
                 strikes = data.get('strikes', None)
                 qualifications = data.get('qualifications', None)
 
@@ -646,11 +653,6 @@ class GoogleSheetsManager:
             for discord_id in sorted(cmd_deletes, key=lambda x: existing_cmd_map[x]['row'], reverse=True):
                 command_sheet.delete_rows(existing_cmd_map[discord_id]['row'])
                 await asyncio.sleep(0.3)
-
-            if data['callsign'] == '###' and fenz_prefix == 'RFF':
-                if discord_id in existing_nc_map:
-                    nc_deletes.add(discord_id)
-                continue  # Skip to next callsign
 
             # BATCH UPDATE EXISTING ROWS (Non-Command)
             if nc_updates:

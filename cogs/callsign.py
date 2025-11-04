@@ -995,7 +995,7 @@ class CallsignCog(commands.Cog):
 
             # Check if callsign already exists (skip if blank)
             # Check if callsign already exists (skip if blank)
-            if callsign != "BLANK" or "###":
+            if callsign not in ["BLANK", "###"]:
                 existing = await check_callsign_exists(callsign, fenz_prefix)
                 if existing and existing['discord_user_id'] != user.id:
                     # Use the new formatted message
@@ -1023,7 +1023,6 @@ class CallsignCog(commands.Cog):
                 )
                 return
 
-            # Get FENZ rank from user's roles
             fenz_prefix = None
             fenz_rank_name = None
             for role_id, (rank_name, prefix) in FENZ_RANK_MAP.items():
@@ -1035,7 +1034,6 @@ class CallsignCog(commands.Cog):
             # Get HHStJ rank from user's roles
             hhstj_prefix = get_hhstj_prefix_from_roles(user.roles)
 
-
             if not fenz_prefix:
                 await interaction.followup.send(
                     f"<:Denied:1426930694633816248> {user.mention} does not have a valid FENZ rank role.",
@@ -1044,10 +1042,13 @@ class CallsignCog(commands.Cog):
                 return
 
             # Determine what to assign based on use_affix parameter and rank
-            if callsign == "BLANK":
-                # BLANK means: Rank prefix only, no number
-                final_fenz_prefix = fenz_prefix  # Always keep rank prefix
-                final_callsign = "BLANK"
+            if callsign not in ["BLANK", "###"]:
+                existing = await check_callsign_exists(callsign, fenz_prefix)
+                if existing and existing['discord_user_id'] != user.id:
+                    # Use the new formatted message
+                    error_message = format_duplicate_callsign_message(callsign, existing)
+                    await interaction.followup.send(error_message, ephemeral=True)
+                    return
             elif is_high_command and not use_affix:
                 # High command without number: Just rank prefix, no callsign number
                 final_fenz_prefix = fenz_prefix  # Keep rank prefix
