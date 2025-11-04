@@ -923,6 +923,25 @@ class CallsignCog(commands.Cog):
                         if fenz_rank_changed and current_callsign not in ["###", "BLANK"]:
                             old_callsign = f"{current_fenz_prefix}-{current_callsign}" if current_fenz_prefix else current_callsign
 
+                            existing = await check_callsign_exists(current_callsign, correct_fenz_prefix)
+                            if existing and existing['discord_user_id'] != member.id:
+                                # Callsign conflict - reset to ### instead
+                                async with db.pool.acquire() as conn:
+                                    await conn.execute(
+                                        'UPDATE callsigns SET callsign = $1, fenz_prefix = $2 WHERE discord_user_id = $3',
+                                        "###", correct_fenz_prefix, member.id
+                                    )
+                                stats['callsigns_reset'].append({
+                                    'member': member,
+                                    'old_callsign': old_callsign,
+                                    'new_prefix': correct_fenz_prefix,
+                                    'reason': f'Rank changed but callsign conflicts: {correct_fenz_prefix}-{current_callsign} already exists'
+                                })
+                                current_fenz_prefix = correct_fenz_prefix
+                                current_callsign = "###"
+                                stats['rank_updates'] += 1
+                                continue
+
                             async with db.pool.acquire() as conn:
                                 await conn.execute(
                                     'UPDATE callsigns SET callsign = $1, fenz_prefix = $2 WHERE discord_user_id = $3',

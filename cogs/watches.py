@@ -645,7 +645,8 @@ class WatchCog(commands.Cog):
                 if colour and colour.strip():  # Ensure colour is not None or empty
                     colour_counts[colour] = colour_counts.get(colour, 0) + 1
 
-            most_common_colour = max(colour_counts.items(), key=lambda x: x[1])[0] if colour_counts else 'N/A'            print(f"🎨 Most common colour: {most_common_colour} (from {len(colour_counts)} unique colours)")
+            most_common_colour = max(colour_counts.items(), key=lambda x: x[1])[0] if colour_counts else 'N/A'
+            print(f"🎨 Most common colour: {most_common_colour} (from {len(colour_counts)} unique colours)")
 
             # Most active station - FIXED
             station_counts = {}
