@@ -98,13 +98,22 @@ async def check_callsign_exists(callsign: str) -> dict:
     """Check if a callsign exists in the database"""
     async with db.pool.acquire() as conn:
         # BLANK callsigns are allowed to be non-unique, skip check
-        if callsign == "BLANK":
+        if callsign == "###":
             return None
 
-        row = await conn.fetchrow(
-            'SELECT * FROM callsigns WHERE callsign = $1',
-            callsign
-        )
+        # Check for same callsign WITH same prefix
+        if fenz_prefix:
+            row = await conn.fetchrow(
+                'SELECT * FROM callsigns WHERE callsign = $1 AND fenz_prefix = $2',
+                callsign, fenz_prefix
+            )
+        else:
+            # If no prefix provided, check for any match
+            row = await conn.fetchrow(
+                'SELECT * FROM callsigns WHERE callsign = $1',
+                callsign
+            )
+
         return dict(row) if row else None
 
 
@@ -331,6 +340,33 @@ class CallsignCog(commands.Cog):
             try:
                 async with db.pool.acquire() as conn:
                     callsigns = await conn.fetch('SELECT * FROM callsigns ORDER BY callsign')
+
+                # In auto_sync_loop, after fetching callsigns:
+                for record in callsigns:
+                    member = guild.get_member(record['discord_user_id'])
+
+                    if member:
+                        # Update last_seen_at to now
+                        async with db.pool.acquire() as conn:
+                            await conn.execute(
+                                'UPDATE callsigns SET last_seen_at = NOW() WHERE discord_user_id = $1',
+                                member.id
+                            )
+                    else:
+                        # User not in server - check if been gone > 7 days
+                        last_seen = record.get('last_seen_at')
+                        if last_seen:
+                            days_gone = (datetime.utcnow() - last_seen).days
+                            if days_gone >= 7:
+                                # Remove from database
+                                async with db.pool.acquire() as conn:
+                                    await conn.execute(
+                                        'DELETE FROM callsigns WHERE discord_user_id = $1',
+                                        record['discord_user_id']
+                                    )
+                                # Remove from sheets
+                                await sheets_manager.remove_callsign_from_sheets(record['discord_user_id'])
+                                continue
 
                 if callsigns:
                     callsign_data = []

@@ -647,6 +647,11 @@ class GoogleSheetsManager:
                 command_sheet.delete_rows(existing_cmd_map[discord_id]['row'])
                 await asyncio.sleep(0.3)
 
+            if data['callsign'] == '###' and fenz_prefix == 'RFF':
+                if discord_id in existing_nc_map:
+                    nc_deletes.add(discord_id)
+                continue  # Skip to next callsign
+
             # BATCH UPDATE EXISTING ROWS (Non-Command)
             if nc_updates:
                 batch_data = []
