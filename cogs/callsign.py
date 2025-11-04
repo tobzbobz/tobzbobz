@@ -197,13 +197,21 @@ async def add_callsign_to_database(callsign: str, discord_user_id: int, discord_
             discord_user_id
         )
 
+        existing = await conn.fetchrow(
+            "SELECT discord_user_id FROM callsigns WHERE callsign = $1 AND fenz_prefix = $2",
+            callsign, fenz_prefix
+        )
+
+        if existing and existing['discord_user_id'] != discord_user_id:
+            raise ValueError(f'Callsign "{callsign}" is already assigned to another user.')
+
         # Insert the new callsign with proper approved_by fields
         await conn.execute(
             '''INSERT INTO callsigns
                (callsign, discord_user_id, discord_username, roblox_user_id, roblox_username,
                 fenz_prefix, hhstj_prefix, approved_by_id, approved_by_name, callsign_history)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-               ON CONFLICT (discord_user_id) DO UPDATE SET
+                ON CONFLICT (callsign, fenz_prefix) DO UPDATE SET
                 callsign = EXCLUDED.callsign,
                 discord_username = EXCLUDED.discord_username,
                 roblox_user_id = EXCLUDED.roblox_user_id,
@@ -1123,7 +1131,6 @@ class CallsignCog(commands.Cog):
                     )
                     return
 
-            # Check if callsign already exists (skip if blank)
             # Check if callsign already exists (skip if blank)
             if callsign not in ["BLANK", "###"]:
                 existing = await check_callsign_exists(callsign, fenz_prefix)

@@ -2561,17 +2561,17 @@ class WatchCog(commands.Cog):
             # Create the embed
             stats_embed = discord.Embed(
                 title="<:FENZ:1389200656090533970> | FENZ Watches",
-                description="FENZ watches are a system of organising large player activity sessions on FENZ. These can be hosted by FENZ Supervisors and Leadership and we encourage you to click the Watch Ping button to get notified when we host watches!\n",
+                description="FENZ watches are a system of organising large player activity sessions on FENZ. These can be hosted by FENZ Supervisors and Leadership and we encourage you to click the Watch Ping button to get notified when we host watches!\n‎ ",
                 colour=discord.Colour(0xffffff)
             )
 
             stats_embed.add_field(
                 name="🔄️ | Watch Status",
                 value=(
-                    "‎\n⚫ - **No watch is active**, make sure it is SSU and wait for a FENZ Supervisor or Leadership member to start a watch!\n\n"
-                    "🗳️¸ - **A watch vote is occurring**, vote up if you want to participate in the watch!\n\n"
-                    "🟠  - **A watch will be active soon**, as a watch vote has succeeded, and is waiting its designated start time!\n\n"
-                    "🔴 / 🟡 / 🔵 / 🟤 - **Watch Colour**, a watch of this colour has been started!\n\n"
+                    "‎\n⚫ - **No watch is active**, make sure it is SSU and wait for a FENZ Supervisor or Leadership member to start a watch!\n"
+                    "🗳️¸ - **A watch vote is occurring**, vote up if you want to participate in the watch!\n"
+                    "🟠  - **A watch will be active soon**, as a watch vote has succeeded, and is waiting its designated start time!\n"
+                    "🔴 / 🟡 / 🔵 / 🟤 - **Watch Colour**, a watch of this colour has been started!\n"
                     "1️⃣ / 2️⃣ - **Watch Station**, a watch at this station has been started!\n‎\n\n"
                 ),
                 inline=False

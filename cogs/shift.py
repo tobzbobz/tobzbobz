@@ -2,7 +2,10 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from datetime import datetime, timedelta
+
 from database import db, ensure_database_connected
+await db.connect()
+
 import asyncio
 import math
 import json
@@ -93,9 +96,6 @@ class ShiftManagementCog(commands.Cog):
         # Wait for bot to be ready
         await ensure_database_connected()
         await self.bot.wait_until_ready()
-
-        # Initialize database
-        await initialize_database()
 
         # Clean up stale shifts
         await self.cleanup_stale_shifts(self.bot)
