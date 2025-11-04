@@ -94,11 +94,11 @@ def get_rank_sort_key(fenz_prefix: str, hhstj_prefix: str) -> tuple:
     return (fenz_index, hhstj_index)
 
 
-async def check_callsign_exists(callsign: str) -> dict:
-    """Check if a callsign exists in the database"""
+async def check_callsign_exists(callsign: str, fenz_prefix: str = None) -> dict:
+    """Check if a callsign exists in the database with the same prefix"""
     async with db.pool.acquire() as conn:
-        # BLANK callsigns are allowed to be non-unique, skip check
-        if callsign == "###":
+        # BLANK and ### callsigns are allowed to be non-unique, skip check
+        if callsign in ["BLANK", "###"]:
             return None
 
         # Check for same callsign WITH same prefix
@@ -115,7 +115,6 @@ async def check_callsign_exists(callsign: str) -> dict:
             )
 
         return dict(row) if row else None
-
 
 def get_hhstj_prefix_from_roles(roles) -> str:
     """Get HHStJ prefix from roles, prioritizing management over clinical"""
@@ -996,8 +995,8 @@ class CallsignCog(commands.Cog):
 
             # Check if callsign already exists (skip if blank)
             # Check if callsign already exists (skip if blank)
-            if callsign != "BLANK":
-                existing = await check_callsign_exists(callsign)
+            if callsign != "BLANK" or "###":
+                existing = await check_callsign_exists(callsign, fenz_prefix)
                 if existing and existing['discord_user_id'] != user.id:
                     # Use the new formatted message
                     error_message = format_duplicate_callsign_message(callsign, existing)
@@ -1576,7 +1575,7 @@ class CallsignCog(commands.Cog):
                 )
 
             # Check if callsign already exists
-            existing = await check_callsign_exists(callsign)
+            existing = await check_callsign_exists(callsign, fenz_prefix)
             if existing:
                 # Use the new formatted message
                 error_message = format_duplicate_callsign_message(callsign, existing)
@@ -2477,7 +2476,7 @@ class BulkAssignModal(discord.ui.Modal):
                 return
 
             # Check if exists
-            existing = await check_callsign_exists(callsign)
+            existing = await check_callsign_exists(callsign, self.user_data['fenz_prefix'])
             if existing:
                 await interaction.followup.send(
                     f"<:Denied:1426930694633816248> Callsign {callsign} is already taken by <@{existing['discord_user_id']}>!",
