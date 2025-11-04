@@ -638,14 +638,14 @@ class WatchCog(commands.Cog):
             )
 
             # Most common colour - FIXED
+            # Most common colour - FIXED
             colour_counts = {}
             for watch in successful_watches:
                 colour = watch.get('colour')
                 if colour and colour.strip():  # Ensure colour is not None or empty
                     colour_counts[colour] = colour_counts.get(colour, 0) + 1
 
-            most_common_colour = max(colour_counts.items(), key=lambda x: x[1])[0] if colour_counts else 'N/A'
-            print(f"🎨 Most common colour: {most_common_colour} (from {len(colour_counts)} unique colours)")
+            most_common_colour = max(colour_counts.items(), key=lambda x: x[1])[0] if colour_counts else 'N/A'            print(f"🎨 Most common colour: {most_common_colour} (from {len(colour_counts)} unique colours)")
 
             # Most active station - FIXED
             station_counts = {}
@@ -704,7 +704,7 @@ class WatchCog(commands.Cog):
             stats_message = None
             async for message in channel.history(limit=100):
                 if message.author.bot and message.embeds:
-                    if any(embed.title and "Watch Statistics" in embed.title for embed in message.embeds):
+                    if any(embed.title and ("Watch Statistics" in embed.title or "FENZ Watches" in embed.title) for embed in message.embeds):
                         stats_message = message
                         break
 
@@ -715,46 +715,22 @@ class WatchCog(commands.Cog):
             # Calculate new statistics
             stats = await self.calculate_watch_statistics()
 
-            # Create updated embed
             stats_embed = discord.Embed(
-                title="📊 Watch Statistics 📊",
-                description="Live statistics for all completed FENZ watches",
-                colour=discord.Colour.blue()
+                title="<:FENZ:1389200656090533970> | FENZ Watches",
+                description="FENZ watches are a system of organising large player activity sessions on FENZ. These can be hosted by FENZ Supervisors and Leadership and we encourage you to click the Watch Ping button to get notified when we host watches!\n",
+                colour=discord.Colour(0xffffff)
             )
 
             stats_embed.add_field(
-                name="🔢 Total Watches",
-                value=f"`{stats['total_watches']}`",
-                inline=True
-            )
-
-            stats_embed.add_field(
-                name="⏱️ Longest Watch",
-                value=f"`{stats['longest_duration']}`",
-                inline=True
-            )
-
-            stats_embed.add_field(
-                name="👥 Most Attendees",
-                value=f"`{stats['most_attendees']}`",
-                inline=True
-            )
-
-            stats_embed.add_field(
-                name="🎨 Most Common Colour",
-                value=f"`{stats['most_common_colour']}`",
-                inline=True
-            )
-
-            stats_embed.add_field(
-                name="📍 Most Active Station",
-                value=f"`{stats['most_active_station']}`",
-                inline=True
-            )
-
-            stats_embed.add_field(
-                name="📈 Average Duration",
-                value=f"`{stats['average_duration']}`",
+                name="🏆 | Watch Records",
+                value=(
+                    f"‎\n**Total Watches:** {stats['total_watches']}\n"
+                    f"**Longest Watch:** {stats['longest_duration']}\n"
+                    f"**Most Attendees:** {stats['most_attendees']}\n"
+                    f"**Most Common Watch Colour:** {stats['most_common_colour']}\n"
+                    f"**Most Active Station:** {stats['most_active_station']}\n"
+                    f"**Average Watch Duration:** {stats['average_duration']}"
+                ),
                 inline=True
             )
 
@@ -833,7 +809,7 @@ class WatchCog(commands.Cog):
                     try:
                         # Skip the persistent stats embed
                         if message.author.bot and message.embeds:
-                            if any(embed.title and "Watch Statistics" in embed.title for embed in message.embeds):
+                            if any(embed.title and ("Watch Statistics" in embed.title or "FENZ Watches" in embed.title) for embed in message.embeds):
                                 continue
                         await message.delete()
                         deleted_count += 1
@@ -1156,6 +1132,7 @@ class WatchCog(commands.Cog):
                 await db.remove_active_watch(int(watch))
                 await self.update_stats_embed(channel)
                 del active_watches[watch]
+                await self.update_stats_embed(channel)
                 return
 
             # Get the original message
@@ -1679,7 +1656,7 @@ class WatchCog(commands.Cog):
                     try:
                         # Skip the persistent stats embed
                         if message.author.bot and message.embeds:
-                            if any(embed.title and "Watch Statistics" in embed.title for embed in message.embeds):
+                            if any(embed.title and ("Watch Statistics" in embed.title or "FENZ Watches" in embed.title) for embed in message.embeds):
                                 continue
                         await message.delete()
                         deleted_count += 1
@@ -2571,7 +2548,7 @@ class WatchCog(commands.Cog):
             # Delete existing stats embeds
             async for message in watch_channel.history(limit=100):
                 if message.author.bot and message.embeds:
-                    if any(embed.title and "Watch Statistics" in embed.title for embed in message.embeds):
+                    if any(embed.title and ("Watch Statistics" in embed.title or "FENZ Watches" in embed.title) for embed in message.embeds):
                         try:
                             await message.delete()
                         except:
@@ -2590,16 +2567,11 @@ class WatchCog(commands.Cog):
             stats_embed.add_field(
                 name="🔄️ | Watch Status",
                 value=(
-                    "‎\n⚫ - **No watch is active.**\n"
-                    "> Please make sure it is SSU and wait for a FENZ Supervisor or Leadership member to start a watch!\n\n"
-                    "🗳️¸ - **A watch vote is occurring.**\n"
-                    "> A watch vote is happening. Vote up if you want to participate in the watch!\n\n"
-                    "🟠  - **A watch will be active soon.**\n"
-                    "> A watch vote has succeeded, and is waiting its designated start time!\n\n"
-                    "🔴 / 🟡 / 🔵 / 🟤 - **Watch Colour.**\n"
-                "> A watch of this colour has been started!\n\n"
-                "1️⃣ / 2️⃣ - **Watch Station.**\n"
-                "> A watch at this station has been started!\n‎\n\n"
+                    "‎\n⚫ - **No watch is active**, make sure it is SSU and wait for a FENZ Supervisor or Leadership member to start a watch!\n\n"
+                    "🗳️¸ - **A watch vote is occurring**, vote up if you want to participate in the watch!\n\n"
+                    "🟠  - **A watch will be active soon**, as a watch vote has succeeded, and is waiting its designated start time!\n\n"
+                    "🔴 / 🟡 / 🔵 / 🟤 - **Watch Colour**, a watch of this colour has been started!\n\n"
+                    "1️⃣ / 2️⃣ - **Watch Station**, a watch at this station has been started!\n‎\n\n"
                 ),
                 inline=False
             )
@@ -2607,7 +2579,7 @@ class WatchCog(commands.Cog):
             stats_embed.add_field(
                 name="🏆 | Watch Records",
                 value=(
-                    f"\n**Total Watches:** {stats['total_watches']}\n"
+                    f"‎\n**Total Watches:** {stats['total_watches']}\n"
                     f"**Longest Watch:** {stats['longest_duration']}\n"
                     f"**Most Attendees:** {stats['most_attendees']}\n"
                     f"**Most Common Watch Colour:** {stats['most_common_colour']}\n"

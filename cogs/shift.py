@@ -2,7 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from datetime import datetime, timedelta
-from database import db
+from database import db, ensure_database_connected
 import asyncio
 import math
 import json
@@ -91,6 +91,7 @@ class ShiftManagementCog(commands.Cog):
     async def on_cog_load(self):
         """Run initialization tasks when cog loads"""
         # Wait for bot to be ready
+        await ensure_database_connected()
         await self.bot.wait_until_ready()
 
         # Initialize database
