@@ -518,7 +518,10 @@ class WatchCog(commands.Cog):
         try:
             completed_watches = await load_completed_watches()
 
+            print(f"📊 Stats Calculation: Found {len(completed_watches)} total records in database")
+
             if not completed_watches:
+                print("⚠️ Stats Calculation: No completed watches found")
                 return {
                     'total_watches': 0,
                     'longest_duration': 'N/A',
@@ -528,15 +531,49 @@ class WatchCog(commands.Cog):
                     'average_duration': 'N/A'
                 }
 
-            # Filter out failed watches
-            successful_watches = [w for w in completed_watches.values() if w.get('status') != 'failed']
+            # Filter out failed watches and ensure we have valid data
+            successful_watches = []
+            failed_count = 0
+            invalid_data_count = 0
+
+            for watch in completed_watches.values():
+                status = watch.get('status', 'completed')
+                started_at = watch.get('started_at', 0)
+                ended_at = watch.get('ended_at', 0)
+
+                if status == 'failed':
+                    failed_count += 1
+                    continue
+
+                # Only include completed watches with valid timestamps
+                if started_at > 0 and ended_at > 0 and ended_at > started_at:
+                    successful_watches.append(watch)
+                else:
+                    invalid_data_count += 1
+
+            print(f"✅ Stats Calculation: {len(successful_watches)} successful watches")
+            print(f"❌ Stats Calculation: {failed_count} failed watches (excluded)")
+            print(f"⚠️ Stats Calculation: {invalid_data_count} watches with invalid data (excluded)")
+
+            if not successful_watches:
+                print("⚠️ Stats Calculation: No valid successful watches found")
+                return {
+                    'total_watches': 0,
+                    'longest_duration': 'N/A',
+                    'most_attendees': 'N/A',
+                    'most_common_colour': 'N/A',
+                    'most_active_station': 'N/A',
+                    'average_duration': 'N/A'
+                }
 
             total_watches = len(successful_watches)
 
             # Calculate longest duration
             longest_duration_seconds = 0
             for watch in successful_watches:
-                duration = watch.get('ended_at', 0) - watch.get('started_at', 0)
+                started_at = watch.get('started_at', 0)
+                ended_at = watch.get('ended_at', 0)
+                duration = ended_at - started_at
                 if duration > longest_duration_seconds:
                     longest_duration_seconds = duration
 
@@ -544,30 +581,72 @@ class WatchCog(commands.Cog):
             minutes = (longest_duration_seconds % 3600) // 60
             longest_duration = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
+            print(f"⏱️ Longest watch duration: {longest_duration} ({longest_duration_seconds}s)")
+
             # Calculate most attendees
-            most_attendees = max([watch.get('attendees', 0) for watch in successful_watches], default=0)
+            attendees_list = []
+            for watch in successful_watches:
+                attendees = watch.get('attendees')
+                if attendees is not None and isinstance(attendees, int):
+                    attendees_list.append(attendees)
+
+            most_attendees = max(attendees_list) if attendees_list else 0
+
+            print(f"👥 Most attendees: {most_attendees} (from {len(attendees_list)} watches with valid attendee data)")
 
             # Most common colour
             colour_counts = {}
             for watch in successful_watches:
-                colour = watch.get('colour', 'Unknown')
-                colour_counts[colour] = colour_counts.get(colour, 0) + 1
-            most_common_colour = max(colour_counts.items(), key=lambda x: x[1])[0] if colour_counts else 'N/A'
+                colour = watch.get('colour')
+                if colour:
+                    colour_counts[colour] = colour_counts.get(colour, 0) + 1
+
+            if colour_counts:
+                most_common_colour = max(colour_counts.items(), key=lambda x: x[1])[0]
+                print(f"🎨 Colour distribution: {colour_counts}")
+                print(f"🎨 Most common colour: {most_common_colour}")
+            else:
+                most_common_colour = 'N/A'
+                print("⚠️ No valid colour data found")
 
             # Most active station
             station_counts = {}
             for watch in successful_watches:
-                station = watch.get('station', 'Unknown')
-                station_counts[station] = station_counts.get(station, 0) + 1
-            most_active_station = max(station_counts.items(), key=lambda x: x[1])[0] if station_counts else 'N/A'
+                station = watch.get('station')
+                if station:
+                    station_counts[station] = station_counts.get(station, 0) + 1
+
+            if station_counts:
+                most_active_station = max(station_counts.items(), key=lambda x: x[1])[0]
+                print(f"🏢 Station distribution: {station_counts}")
+                print(f"🏢 Most active station: {most_active_station}")
+            else:
+                most_active_station = 'N/A'
+                print("⚠️ No valid station data found")
 
             # Average duration
-            total_duration = sum(
-                [watch.get('ended_at', 0) - watch.get('started_at', 0) for watch in successful_watches])
-            avg_duration_seconds = total_duration // total_watches if total_watches > 0 else 0
-            avg_hours = avg_duration_seconds // 3600
-            avg_minutes = (avg_duration_seconds % 3600) // 60
-            average_duration = f"{avg_hours}h {avg_minutes}m" if avg_hours > 0 else f"{avg_minutes}m"
+            total_duration = 0
+            valid_durations = 0
+            for watch in successful_watches:
+                started_at = watch.get('started_at', 0)
+                ended_at = watch.get('ended_at', 0)
+                if started_at > 0 and ended_at > 0 and ended_at > started_at:
+                    total_duration += (ended_at - started_at)
+                    valid_durations += 1
+
+            if valid_durations > 0:
+                avg_duration_seconds = total_duration // valid_durations
+                avg_hours = avg_duration_seconds // 3600
+                avg_minutes = (avg_duration_seconds % 3600) // 60
+                average_duration = f"{avg_hours}h {avg_minutes}m" if avg_hours > 0 else f"{avg_minutes}m"
+                print(f"📈 Average duration: {average_duration} (from {valid_durations} watches)")
+            else:
+                average_duration = 'N/A'
+                print("⚠️ No valid duration data found")
+
+            print(f"✅ Stats calculation complete!")
+            print(
+                f"📊 Final stats: Total={total_watches}, Longest={longest_duration}, Attendees={most_attendees}, Colour={most_common_colour}, Station={most_active_station}, Avg={average_duration}")
 
             return {
                 'total_watches': total_watches,
@@ -580,6 +659,8 @@ class WatchCog(commands.Cog):
 
         except Exception as e:
             print(f'Error calculating statistics: {e}')
+            import traceback
+            traceback.print_exc()
             return {
                 'total_watches': 0,
                 'longest_duration': 'Error',
@@ -2427,12 +2508,12 @@ class WatchCog(commands.Cog):
             # Create the embed
             stats_embed = discord.Embed(
                 title="<:FENZ:1389200656090533970> | FENZ Watches",
-                description="FENZ watches are a system of organising large player activity sessions on FENZ. These can be hosted by FENZ Supervisors and Leadership and we encourage you to click the Watch Ping button to get notified when we host watches!",
+                description="FENZ watches are a system of organising large player activity sessions on FENZ. These can be hosted by FENZ Supervisors and Leadership and we encourage you to click the Watch Ping button to get notified when we host watches!\n",
                 colour=discord.Colour(0xffffff)
             )
 
             stats_embed.add_field(
-                name="âšª | Watch Status",
+                name="🔄️ | Watch Status",
                 value=(
                     "⚫ - **No watch is active.**\n"
                     "> Please make sure it is SSU and wait for a FENZ Supervisor or Leadership member to start a watch!\n\n"
@@ -2443,7 +2524,7 @@ class WatchCog(commands.Cog):
                     "🔴 / 🟡 / 🔵 / 🟤 - **Watch Colour.**\n"
                 "> A watch of this colour has been started!\n\n"
                 "1️⃣ / 2️⃣ - **Watch Station.**\n"
-                "> A watch at this station has been started!\n"
+                "> A watch at this station has been started!\n\n\n"
                 ),
                 inline=False
             )
@@ -2451,7 +2532,7 @@ class WatchCog(commands.Cog):
             stats_embed.add_field(
                 name="🏆 | Watch Records",
                 value=(
-                    f"**Total Watches:** {stats['total_watches']}\n"
+                    f"\n**Total Watches:** {stats['total_watches']}\n"
                     f"**Longest Watch:** {stats['longest_duration']}\n"
                     f"**Most Attendees:** {stats['most_attendees']}\n"
                     f"**Most Common Watch Colour:** {stats['most_common_colour']}\n"

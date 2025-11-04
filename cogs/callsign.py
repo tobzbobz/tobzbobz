@@ -2161,119 +2161,121 @@ class HighCommandPrefixChoice(discord.ui.View):
             except Exception as e:
                 print(f"Error in timeout handler: {e}")
 
-    class BulkAssignView(discord.ui.View):
-        """Interactive view for bulk callsign assignment"""
+class BulkAssignView(discord.ui.View):
+    """Interactive view for bulk callsign assignment"""
+    def __init__(self, cog, interaction, users_data):
+        super().__init__(timeout=600)  # 10 minute timeout
+        self.cog = cog
+        self.interaction = interaction
+        self.users_data = users_data
+        self.current_index = 0
+        self.assigned_count = 0
+        self.skipped_count = 0
 
-        def __init__(self, cog, interaction, users_data):
-            super().__init__(timeout=600)  # 10 minute timeout
-            self.cog = cog
-            self.interaction = interaction
-            self.users_data = users_data
-            self.current_index = 0
-            self.assigned_count = 0
-            self.skipped_count = 0
+    async def start(self):
+        """Start the bulk assignment process"""
+        if not self.users_data:
+            await self.interaction.followup.send("No users to assign!", ephemeral=True)
+            return
 
-        async def start(self):
-            """Start the bulk assignment process"""
-            if not self.users_data:
-                await self.interaction.followup.send("No users to assign!", ephemeral=True)
-                return
+        await self.show_current_user()
 
-            await self.show_current_user()
-
-        async def show_current_user(self):
-            """Show the current user for assignment"""
-            if self.current_index >= len(self.users_data):
-                # Finished!
-                await self.finish()
-                return
-
-            user_data = self.users_data[self.current_index]
-            member = user_data['member']
-
-            embed = discord.Embed(
-                title=f"📝 Bulk Callsign Assignment ({self.current_index + 1}/{len(self.users_data)})",
-                description=f"Assign a callsign to {member.mention}",
-                color=discord.Color.blue()
-            )
-
-            embed.add_field(
-                name="Discord User",
-                value=f"{member.display_name} ({member.id})",
-                inline=False
-            )
-            embed.add_field(
-                name="Roblox User",
-                value=user_data['roblox_username'],
-                inline=True
-            )
-            embed.add_field(
-                name="FENZ Rank",
-                value=user_data['fenz_prefix'],
-                inline=True
-            )
-            embed.add_field(
-                name="📊 Progress",
-                value=f"Assigned: {self.assigned_count} | Skipped: {self.skipped_count}",
-                inline=False
-            )
-
-            embed.set_footer(text="Click 'Assign' to enter a callsign, 'Skip' to skip this user, or 'Finish' to end")
-
-            if self.current_index == 0:
-                await self.interaction.followup.send(embed=embed, view=self, ephemeral=True)
-            else:
-                await self.interaction.edit_original_response(embed=embed, view=self)
-
-        async def finish(self):
-            """Finish the bulk assignment process"""
-            embed = discord.Embed(
-                title="✅ Bulk Assignment Complete!",
-                color=discord.Color.green()
-            )
-
-            embed.add_field(
-                name="Summary",
-                value=f"**Assigned:** {self.assigned_count} callsigns\n"
-                      f"**Skipped:** {self.skipped_count} users\n"
-                      f"**Total Processed:** {self.current_index} / {len(self.users_data)}",
-                inline=False
-            )
-
-            if self.assigned_count > 0:
-                embed.add_field(
-                    name="📝 Next Steps",
-                    value="Run `/callsign sync` to update Google Sheets",
-                    inline=False
-                )
-
-            # Disable all buttons
-            for item in self.children:
-                item.disabled = True
-
-            await self.interaction.edit_original_response(embed=embed, view=self)
-            self.stop()
-
-        @discord.ui.button(label="Assign Callsign", style=discord.ButtonStyle.success, emoji="✅")
-        async def assign_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-            """Show modal to assign callsign"""
-            user_data = self.users_data[self.current_index]
-            modal = BulkAssignModal(self, user_data)
-            await interaction.response.send_modal(modal)
-
-        @discord.ui.button(label="Skip", style=discord.ButtonStyle.secondary, emoji="⏭️")
-        async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-            """Skip this user"""
-            await interaction.response.defer()
-            self.skipped_count += 1
-            self.current_index += 1
-            await self.show_current_user()
-
-        @discord.ui.button(label="Finish", style=discord.ButtonStyle.danger, emoji="🏁")
-        async def finish_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-            """End bulk assignment"""
-            await interaction.response.defer()
+    async def show_current_user(self):
+        """Show the current user for assignment"""
+        if self.current_index >= len(self.users_data):
+            # Finished!
             await self.finish()
+            return
+
+        user_data = self.users_data[self.current_index]
+        member = user_data['member']
+
+        embed = discord.Embed(
+            title=f"📝 Bulk Callsign Assignment ({self.current_index + 1}/{len(self.users_data)})",
+            description=f"Assign a callsign to {member.mention}",
+            color=discord.Color.blue()
+        )
+
+        embed.add_field(
+            name="Discord User",
+            value=f"{member.display_name} ({member.id})",
+            inline=False
+        )
+
+        embed.add_field(
+            name="Roblox User",
+            value=user_data['roblox_username'],
+            inline=True
+        )
+
+        embed.add_field(
+            name="FENZ Rank",
+            value=user_data['fenz_prefix'],
+            inline=True
+        )
+
+        embed.add_field(
+            name="📊 Progress",
+            value=f"Assigned: {self.assigned_count} | Skipped: {self.skipped_count}",
+            inline=False
+        )
+
+        embed.set_footer(text="Click 'Assign' to enter a callsign, 'Skip' to skip this user, or 'Finish' to end")
+
+        if self.current_index == 0:
+            await self.interaction.followup.send(embed=embed, view=self, ephemeral=True)
+        else:
+            await self.interaction.edit_original_response(embed=embed, view=self)
+
+    async def finish(self):
+        """Finish the bulk assignment process"""
+        embed = discord.Embed(
+            title="✅ Bulk Assignment Complete!",
+            color=discord.Color.green()
+        )
+
+        embed.add_field(
+            name="Summary",
+            value=f"**Assigned:** {self.assigned_count} callsigns\n"
+                  f"**Skipped:** {self.skipped_count} users\n"
+                  f"**Total Processed:** {self.current_index} / {len(self.users_data)}",
+            inline=False
+        )
+
+        if self.assigned_count > 0:
+            embed.add_field(
+                name="📝 Next Steps",
+                value="Run `/callsign sync` to update Google Sheets",
+                inline=False
+            )
+
+        # Disable all buttons
+        for item in self.children:
+            item.disabled = True
+
+        await self.interaction.edit_original_response(embed=embed, view=self)
+        self.stop()
+
+    @discord.ui.button(label="Assign Callsign", style=discord.ButtonStyle.success, emoji="<:Accepted:1426930333789585509>")
+    async def assign_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Show modal to assign callsign"""
+        user_data = self.users_data[self.current_index]
+        modal = BulkAssignModal(self, user_data)
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="Skip", style=discord.ButtonStyle.secondary, emoji="<:RightSkip:1434962167660281926>")
+    async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Skip this user"""
+        await interaction.response.defer()
+        self.skipped_count += 1
+        self.current_index += 1
+        await self.show_current_user()
+
+    @discord.ui.button(label="Finish", style=discord.ButtonStyle.danger, emoji="🏁")
+    async def finish_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """End bulk assignment"""
+        await interaction.response.defer()
+        await self.finish()
 
 class BulkAssignModal(discord.ui.Modal):
     """Modal for entering callsign during bulk assignment"""

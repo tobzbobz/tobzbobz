@@ -2787,6 +2787,7 @@ class DeleteShiftConfirmView(discord.ui.View):
         elif hasattr(self, 'show_delete_confirm'):
             await self.show_delete_confirm(interaction, shift_dict)
 
+
 class ClearShiftsConfirmView(discord.ui.View):
     """Confirmation view for clearing all shifts"""
 
@@ -2800,9 +2801,6 @@ class ClearShiftsConfirmView(discord.ui.View):
         self.count = count
         self.armed = False
         self.message = None
-
-        # Update the clear button label with count
-        self.children[1].label = f"Clear {count} User Shifts"
 
     async def on_timeout(self):
         """Clean up when view times out"""
@@ -2823,24 +2821,42 @@ class ClearShiftsConfirmView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="ARM", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="ARM", emoji="<:ARM:1435117432791633921>", style=discord.ButtonStyle.secondary)
     async def arm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
 
-        self.armed = True
-        button.disabled = True
-        button.style = discord.ButtonStyle.success
-        button.label = "ARMED"
+        # Toggle armed state
+        self.armed = not self.armed
 
-        # Enable the clear button
-        for item in self.children:
-            if isinstance(item, discord.ui.Button) and item.label.startswith("Clear"):
-                item.disabled = False
+        if self.armed:
+            # Switch to DISARM
+            button.label = "DISARM"
+            button.emoji = discord.PartialEmoji(name="DISARM", id=1435117667097772116)  # Replace with your disarm emoji
+            button.style = discord.ButtonStyle.danger
 
-        await interaction.message.edit(view=self)
-        await interaction.followup.send("⚠️ Armed. You can now clear shifts.", ephemeral=True)
+            # Enable the clear button
+            for item in self.children:
+                if isinstance(item, discord.ui.Button) and item.custom_id == "clear_shifts":
+                    item.disabled = False
+                    item.label = f"Clear {self.count} User Shifts"
 
-    @discord.ui.button(label="Clear User Shifts", style=discord.ButtonStyle.danger, disabled=True)
+            await interaction.message.edit(view=self)
+        else:
+            # Switch back to ARM
+            button.label = "ARM"
+            button.emoji = discord.PartialEmoji(name="ARM", id=1435117432791633921)
+            button.style = discord.ButtonStyle.secondary
+
+            # Disable the clear button
+            for item in self.children:
+                if isinstance(item, discord.ui.Button) and item.custom_id == "clear_shifts":
+                    item.disabled = True
+                    item.label = f"Clear {self.count} User Shifts"
+
+            await interaction.message.edit(view=self)
+
+    @discord.ui.button(label="Clear User Shifts", style=discord.ButtonStyle.danger, disabled=True,
+                       custom_id="clear_shifts")
     async def clear_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
 
@@ -2866,7 +2882,7 @@ class ClearShiftsConfirmView(discord.ui.View):
                 ephemeral=True
             )
 
-            # Disable buttons
+            # Disable all buttons after clearing
             for item in self.children:
                 item.disabled = True
             await interaction.message.edit(view=self)
@@ -2882,6 +2898,11 @@ class ClearShiftsConfirmView(discord.ui.View):
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         await interaction.followup.send("Cancelled.", ephemeral=True)
+
+        # Disable all buttons
+        for item in self.children:
+            item.disabled = True
+        await interaction.message.edit(view=self)
         self.stop()
 
 
