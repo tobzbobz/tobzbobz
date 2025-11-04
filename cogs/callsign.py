@@ -14,6 +14,14 @@ from google_sheets_integration import sheets_manager, COMMAND_RANKS, NON_COMMAND
 BLOXLINK_API_KEY = os.getenv('BLOXLINK_API_KEY')
 
 SYNC_LOG_CHANNEL_ID = 1434770430505390221
+CALLSIGN_REQUEST_LOG_CHANNEL_ID = 1435318020619632851
+
+EXCLUDED_GUILDS = {
+    1420770769562243083,  # Example: Test Server
+    1430002479239532747,
+    1425867713183744023   # Example: Development Server
+}
+
 
 # Configuration: Map Discord Role IDs to FENZ Ranks
 FENZ_RANK_MAP = {
@@ -311,7 +319,7 @@ class CallsignCog(commands.Cog):
     async def reload_data(self):
         async with db.pool.acquire() as conn:
             self.active_watches = await conn.fetch("SELECT * FROM callsigns;")
-        print("✅ Reloaded callsigns cache")
+        print("<:Accepted:1426930333789585509> Reloaded callsigns cache")
 
     @staticmethod
     def strip_shift_prefixes(nickname: str) -> str:
@@ -336,22 +344,50 @@ class CallsignCog(commands.Cog):
             return
 
         for guild in self.bot.guilds:
+            # Skip excluded guilds
+            if guild.id in EXCLUDED_GUILDS:
+                print(f"⏭️ Skipping auto-sync for excluded guild: {guild.name} ({guild.id})")
+                continue
+
             try:
+                sync_start_time = datetime.utcnow()
+
                 async with db.pool.acquire() as conn:
                     callsigns = await conn.fetch('SELECT * FROM callsigns ORDER BY callsign')
+
+                # Track detailed statistics
+                stats = {
+                    'total_callsigns': len(callsigns),
+                    'members_found': 0,
+                    'members_not_found': 0,
+                    'nickname_updates': 0,
+                    'rank_updates': 0,
+                    'callsigns_reset': [],
+                    'added_from_sheets': 0,
+                    'removed_inactive': 0,
+                    'last_seen_updates': 0,
+                    'errors': [],
+                    # Detailed change tracking
+                    'nickname_changes': [],
+                    'rank_changes': [],
+                    'removed_users': []
+                }
 
                 # In auto_sync_loop, after fetching callsigns:
                 for record in callsigns:
                     member = guild.get_member(record['discord_user_id'])
 
                     if member:
+                        stats['members_found'] += 1
                         # Update last_seen_at to now
                         async with db.pool.acquire() as conn:
                             await conn.execute(
                                 'UPDATE callsigns SET last_seen_at = NOW() WHERE discord_user_id = $1',
                                 member.id
                             )
+                        stats['last_seen_updates'] += 1
                     else:
+                        stats['members_not_found'] += 1
                         # User not in server - check if been gone > 7 days
                         last_seen = record.get('last_seen_at')
                         if last_seen:
@@ -365,14 +401,11 @@ class CallsignCog(commands.Cog):
                                     )
                                 # Remove from sheets
                                 await sheets_manager.remove_callsign_from_sheets(record['discord_user_id'])
+                                stats['removed_inactive'] += 1
                                 continue
 
                 if callsigns:
                     callsign_data = []
-                    nickname_updates = 0
-                    rank_updates = 0
-                    callsigns_reset = []
-                    added_from_sheets = 0
 
                     # First, check for entries in sheets but not in database
                     sheet_callsigns = await sheets_manager.get_all_callsigns_from_sheets()
@@ -402,12 +435,13 @@ class CallsignCog(commands.Cog):
                                             self.bot.user.id,
                                             "Auto-sync"
                                         )
-                                        added_from_sheets += 1
+                                        stats['added_from_sheets'] += 1
 
                     # Re-fetch database if we added entries
-                    if added_from_sheets > 0:
+                    if stats['added_from_sheets'] > 0:
                         async with db.pool.acquire() as conn:
                             callsigns = await conn.fetch('SELECT * FROM callsigns ORDER BY callsign')
+                        stats['total_callsigns'] = len(callsigns)
 
                     for record in callsigns:
                         member = guild.get_member(record['discord_user_id'])
@@ -466,7 +500,7 @@ class CallsignCog(commands.Cog):
                                     "###", correct_fenz_prefix, member.id
                                 )
 
-                            callsigns_reset.append({
+                            stats['callsigns_reset'].append({
                                 'member': member,
                                 'old_callsign': old_callsign,
                                 'new_prefix': correct_fenz_prefix,
@@ -475,7 +509,7 @@ class CallsignCog(commands.Cog):
 
                             current_fenz_prefix = correct_fenz_prefix
                             current_callsign = "###"
-                            rank_updates += 1
+                            stats['rank_updates'] += 1
                         elif fenz_rank_changed:
                             # Rank changed but callsign is already ### or BLANK, just update prefix
                             async with db.pool.acquire() as conn:
@@ -484,7 +518,7 @@ class CallsignCog(commands.Cog):
                                     correct_fenz_prefix, member.id
                                 )
                             current_fenz_prefix = correct_fenz_prefix
-                            rank_updates += 1
+                            stats['rank_updates'] += 1
 
                         # Update HHStJ prefix if changed
                         if correct_hhstj_prefix != current_hhstj_prefix:
@@ -494,55 +528,54 @@ class CallsignCog(commands.Cog):
                                     correct_hhstj_prefix or '', member.id
                                 )
                             current_hhstj_prefix = correct_hhstj_prefix
-                            rank_updates += 1
+                            stats['rank_updates'] += 1
 
                         # UPDATE NICKNAME
-                            # UPDATE NICKNAME
-                            if current_callsign == "###":
-                                # Reset callsign - nickname should be: PREFIX-### | HHStJ | Roblox
-                                nickname_parts = []
-                                if current_fenz_prefix:
-                                    nickname_parts.append(f"{current_fenz_prefix}-###")
-                                if current_hhstj_prefix and "-" not in current_hhstj_prefix:
-                                    nickname_parts.append(current_hhstj_prefix)
-                                if record['roblox_username']:
-                                    nickname_parts.append(record['roblox_username'])
-                                expected_nickname = " | ".join(nickname_parts) if nickname_parts else record[
-                                    'roblox_username']
-                            else:
-                                expected_nickname = format_nickname(
-                                    current_fenz_prefix,
-                                    current_callsign,
-                                    current_hhstj_prefix,
-                                    record['roblox_username'],
-                                    is_fenz_high_command,
-                                    is_hhstj_high_command
-                                )
+                        if current_callsign == "###":
+                            # Reset callsign - nickname should be: PREFIX-### | HHStJ | Roblox
+                            nickname_parts = []
+                            if current_fenz_prefix:
+                                nickname_parts.append(f"{current_fenz_prefix}-###")
+                            if current_hhstj_prefix and "-" not in current_hhstj_prefix:
+                                nickname_parts.append(current_hhstj_prefix)
+                            if record['roblox_username']:
+                                nickname_parts.append(record['roblox_username'])
+                            expected_nickname = " | ".join(nickname_parts) if nickname_parts else record[
+                                'roblox_username']
+                        else:
+                            expected_nickname = format_nickname(
+                                current_fenz_prefix,
+                                current_callsign,
+                                current_hhstj_prefix,
+                                record['roblox_username'],
+                                is_fenz_high_command,
+                                is_hhstj_high_command
+                            )
 
-                            current_nick_stripped = self.strip_shift_prefixes(
-                                member.nick) if member.nick else member.name
-                            expected_nick_stripped = self.strip_shift_prefixes(expected_nickname)
+                        current_nick_stripped = self.strip_shift_prefixes(member.nick) if member.nick else member.name
+                        expected_nick_stripped = self.strip_shift_prefixes(expected_nickname)
 
-                            # Only update if the stripped versions don't match
-                            if current_nick_stripped != expected_nick_stripped:
-                                try:
-                                    # ✅ IMPORTANT: Preserve shift prefix if it exists
-                                    shift_prefix = ""
-                                    if member.nick:
-                                        for prefix in ["DUTY | ", "BRK | ", "LOA | "]:
-                                            if member.nick.startswith(prefix):
-                                                shift_prefix = prefix
-                                                break
+                        # Only update if the stripped versions don't match
+                        if current_nick_stripped != expected_nick_stripped:
+                            try:
+                                # Preserve shift prefix if it exists
+                                shift_prefix = ""
+                                if member.nick:
+                                    for prefix in ["DUTY | ", "BRK | ", "LOA | "]:
+                                        if member.nick.startswith(prefix):
+                                            shift_prefix = prefix
+                                            break
 
-                                    # Apply shift prefix back to new nickname
-                                    final_nickname = shift_prefix + expected_nickname
+                                # Apply shift prefix back to new nickname
+                                final_nickname = shift_prefix + expected_nickname
 
-                                    await member.edit(nick=final_nickname)
-                                    nickname_updates += 1
-                                except discord.Forbidden:
-                                    print(f"⚠️ Cannot update nickname for {member.display_name}")
-                                except Exception as e:
-                                    print(f"⚠️ Error updating nickname for {member.display_name}: {e}")
+                                await member.edit(nick=final_nickname)
+                                stats['nickname_updates'] += 1
+                            except discord.Forbidden:
+                                stats['errors'].append(
+                                    f"Cannot update nickname for {member.display_name} (permissions)")
+                            except Exception as e:
+                                stats['errors'].append(f"Error updating {member.display_name}: {str(e)}")
 
                         # Determine rank type for sheets
                         rank_type, rank_data = sheets_manager.determine_rank_type(member.roles)
@@ -568,25 +601,46 @@ class CallsignCog(commands.Cog):
                     # Update Google Sheets
                     await sheets_manager.batch_update_callsigns(callsign_data)
 
-                    # Send log to channel
+                    # Calculate sync duration
+                    sync_duration = (datetime.utcnow() - sync_start_time).total_seconds()
+
+                    # Send enhanced log to channel
                     log_fields = [
-                        {'name': '📊 Total Callsigns', 'value': str(len(callsigns)), 'inline': True},
-                        {'name': '🏷️ Nicknames Updated', 'value': str(nickname_updates), 'inline': True},
-                        {'name': '🎖️ Rank Changes', 'value': str(rank_updates), 'inline': True},
+                        {'name': 'Total Callsigns', 'value': str(stats['total_callsigns']), 'inline': True},
+                        {'name': 'Members Found', 'value': str(stats['members_found']), 'inline': True},
+                        {'name': 'Not in Server', 'value': str(stats['members_not_found']), 'inline': True},
+                        {'name': 'Nicknames Updated', 'value': str(stats['nickname_updates']), 'inline': True},
+                        {'name': 'Rank Changes', 'value': str(stats['rank_updates']), 'inline': True},
+                        {'name': 'Last Seen Updates', 'value': str(stats['last_seen_updates']), 'inline': True},
                     ]
 
-                    if added_from_sheets > 0:
+                    if stats['added_from_sheets'] > 0:
                         log_fields.append(
-                            {'name': '➕ Added from Sheets', 'value': str(added_from_sheets), 'inline': True})
+                            {'name': 'Added from Sheets', 'value': str(stats['added_from_sheets']), 'inline': True})
 
-                    if callsigns_reset:
+                    if stats['removed_inactive'] > 0:
+                        log_fields.append(
+                            {'name': 'Removed (Inactive 7+ days)', 'value': str(stats['removed_inactive']),
+                             'inline': True})
+
+                    if stats['callsigns_reset']:
                         reset_list = '\n'.join(
                             [f"• {r['member'].mention}: ~~{r['old_callsign']}~~ → {r['new_prefix']}-### ({r['reason']})"
-                             for r in callsigns_reset[:5]])
-                        if len(callsigns_reset) > 5:
-                            reset_list += f"\n... and {len(callsigns_reset) - 5} more"
-                        log_fields.append({'name': f'🔄 Callsigns Reset ({len(callsigns_reset)})', 'value': reset_list,
-                                           'inline': False})
+                             for r in stats['callsigns_reset'][:5]])
+                        if len(stats['callsigns_reset']) > 5:
+                            reset_list += f"\n... and {len(stats['callsigns_reset']) - 5} more"
+                        log_fields.append({'name': f'Callsigns Reset ({len(stats["callsigns_reset"])})',
+                                           'value': reset_list, 'inline': False})
+
+                    if stats['errors']:
+                        error_list = '\n'.join([f"• {err}" for err in stats['errors'][:3]])
+                        if len(stats['errors']) > 3:
+                            error_list += f"\n... and {len(stats['errors']) - 3} more"
+                        log_fields.append({'name': f'Errors ({len(stats["errors"])})',
+                                           'value': error_list, 'inline': False})
+
+                    # Add performance info
+                    log_fields.append({'name': '⏱️ Sync Duration', 'value': f'{sync_duration:.2f}s', 'inline': True})
 
                     await self.send_sync_log(
                         self.bot,
@@ -597,18 +651,36 @@ class CallsignCog(commands.Cog):
                     )
 
                     print(f"✅ Auto-sync completed for guild {guild.name}:")
-                    print(f"   📊 {len(callsigns)} callsigns synced to Google Sheets")
-                    print(f"   🏷️ {nickname_updates} nicknames updated")
-                    print(f"   🎖️ {rank_updates} rank changes detected and saved")
-                    if added_from_sheets > 0:
-                        print(f"   ➕ {added_from_sheets} added from sheets")
-                    if callsigns_reset:
-                        print(f"   🔄 {len(callsigns_reset)} callsigns reset due to rank changes")
+                    print(f"    {stats['total_callsigns']} callsigns synced to Google Sheets")
+                    print(f"    {stats['members_found']} members found / {stats['members_not_found']} not in server")
+                    print(f"   ️ {stats['nickname_updates']} nicknames updated")
+                    print(f"   ️ {stats['rank_updates']} rank changes detected and saved")
+                    if stats['added_from_sheets'] > 0:
+                        print(f"    {stats['added_from_sheets']} added from sheets")
+                    if stats['removed_inactive'] > 0:
+                        print(f"   ️ {stats['removed_inactive']} removed (inactive 7+ days)")
+                    if stats['callsigns_reset']:
+                        print(f"    {len(stats['callsigns_reset'])} callsigns reset due to rank changes")
+                    if stats['errors']:
+                        print(f"   ️ {len(stats['errors'])} errors occurred")
+                    print(f"    Completed in {sync_duration:.2f}s")
 
             except Exception as e:
                 print(f"❌ Error during auto-sync for {guild.name}: {e}")
                 import traceback
                 traceback.print_exc()
+
+                # Send error log
+                try:
+                    await self.send_sync_log(
+                        self.bot,
+                        "❌ Auto-Sync Failed",
+                        f"Auto-sync failed for **{guild.name}**",
+                        [{'name': 'Error', 'value': f'```{str(e)[:1000]}```', 'inline': False}],
+                        discord.Color.red()
+                    )
+                except:
+                    pass
 
     @staticmethod
     async def send_sync_log(bot, title: str, description: str, fields: list, color: discord.Color):
@@ -635,7 +707,46 @@ class CallsignCog(commands.Cog):
 
             await channel.send(embed=embed)
         except Exception as e:
-            print(f"❌ Error sending sync log: {e}")
+            print(f"<:Denied:1426930694633816248> Error sending sync log: {e}")
+
+    @staticmethod
+    async def send_callsign_request_log(bot, user: discord.Member, callsign: str, fenz_prefix: str,
+                                        hhstj_prefix: str, roblox_username: str, approved: bool = True):
+        """Send callsign request logs to designated channel"""
+        try:
+            channel = bot.get_channel(CALLSIGN_REQUEST_LOG_CHANNEL_ID)
+            if not channel:
+                print(f"⚠️ Could not find callsign request log channel {CALLSIGN_REQUEST_LOG_CHANNEL_ID}")
+                return
+
+            embed = discord.Embed(
+                title="Callsign Request" + (" - Approved <:Accepted:1426930333789585509>" if approved else " - Failed <:Denied:1426930694633816248>"),
+                color=discord.Color.green() if approved else discord.Color.red(),
+                timestamp=datetime.utcnow()
+            )
+
+            # Format callsign display
+            if fenz_prefix:
+                full_callsign = f"{fenz_prefix}-{callsign}"
+            else:
+                full_callsign = callsign
+
+            embed.add_field(name="User", value=f"{user.mention}\n`{user.display_name}`", inline=True)
+            embed.add_field(name="Requested Callsign", value=f"`{full_callsign}`", inline=True)
+            embed.add_field(name="FENZ Rank", value=f"`{fenz_prefix}`", inline=True)
+
+            if hhstj_prefix:
+                embed.add_field(name="HHStJ Rank", value=f"`{hhstj_prefix}`", inline=True)
+
+            embed.add_field(name="Roblox Username", value=f"`{roblox_username}`", inline=True)
+            embed.add_field(name="Status", value="Auto-approved <:Accepted:1426930333789585509>" if approved else "Failed <:Denied:1426930694633816248>", inline=True)
+
+            embed.set_thumbnail(url=user.display_avatar.url)
+            embed.set_footer(text=f"User ID: {user.id}")
+
+            await channel.send(embed=embed)
+        except Exception as e:
+            print(f"<:Denied:1426930694633816248> Error sending callsign request log: {e}")
 
     @auto_sync_loop.before_loop
     async def before_auto_sync(self):
@@ -648,7 +759,7 @@ class CallsignCog(commands.Cog):
             print("⏳ Auto-sync waiting for database connection...")
             await asyncio.sleep(1)
 
-        print("✅ Auto-sync ready - database connected")
+        print("<:Accepted:1426930333789585509> Auto-sync ready - database connected")
 
     async def search_callsign_database(self, query: str, search_type: str) -> list:
         async with db.pool.acquire() as conn:
@@ -1317,8 +1428,8 @@ class CallsignCog(commands.Cog):
                 chunk_size = 10
                 for i in range(0, len(updated), chunk_size):
                     chunk = updated[i:i + chunk_size]
-                    field_name = f"✅ Updated ({i + 1}-{min(i + chunk_size, len(updated))})" if len(
-                        updated) > chunk_size else f"✅ Updated ({len(updated)})"
+                    field_name = f"<:Accepted:1426930333789585509> Updated ({i + 1}-{min(i + chunk_size, len(updated))})" if len(
+                        updated) > chunk_size else f"<:Accepted:1426930333789585509> Updated ({len(updated)})"
                     embed.add_field(
                         name=field_name,
                         value="\n\n".join(chunk[:10]),  # Limit to 10 to avoid field length issues
@@ -1470,7 +1581,7 @@ class CallsignCog(commands.Cog):
             # Nickname status
             if nickname_reset:
                 embed.add_field(
-                    name="✅ Nickname Reset",
+                    name="<:Accepted:1426930333789585509> Nickname Reset",
                     value=f"Changed to: `{roblox_username if roblox_username else 'Default username'}`",
                     inline=False
                 )
@@ -1617,21 +1728,8 @@ class CallsignCog(commands.Cog):
                     fenz_prefix, hhstj_prefix, roblox_id, roblox_username
                 )
 
-                try:
-                    # Post in channel
-                    channel_message = await interaction.channel.send(
-                        content=f"{interaction.user.mention}",
-                        embed=embed,
-                        view=view
-                    )
-                    view.message = channel_message
-                    await interaction.followup.send(
-                        f"<:Accepted:1426930333789585509> Your callsign request has been approved!\n"
-                        f"Please respond to the message above.",
-                        ephemeral=True
-                    )
-                except discord.Forbidden:
-                    pass
+                # Send ONLY as ephemeral followup (no channel message)
+                await interaction.followup.send(embed=embed, view=view, ephemeral=True)
                 return
 
             # FOR NON-HIGH COMMAND - Auto-accept with prefix
@@ -1667,6 +1765,11 @@ class CallsignCog(commands.Cog):
                 interaction.user, callsign, fenz_prefix, roblox_username, interaction.user.id
             )
 
+            await self.send_callsign_request_log(
+                self.bot, interaction.user, callsign, fenz_prefix,
+                hhstj_prefix, roblox_username, approved=True
+            )
+
             # Send success message
             success_embed = discord.Embed(
                 title="<:Accepted:1426930333789585509> Callsign Approved!",
@@ -1693,7 +1796,7 @@ class CallsignCog(commands.Cog):
                 inline=True
             )
             success_embed.add_field(
-                name="✅ What's Been Done",
+                name="<:Accepted:1426930333789585509> What's Been Done",
                 value="• Added to database\n• Updated your Discord nickname\n• Synced to Google Sheets" + (
                     "\n• Previous callsign archived" if user_callsign else ""
                 ),
@@ -1823,9 +1926,9 @@ class CallsignCog(commands.Cog):
                         status_icons = []
 
                         if user_data['has_bloxlink']:
-                            status_icons.append("✅ Bloxlink")
+                            status_icons.append("<:Accepted:1426930333789585509> Bloxlink")
                         else:
-                            status_icons.append("❌ No Bloxlink")
+                            status_icons.append("<:Denied:1426930694633816248> No Bloxlink")
 
                         if user_data['roblox_username']:
                             status_icons.append(f"Roblox: {user_data['roblox_username']}")
@@ -1909,7 +2012,7 @@ class CallsignCog(commands.Cog):
                 )
             else:
                 summary_embed.add_field(
-                    name="✅ Status",
+                    name="<:Accepted:1426930333789585509> Status",
                     value="All FENZ members have complete callsign data!",
                     inline=False
                 )
@@ -1969,7 +2072,7 @@ class CallsignCog(commands.Cog):
 
             if not members_without_callsigns:
                 await interaction.followup.send(
-                    "✅ All FENZ members already have callsigns or are being processed!",
+                    "<:Accepted:1426930333789585509> All FENZ members already have callsigns or are being processed!",
                     ephemeral=True
                 )
                 return
@@ -2042,7 +2145,7 @@ class CallsignCog(commands.Cog):
 
             # Create summary embed
             summary_embed = discord.Embed(
-                title="✅ Ready for Bulk Assignment",
+                title="<:Accepted:1426930333789585509> Ready for Bulk Assignment",
                 description=f"Found **{len(users_without_callsigns)}** members eligible for callsign assignment.",
                 color=discord.Color.green()
             )
@@ -2137,6 +2240,11 @@ class HighCommandPrefixChoice(discord.ui.View):
             self.roblox_username, self.user.id
         )
 
+        await self.cog.send_callsign_request_log(
+            self.cog.bot, self.user, self.callsign, self.fenz_prefix,
+            self.hhstj_prefix, self.roblox_username, approved=True
+        )
+
         # Disable buttons
         for item in self.children:
             item.disabled = True
@@ -2194,6 +2302,11 @@ class HighCommandPrefixChoice(discord.ui.View):
         await sheets_manager.add_callsign_to_sheets(
             self.user, self.callsign, "",  # Empty prefix
             self.roblox_username, self.user.id
+        )
+
+        await self.cog.send_callsign_request_log(
+            self.cog.bot, self.user, self.callsign, "",  # Empty prefix
+            self.hhstj_prefix, self.roblox_username, approved=True
         )
 
         # Disable buttons
@@ -2336,7 +2449,7 @@ class BulkAssignView(discord.ui.View):
     async def finish(self):
         """Finish the bulk assignment process"""
         embed = discord.Embed(
-            title="✅ Bulk Assignment Complete!",
+            title="<:Accepted:1426930333789585509> Bulk Assignment Complete!",
             color=discord.Color.green()
         )
 
@@ -2526,7 +2639,7 @@ class BulkAssignModal(discord.ui.Modal):
             self.view.current_index += 1
 
             await interaction.followup.send(
-                f"✅ Assigned {self.user_data['fenz_prefix']}-{callsign} to {member.mention}",
+                f"<:Accepted:1426930333789585509> Assigned {self.user_data['fenz_prefix']}-{callsign} to {member.mention}",
                 ephemeral=True
             )
 

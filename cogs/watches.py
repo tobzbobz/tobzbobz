@@ -43,11 +43,64 @@ CHANNEL_NAME_RULES = {
     },
 }
 
+WATCH_INFO_BOXES = {
+    "Station 1": {
+        "Red": {
+            "title": "🔴1️⃣ Vehicle Info",
+            "Active": "### Active Vehicles\nHAM411 - Pump\nHAM412 — Pump\nHAM415 — Aerial",
+            "Rear": "### Delayed Turnout Vehicles\nHAM4111 — City Tanker\nHAM4118 — HAZMAT/Command\nHAM4121 — ISV\nHAM4120 - OSU"
+        },
+        "Blue": {
+            "title": "🔵1️⃣ Vehicle Info",
+            "Active": "### Active Vehicles\nHAM411 - Pump\nHAM412 — Pump\nHAM415 — Aerial\nHAM4118 — HAZMAT/Command\nHAM4121 — ISV",
+            "Rear": "### Delayed Turnout Vehicles\nHAM4111 — City Tanker\nHAM4120 - OSU"
+        },
+        "Yellow": {
+            "title": "🟡1️⃣ Vehicle Info",
+            "Active": "### Active Vehicles\nHAM411 - Pump\nHAM412 — Pump\nHAM415 — Aerial\nHAM4118 — HAZMAT/Command",
+            "Rear": "### Delayed Turnout Vehicles\nHAM4111 — City Tanker\nHAM4121 — ISV\nHAM4120 - OSU"
+        },
+        "Brown": {
+            "title": "🟤1️⃣ Vehicle Info",
+            "Active": "### Active Vehicles\nHAM411 - Pump\nHAM415 — Aerial\nHAM4118 — HAZMAT/Command",
+            "Rear": "### Delayed Turnout Vehicles\nHAM412 — Pump\nHAM4111 — City Tanker\nHAM4121 — ISV\nHAM4120 - OSU"
+        }
+    },
+    "Station 2": {
+        "Red": {
+            "title": "🔴2️⃣ Vehicle Info",
+            "Active": "### Active Vehicles\nCAM411 - Pump\nCAM447 — Pump\nCAM4411 — Aerial",
+            "Rear": "### Delayed Turnout Vehicles\nHAM4111 — City Tanker\nHAM4118 — HAZMAT/Command\nHAM4121 — ISV\nHAM4120 - OSU\nCHA427 - Pump\nCHA4271 - Pump\nCHA4275 - Rural Tanker\nDJ8817 - Pump"
+        },
+        "Blue": {
+            "title": "🔵2️⃣ Vehicle Info",
+            "Active": "### Active Vehicles\nCHA427 - Pump\nCHA4275 — Rural Tanker",
+            "Rear": "### Delayed Turnout Vehicles\nHAM4111 — City Tanker\nHAM4120 - OSU\nCAM411 - Pump\nCAM447 — Pump\nCAM4411 — Aerial\nCHA4271 - Pump"
+        },
+        "Yellow": {
+            "title": "🟡2️⃣ Vehicle Info",
+            "Active": "### Active Vehicles\nCHA427 - Pump\nCHA4271 - Pump\nCHA4275 - Rural Tanker",
+            "Rear": "n### Delayed Turnout Vehicles\nHAM4111 — City Tanker\nHAM4121 — ISV\nHAM4120 - OSU\nCAM411 - Pump\nCAM447 — Pump\nCAM4411 — Aerial\nDJ8817 - Pump"
+        },
+        "Brown": {
+            "title": "🟤2️⃣ Vehicle Info",
+            "Active": "### Active Vehicles\nDJ8817 - Pump\nCAM411 - Pump",
+            "Rear": "### Delayed Turnout Vehicles\nHAM412 — Pump\nHAM4111 — City Tanker\nHAM4121 — ISV\nHAM4120 - OSU\nCAM447 — Pump\nCAM4411 — Aerial\nCHA427 - Pump\nCHA4271 - Pump\nCHA4275 - Rural Tanker"
+        }
+    }
+}
 
 def get_guild_config(guild_id: int):
     """Get configuration for a specific guild"""
     return GUILD_CONFIGS.get(guild_id, {})
 
+def get_watch_info(station: str, colour: str):
+    """Get watch info for a given station and colour"""
+    return WATCH_INFO_BOXES.get(station, {}).get(colour, {
+        "title": "Vehicle Info",
+        "Active": "### Active Vehicles\nNo vehicle information available",
+        "Rear": "### Delayed Turnout Vehicles\nNo vehicle information available"
+    })
 
 # Initialize as empty dict - will be loaded in cog __init__
 active_watches = {}
@@ -130,14 +183,25 @@ class VoteButton(discord.ui.View):
                                               value=discord.utils.format_dt(discord.utils.utcnow(), style='R'),
                                               inline=True)
 
-                    start_embed.add_field(name='Watch Leader', value=interaction.user.mention, inline=True)
+                    start_embed.add_field(name='Watch Leader', value=f"{interaction.user.mention}\n‎", inline=True)
                     comms_status = getattr(self, 'comms_status', 'active')
                     comms_emoji = '<:Denied:1426930694633816248>' if comms_status == 'inactive' else '<:Accepted:1426930333789585509>'
                     start_embed.add_field(name='FIRE COMMS', value=f'{comms_emoji} {comms_status.capitalize()}',
                                           inline=True)
                     start_embed.add_field(name='​',
-                                          value='No need to vote just hop in!!\nIf you are joining, please join Fenz RTO 🙌',
+                                          value='No need to vote just hop in!!\nIf you are joining, please join Fenz RTO 🙌\n‎',
                                           inline=False)
+                    watch_info = get_watch_info(self.station, self.colour)
+                    start_embed.add_field(
+                        name=watch_info['title'],
+                        value=watch_info['Active'],
+                        inline=True
+                    )
+                    start_embed.add_field(
+                        name='​',
+                        value=watch_info['Rear'],
+                        inline=True
+                    )
                     start_embed.add_field(name='​',
                                           value='**Select the below reaction role to be notified of any future watches!**',
                                           inline=False)
@@ -531,32 +595,19 @@ class WatchCog(commands.Cog):
                     'average_duration': 'N/A'
                 }
 
-            # Filter out failed watches and ensure we have valid data
+            # Filter successful watches
             successful_watches = []
-            failed_count = 0
-            invalid_data_count = 0
-
             for watch in completed_watches.values():
                 status = watch.get('status', 'completed')
-                started_at = watch.get('started_at', 0)
-                ended_at = watch.get('ended_at', 0)
-
-                if status == 'failed':
-                    failed_count += 1
-                    continue
-
-                # Only include completed watches with valid timestamps
-                if started_at > 0 and ended_at > 0 and ended_at > started_at:
-                    successful_watches.append(watch)
-                else:
-                    invalid_data_count += 1
+                if status != 'failed':
+                    started_at = watch.get('started_at', 0)
+                    ended_at = watch.get('ended_at', 0)
+                    if started_at > 0 and ended_at > 0 and ended_at > started_at:
+                        successful_watches.append(watch)
 
             print(f"✅ Stats Calculation: {len(successful_watches)} successful watches")
-            print(f"❌ Stats Calculation: {failed_count} failed watches (excluded)")
-            print(f"⚠️ Stats Calculation: {invalid_data_count} watches with invalid data (excluded)")
 
             if not successful_watches:
-                print("⚠️ Stats Calculation: No valid successful watches found")
                 return {
                     'total_watches': 0,
                     'longest_duration': 'N/A',
@@ -568,85 +619,61 @@ class WatchCog(commands.Cog):
 
             total_watches = len(successful_watches)
 
-            # Calculate longest duration
-            longest_duration_seconds = 0
-            for watch in successful_watches:
-                started_at = watch.get('started_at', 0)
-                ended_at = watch.get('ended_at', 0)
-                duration = ended_at - started_at
-                if duration > longest_duration_seconds:
-                    longest_duration_seconds = duration
-
+            # Longest duration
+            longest_duration_seconds = max(
+                (watch.get('ended_at', 0) - watch.get('started_at', 0)
+                 for watch in successful_watches),
+                default=0
+            )
             hours = longest_duration_seconds // 3600
             minutes = (longest_duration_seconds % 3600) // 60
             longest_duration = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
-            print(f"⏱️ Longest watch duration: {longest_duration} ({longest_duration_seconds}s)")
+            # Most attendees
+            most_attendees = max(
+                (watch.get('attendees', 0)
+                 for watch in successful_watches
+                 if watch.get('attendees') is not None),
+                default=0
+            )
 
-            # Calculate most attendees
-            attendees_list = []
-            for watch in successful_watches:
-                attendees = watch.get('attendees')
-                if attendees is not None and isinstance(attendees, int):
-                    attendees_list.append(attendees)
-
-            most_attendees = max(attendees_list) if attendees_list else 0
-
-            print(f"👥 Most attendees: {most_attendees} (from {len(attendees_list)} watches with valid attendee data)")
-
-            # Most common colour
+            # Most common colour - FIXED
             colour_counts = {}
             for watch in successful_watches:
                 colour = watch.get('colour')
-                if colour:
+                if colour and colour.strip():  # Ensure colour is not None or empty
                     colour_counts[colour] = colour_counts.get(colour, 0) + 1
 
-            if colour_counts:
-                most_common_colour = max(colour_counts.items(), key=lambda x: x[1])[0]
-                print(f"🎨 Colour distribution: {colour_counts}")
-                print(f"🎨 Most common colour: {most_common_colour}")
-            else:
-                most_common_colour = 'N/A'
-                print("⚠️ No valid colour data found")
+            most_common_colour = max(colour_counts.items(), key=lambda x: x[1])[0] if colour_counts else 'N/A'
+            print(f"🎨 Most common colour: {most_common_colour} (from {len(colour_counts)} unique colours)")
 
-            # Most active station
+            # Most active station - FIXED
             station_counts = {}
             for watch in successful_watches:
                 station = watch.get('station')
-                if station:
+                if station and station.strip():  # Ensure station is not None or empty
                     station_counts[station] = station_counts.get(station, 0) + 1
 
-            if station_counts:
-                most_active_station = max(station_counts.items(), key=lambda x: x[1])[0]
-                print(f"🏢 Station distribution: {station_counts}")
-                print(f"🏢 Most active station: {most_active_station}")
-            else:
-                most_active_station = 'N/A'
-                print("⚠️ No valid station data found")
+            most_active_station = max(station_counts.items(), key=lambda x: x[1])[0] if station_counts else 'N/A'
+            print(f"🏢 Most active station: {most_active_station} (from {len(station_counts)} unique stations)")
 
             # Average duration
-            total_duration = 0
-            valid_durations = 0
-            for watch in successful_watches:
-                started_at = watch.get('started_at', 0)
-                ended_at = watch.get('ended_at', 0)
-                if started_at > 0 and ended_at > 0 and ended_at > started_at:
-                    total_duration += (ended_at - started_at)
-                    valid_durations += 1
+            total_duration = sum(
+                watch.get('ended_at', 0) - watch.get('started_at', 0)
+                for watch in successful_watches
+                if watch.get('started_at', 0) > 0 and watch.get('ended_at', 0) > 0
+            )
+            valid_durations = len(successful_watches)
 
             if valid_durations > 0:
                 avg_duration_seconds = total_duration // valid_durations
                 avg_hours = avg_duration_seconds // 3600
                 avg_minutes = (avg_duration_seconds % 3600) // 60
                 average_duration = f"{avg_hours}h {avg_minutes}m" if avg_hours > 0 else f"{avg_minutes}m"
-                print(f"📈 Average duration: {average_duration} (from {valid_durations} watches)")
             else:
                 average_duration = 'N/A'
-                print("⚠️ No valid duration data found")
 
             print(f"✅ Stats calculation complete!")
-            print(
-                f"📊 Final stats: Total={total_watches}, Longest={longest_duration}, Attendees={most_attendees}, Colour={most_common_colour}, Station={most_active_station}, Avg={average_duration}")
 
             return {
                 'total_watches': total_watches,
@@ -748,7 +775,7 @@ class WatchCog(commands.Cog):
         station='The station you are declaring the watch colour for.',
         comms='Whether FIRE COMMS is active or inactive (default: inactive).'
     )
-    async def watch_start(self, interaction: discord.Interaction, colour: str, station: str, comms: str = 'active'):
+    async def watch_start(self, interaction: discord.Interaction, colour: str, station: str, comms: str = 'inactive'):
         try:
             allowed_role_ids = [1285474077556998196, 1389550689113473024, 1365536209681514636]
             user_roles = [role.id for role in interaction.user.roles]
@@ -855,11 +882,22 @@ class WatchCog(commands.Cog):
             embed = discord.Embed(title=f'🚨 {colour} Watch Announcement 🚨', colour=embed_colour)
             embed.add_field(name='Station', value=f'`{station}`', inline=True)
             embed.add_field(name='Time', value=f'<t:{int(interaction.created_at.timestamp())}:R>', inline=True)
-            embed.add_field(name='Watch Leader', value=interaction.user.mention, inline=True)
+            embed.add_field(name='Watch Leader', value=f'{interaction.user.mention}\n‎', inline=True)
             comms_emoji = '<:Denied:1426930694633816248>' if comms.lower() == 'inactive' else '<:Accepted:1426930333789585509>'
             embed.add_field(name='FIRE COMMS', value=f'{comms_emoji} {comms.capitalize()}', inline=True)
-            embed.add_field(name='‎', value='No need to vote just hop in!!\nIf you are joining, please join Fenz RTO 🙌',
+            embed.add_field(name='‎', value='No need to vote just hop in!!\nIf you are joining, please join Fenz RTO 🙌\n‎',
                             inline=False)
+            watch_info = get_watch_info(station, colour)
+            embed.add_field(
+                name=watch_info['title'],
+                value=watch_info['Active'],
+                inline=True
+            )
+            embed.add_field(
+                name='​',
+                value=watch_info['Rear'],
+                inline=True
+            )
             embed.add_field(name='‎', value='**Select the below reaction role to be notified of any future watches!**',
                             inline=False)
             embed.set_image(
@@ -917,6 +955,8 @@ class WatchCog(commands.Cog):
             )
             await interaction.followup.send(embed=success_embed, ephemeral=True)
 
+            await self.update_watch_channel_name(watch_channel, colour, station, 'active')
+
         except Exception as e:
             print(f'Error starting watch: {e}')
             error_embed = discord.Embed(description=f'<:Denied:1426930694633816248> Error: {e}',
@@ -957,7 +997,7 @@ class WatchCog(commands.Cog):
         comms='Whether FIRE COMMS is active or inactive (default: active).'
     )
     async def watch_vote(self, interaction: discord.Interaction, colour: str, station: str, votes: int,
-                         time: int = None, comms: str = 'active'):
+                         time: int = None, comms: str = 'inactive'):
         try:
             allowed_role_ids = [1285474077556998196, 1389550689113473024, 1365536209681514636]
             user_roles = [role.id for role in interaction.user.roles]
@@ -1042,6 +1082,8 @@ class WatchCog(commands.Cog):
                 )
 
             await interaction.followup.send(embed=success_embed, ephemeral=True)
+
+            await self.update_watch_channel_name(watch_channel, colour, station, 'voting')
 
         except Exception as e:
             print(f'Error scheduling vote: {e}')
@@ -1685,7 +1727,7 @@ class WatchCog(commands.Cog):
                 guild=guild,
                 channel=watch_channel,
                 cog=self,
-                comms_status=vote_data.get('comms_status', 'active')  # Add this
+                comms_status=vote_data.get('comms_status', 'inactive')
             )
 
             msg = await watch_channel.send(
@@ -1696,7 +1738,6 @@ class WatchCog(commands.Cog):
             )
 
             view.message_id = msg.id
-            await self.update_watch_channel_name(watch_channel, colour, station, 'active')
             await self.update_watch_channel_name(watch_channel, vote_data['colour'], vote_data['station'], 'voting')
 
             # Schedule auto-cancel ONLY if time_minutes is set (not immediate)
@@ -1839,7 +1880,7 @@ class WatchCog(commands.Cog):
 
     async def start_watch_after_vote(self, channel, message_id: int, user_id: int, user_name: str,
                                      colour: str, station: str, watch_role_id: int, voters: list,
-                                     delay_seconds: int, comms_status: str = 'active'):
+                                     delay_seconds: int, comms_status: str = 'inactive'):
         """Start a watch after the vote delay period"""
         try:
             # Wait for the delay period
@@ -1868,15 +1909,26 @@ class WatchCog(commands.Cog):
             start_embed.add_field(name='Station', value=f'`{station}`', inline=True)
             start_embed.add_field(name='Time', value=discord.utils.format_dt(discord.utils.utcnow(), style='R'),
                                   inline=True)
-            start_embed.add_field(name='Watch Leader', value=f'<@{user_id}>', inline=True)
+            start_embed.add_field(name='Watch Leader', value=f'<@{user_id}>\n‎', inline=True)
 
             # Add FIRE COMMS status
             comms_emoji = '<:Denied:1426930694633816248>' if comms_status == 'inactive' else '<:Accepted:1426930333789585509>'
             start_embed.add_field(name='FIRE COMMS', value=f'{comms_emoji} {comms_status.capitalize()}', inline=True)
 
             start_embed.add_field(name='​',
-                                  value='No need to vote just hop in!!\nIf you are joining, please join Fenz RTO 🙌',
+                                  value='No need to vote just hop in!!\nIf you are joining, please join Fenz RTO 🙌\n‎',
                                   inline=False)
+            watch_info = get_watch_info(station, colour)
+            start_embed.add_field(
+                name=watch_info['title'],
+                value=watch_info['Active'],
+                inline=True
+            )
+            start_embed.add_field(
+                name='​',
+                value=watch_info['Rear'],
+                inline=True
+            )
             start_embed.add_field(name='​',
                                   value='**Select the below reaction role to be notified of any future watches!**',
                                   inline=False)
@@ -1965,6 +2017,7 @@ class WatchCog(commands.Cog):
         new_leader='New watch leader (mention a user, optional).',
         new_comms='New COMMS status: active or inactive (optional).'
     )
+
     async def watch_switch(self, interaction: discord.Interaction, watch: str,
                            new_colour: str = None, new_station: str = None,
                            new_leader: discord.Member = None, new_comms: str = None):
@@ -2115,14 +2168,25 @@ class WatchCog(commands.Cog):
                     embed = discord.Embed(title=f'🚨 {final_colour} Watch Announcement 🚨', colour=embed_colour)
                     embed.add_field(name='Station', value=f'`{final_station}`', inline=True)
                     embed.add_field(name='Time', value=f'<t:{watch_data["started_at"]}:R>', inline=True)
-                    embed.add_field(name='Watch Leader', value=f'<@{final_leader_id}>', inline=True)
+                    embed.add_field(name='Watch Leader', value=f'<@{final_leader_id}>\n‎', inline=True)
 
                     comms_emoji = '<:Accepted:1426930333789585509>' if final_comms == 'active' else '<:Denied:1426930694633816248>'
                     embed.add_field(name='FIRE COMMS', value=f'{comms_emoji} {final_comms.capitalize()}', inline=True)
 
                     embed.add_field(name='​',
-                                    value='No need to vote just hop in!!\nIf you are joining, please join Fenz RTO 🙌',
+                                    value='No need to vote just hop in!!\nIf you are joining, please join Fenz RTO 🙌\n‎',
                                     inline=False)
+                    watch_info = get_watch_info(final_station, final_colour)
+                    embed.add_field(
+                        name=watch_info['title'],
+                        value=watch_info['Active'],
+                        inline=True
+                    )
+                    embed.add_field(
+                        name='​',
+                        value=watch_info['Rear'],
+                        inline=True
+                    )
                     embed.add_field(name='​',
                                     value='**Select the below reaction role to be notified of any future watches!**',
                                     inline=False)
@@ -2172,14 +2236,25 @@ class WatchCog(commands.Cog):
                 embed = discord.Embed(title=f'🚨 {final_colour} Watch Announcement 🚨', colour=embed_colour)
                 embed.add_field(name='Station', value=f'`{final_station}`', inline=True)
                 embed.add_field(name='Time', value=f'<t:{watch_data["started_at"]}:R>', inline=True)
-                embed.add_field(name='Watch Leader', value=f'<@{final_leader_id}>', inline=True)
+                embed.add_field(name='Watch Leader', value=f'<@{final_leader_id}>\n‎', inline=True)
 
                 comms_emoji = '<:Accepted:1426930333789585509>' if final_comms == 'active' else '<:Denied:1426930694633816248>'
                 embed.add_field(name='FIRE COMMS', value=f'{comms_emoji} {final_comms.capitalize()}', inline=True)
 
                 embed.add_field(name='​',
-                                value='No need to vote just hop in!!\nIf you are joining, please join Fenz RTO 🙌',
+                                value='No need to vote just hop in!!\nIf you are joining, please join Fenz RTO 🙌\n‎',
                                 inline=False)
+                watch_info = get_watch_info(final_station, final_colour)
+                embed.add_field(
+                    name=watch_info['title'],
+                    value=watch_info['Active'],
+                    inline=True
+                )
+                embed.add_field(
+                    name='​',
+                    value=watch_info['Rear'],
+                    inline=True
+                )
                 embed.add_field(name='​',
                                 value='**Select the below reaction role to be notified of any future watches!**',
                                 inline=False)
@@ -2198,6 +2273,7 @@ class WatchCog(commands.Cog):
                 )
 
                 view.message_id = msg.id
+                await self.update_watch_channel_name(channel, final_colour, final_station, 'active')
 
                 # Remove old from database
                 await db.remove_active_watch(int(watch))
@@ -2426,27 +2502,26 @@ class WatchCog(commands.Cog):
         return [choice for choice in choices if current.lower() in choice.name.lower()][:25]
 
     async def update_watch_channel_name(self, channel: discord.TextChannel, colour: str, station: str, state: str):
-
         try:
-            # Simplify station to short form
             station_clean = station.strip()
             colour_clean = colour.strip()
 
             base_name = CHANNEL_NAME_RULES.get(station_clean, {}).get(colour_clean)
 
-            if not base_name:
-                station_simple = station_clean.lower().replace(" ", "-")
-                colour_simple = colour_clean.lower()
-                base_name = f"「⚫」watches"
-
             if state == 'voting':
-                new_name = f"「🗳️」watch-voting"
+                new_name = "「🗳️」watch-voting"
             elif state == 'waiting':
-                new_name = f"「🟠」watch-soon"
+                new_name = "「🟡」watch-soon"
             elif state == 'ended':
-                new_name = f"「⚫」watches"
+                new_name = "「⚫」watches"
+            elif state == 'active':
+                # Use the actual colour-specific name from CHANNEL_NAME_RULES
+                if base_name:
+                    new_name = base_name
+                else:
+                    new_name = "「⚫」watches"  # Fallback if not configured
             else:
-                new_name = f"「⚫」watches"
+                new_name = "「⚫」watches"
 
             await channel.edit(name=new_name)
             print(f"✅ Channel renamed to {new_name}")
@@ -2515,7 +2590,7 @@ class WatchCog(commands.Cog):
             stats_embed.add_field(
                 name="🔄️ | Watch Status",
                 value=(
-                    "⚫ - **No watch is active.**\n"
+                    "‎\n⚫ - **No watch is active.**\n"
                     "> Please make sure it is SSU and wait for a FENZ Supervisor or Leadership member to start a watch!\n\n"
                     "🗳️¸ - **A watch vote is occurring.**\n"
                     "> A watch vote is happening. Vote up if you want to participate in the watch!\n\n"
@@ -2524,7 +2599,7 @@ class WatchCog(commands.Cog):
                     "🔴 / 🟡 / 🔵 / 🟤 - **Watch Colour.**\n"
                 "> A watch of this colour has been started!\n\n"
                 "1️⃣ / 2️⃣ - **Watch Station.**\n"
-                "> A watch at this station has been started!\n\n\n"
+                "> A watch at this station has been started!\n‎\n\n"
                 ),
                 inline=False
             )

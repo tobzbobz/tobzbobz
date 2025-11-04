@@ -187,10 +187,19 @@ class Database:
                                started_at, has_voters_embed: bool = False,
                                original_colour: str = None, original_station: str = None,
                                switch_history: str = None, related_messages: list = None,
-                               comms_status: str = 'active'):  # Add this parameter
+                               comms_status: str = 'inactive'):
         """Add an active watch to the database"""
         async with self.pool.acquire() as conn:
-            # [datetime conversion code stays the same]
+            # Convert started_at to timezone-aware datetime
+            if isinstance(started_at, int):
+                started_at_dt = datetime.fromtimestamp(started_at, tz=timezone.utc)
+            elif isinstance(started_at, datetime):
+                if started_at.tzinfo is None:
+                    started_at_dt = started_at.replace(tzinfo=timezone.utc)
+                else:
+                    started_at_dt = started_at
+            else:
+                started_at_dt = datetime.now(timezone.utc)
 
             try:
                 await conn.execute(
@@ -328,9 +337,11 @@ class Database:
                     'has_voters_embed': row['has_voters_embed'],
                     'original_colour': row.get('original_colour'),
                     'original_station': row.get('original_station'),
-                    'switch_history': switch_history
+                    'switch_history': switch_history,
+                    'related_messages': row.get('related_messages', [row['message_id']]),
+                    'comms_status': row.get('comms_status', 'inactive')
                 }
-            return watches
+                return watches
 
     async def remove_active_watch(self, message_id: int):
         """Remove an active watch"""
@@ -345,11 +356,30 @@ class Database:
     async def add_scheduled_vote(self, vote_id: str, guild_id: int, channel_id: int,
                                  watch_role_id: int, user_id: int, colour: str, station: str,
                                  votes: int, time_minutes: int, scheduled_time, created_at,
-                                 comms_status: str = 'active'):  # Add this parameter
+                                 comms_status: str = 'inactive'):
         """Add a scheduled vote (PostgreSQL safe version)"""
         async with self.pool.acquire() as conn:
             try:
-                # [timestamp conversion code stays the same]
+                # Convert timestamps to timezone-aware datetime
+                if isinstance(scheduled_time, int):
+                    scheduled_time_dt = datetime.fromtimestamp(scheduled_time, tz=timezone.utc)
+                elif isinstance(scheduled_time, datetime):
+                    if scheduled_time.tzinfo is None:
+                        scheduled_time_dt = scheduled_time.replace(tzinfo=timezone.utc)
+                    else:
+                        scheduled_time_dt = scheduled_time
+                else:
+                    scheduled_time_dt = datetime.now(timezone.utc)
+
+                if isinstance(created_at, int):
+                    created_at_dt = datetime.fromtimestamp(created_at, tz=timezone.utc)
+                elif isinstance(created_at, datetime):
+                    if created_at.tzinfo is None:
+                        created_at_dt = created_at.replace(tzinfo=timezone.utc)
+                    else:
+                        created_at_dt = created_at
+                else:
+                    created_at_dt = datetime.now(timezone.utc)
 
                 await conn.execute(
                     '''INSERT INTO scheduled_votes
@@ -388,7 +418,7 @@ class Database:
                     'time_minutes': row['time_minutes'],
                     'scheduled_time': int(row['scheduled_time'].timestamp()),
                     'created_at': int(row['created_at'].timestamp()),
-                    'comms_status': row.get('comms_status', 'active')  # Add this
+                    'comms_status': row.get('comms_status', 'inactive')
                 }
             return votes
 
@@ -455,6 +485,133 @@ class Database:
             )
             return result != 'DELETE 0'
 
+    async def update_watch_related_messages(self, message_id: int, related_messages: list):
+        """Update the related_messages array for a watch"""
+        async with self.pool.acquire() as conn:
+            try:
+                await conn.execute(
+                    'UPDATE active_watches SET related_messages = $1 WHERE message_id = $2',
+                    related_messages, message_id
+                )
+                print(f"✅ Updated related_messages for watch {message_id}")
+                return True
+            except Exception as e:
+                print(f"❌ Error updating related_messages: {e}")
+                return False
+
+    async def update_active_watch(self, message_id: int, user_id: int = None,
+                                  user_name: str = None, colour: str = None,
+                                  station: str = None, comms_status: str = None,
+                                  switch_history: str = None):
+        """Update an active watch with new values"""
+        async with self.pool.acquire() as conn:
+            try:
+                updates = []
+                params = []
+                param_count = 1
+
+                if user_id is not None:
+                    updates.append(f'user_id = ${param_count}')
+                    params.append(user_id)
+                    param_count += 1
+
+                if user_name is not None:
+                    updates.append(f'user_name = ${param_count}')
+                    params.append(user_name)
+                    param_count += 1
+
+                if colour is not None:
+                    updates.append(f'colour = ${param_count}')
+                    params.append(colour)
+                    param_count += 1
+
+                if station is not None:
+                    updates.append(f'station = ${param_count}')
+                    params.append(station)
+                    param_count += 1
+
+                if comms_status is not None:
+                    updates.append(f'comms_status = ${param_count}')
+                    params.append(comms_status)
+                    param_count += 1
+
+                if switch_history is not None:
+                    updates.append(f'switch_history = ${param_count}::jsonb')
+                    params.append(switch_history)
+                    param_count += 1
+
+                if not updates:
+                    return True
+
+                params.append(message_id)
+                query = f"UPDATE active_watches SET {', '.join(updates)} WHERE message_id = ${param_count}"
+
+                await conn.execute(query, *params)
+                print(f"✅ Updated active watch {message_id}")
+                return True
+            except Exception as e:
+                print(f"❌ Error updating active watch: {e}")
+                import traceback
+                traceback.print_exc()
+                return False
+
+    async def load_watches():
+        """Load all active watches from database"""
+        async with db.pool.acquire() as conn:
+            rows = await conn.fetch('SELECT * FROM active_watches')
+            watches = {}
+            for row in rows:
+                switch_history = row.get('switch_history', [])
+                if isinstance(switch_history, str):
+                    try:
+                        switch_history = json.loads(switch_history)
+                    except:
+                        switch_history = []
+
+                watches[str(row['message_id'])] = {
+                    'user_id': row['user_id'],
+                    'user_name': row['user_name'],
+                    'channel_id': row['channel_id'],
+                    'colour': row['colour'],
+                    'station': row['station'],
+                    'started_at': started_at,
+                    'has_voters_embed': row.get('has_voters_embed', False),
+                    'original_colour': row.get('original_colour'),
+                    'original_station': row.get('original_station'),
+                    'switch_history': switch_history,
+                    'related_messages': row.get('related_messages', [row['message_id']]),
+                    'comms_status': row.get('comms_status', 'inactive')
+                }
+            return watches
+
+    async def save_watches(watches: dict):
+        """Save active watches - now saves to database instead of no-op"""
+        # This function is called by watches.py but we need to handle it differently
+        # The watches should be saved individually using db.add_active_watch()
+        # This remains as a no-op since we save in real-time now
+        pass
+
+    async def load_scheduled_votes():
+        """Load scheduled votes (now from database)"""
+        return await db.get_scheduled_votes()
+
+    async def save_scheduled_votes(votes: dict):
+        """Save scheduled votes - now saves to database instead of no-op"""
+        # This function is called by watches.py but we need to handle it differently
+        # The votes should be saved individually using db.add_scheduled_vote()
+        # This remains as a no-op since we save in real-time now
+        pass
+
+    async def load_completed_watches():
+        """Load completed watches (now from database)"""
+        return await db.get_completed_watches()
+
+    async def save_completed_watches(watches: dict):
+        """Save completed watches - now saves to database instead of no-op"""
+        # This function is called by watches.py but we need to handle it differently
+        # The watches should be saved individually using db.add_completed_watch()
+        # This remains as a no-op since we save in real-time now
+        pass
 
 # === GLOBAL DATABASE INSTANCE ===
 db = Database()
@@ -465,152 +622,3 @@ async def ensure_database_connected():
     if not db.pool:
         await db.connect()
     return db.pool is not None
-
-
-# === BACKWARD COMPATIBILITY FUNCTIONS ===
-# These maintain the same interface as the old JSON system but use the database
-
-async def load_watches():
-    """Load all active watches from database"""
-    async with db.pool.acquire() as conn:
-        rows = await conn.fetch('SELECT * FROM active_watches')
-        watches = {}
-        for row in rows:
-            # [existing code...]
-            watches[str(row['message_id'])] = {
-                'user_id': row['user_id'],
-                'user_name': row['user_name'],
-                'channel_id': row['channel_id'],
-                'colour': row['colour'],
-                'station': row['station'],
-                'started_at': started_at,
-                'has_voters_embed': row.get('has_voters_embed', False),
-                'original_colour': row.get('original_colour'),
-                'original_station': row.get('original_station'),
-                'switch_history': switch_history,
-                'related_messages': row.get('related_messages', [row['message_id']]),
-                'comms_status': row.get('comms_status', 'active')  # Add this
-            }
-        return watches
-
-async def save_watches(watches: dict):
-    """Save active watches - now saves to database instead of no-op"""
-    # This function is called by watches.py but we need to handle it differently
-    # The watches should be saved individually using db.add_active_watch()
-    # This remains as a no-op since we save in real-time now
-    pass
-
-
-async def load_scheduled_votes():
-    """Load scheduled votes (now from database)"""
-    return await db.get_scheduled_votes()
-
-
-async def save_scheduled_votes(votes: dict):
-    """Save scheduled votes - now saves to database instead of no-op"""
-    # This function is called by watches.py but we need to handle it differently
-    # The votes should be saved individually using db.add_scheduled_vote()
-    # This remains as a no-op since we save in real-time now
-    pass
-
-
-async def load_completed_watches():
-    """Load completed watches (now from database)"""
-    return await db.get_completed_watches()
-
-
-async def save_completed_watches(watches: dict):
-    """Save completed watches - now saves to database instead of no-op"""
-    # This function is called by watches.py but we need to handle it differently
-    # The watches should be saved individually using db.add_completed_watch()
-    # This remains as a no-op since we save in real-time now
-    pass
-
-async def update_watch_related_messages(self, message_id: int, related_messages: list):
-    """Update the related_messages array for a watch"""
-    async with self.pool.acquire() as conn:
-        try:
-            await conn.execute(
-                'UPDATE active_watches SET related_messages = $1 WHERE message_id = $2',
-                related_messages, message_id
-            )
-            print(f"✅ Updated related_messages for watch {message_id}")
-            return True
-        except Exception as e:
-            print(f"❌ Error updating related_messages: {e}")
-            return False
-
-
-# Add this method to the Database class in database.py
-
-async def update_watch_related_messages(self, message_id: int, related_messages: list):
-    """Update the related_messages array for a watch"""
-    async with self.pool.acquire() as conn:
-        try:
-            await conn.execute(
-                'UPDATE active_watches SET related_messages = $1 WHERE message_id = $2',
-                related_messages, message_id
-            )
-            print(f"✅ Updated related_messages for watch {message_id}")
-            return True
-        except Exception as e:
-            print(f"❌ Error updating related_messages: {e}")
-            return False
-
-
-async def update_active_watch(self, message_id: int, user_id: int = None,
-                              user_name: str = None, colour: str = None,
-                              station: str = None, comms_status: str = None,
-                              switch_history: str = None):
-    """Update an active watch with new values"""
-    async with self.pool.acquire() as conn:
-        try:
-            # Build dynamic update query
-            updates = []
-            params = []
-            param_count = 1
-
-            if user_id is not None:
-                updates.append(f'user_id = ${param_count}')
-                params.append(user_id)
-                param_count += 1
-
-            if user_name is not None:
-                updates.append(f'user_name = ${param_count}')
-                params.append(user_name)
-                param_count += 1
-
-            if colour is not None:
-                updates.append(f'colour = ${param_count}')
-                params.append(colour)
-                param_count += 1
-
-            if station is not None:
-                updates.append(f'station = ${param_count}')
-                params.append(station)
-                param_count += 1
-
-            if comms_status is not None:
-                updates.append(f'comms_status = ${param_count}')
-                params.append(comms_status)
-                param_count += 1
-
-            if switch_history is not None:
-                updates.append(f'switch_history = ${param_count}::jsonb')
-                params.append(switch_history)
-                param_count += 1
-
-            if not updates:
-                return True
-
-            params.append(message_id)
-            query = f"UPDATE active_watches SET {', '.join(updates)} WHERE message_id = ${param_count}"
-
-            await conn.execute(query, *params)
-            print(f"✅ Updated active watch {message_id}")
-            return True
-        except Exception as e:
-            print(f"❌ Error updating active watch: {e}")
-            import traceback
-            traceback.print_exc()
-            return False

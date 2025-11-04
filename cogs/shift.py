@@ -86,6 +86,18 @@ class ShiftManagementCog(commands.Cog):
         self.bot = bot
         self._role_cache = {}
         self._cache_cleanup_task = None
+        bot.loop.create_task(self.on_cog_load())
+
+    async def on_cog_load(self):
+        """Run initialization tasks when cog loads"""
+        # Wait for bot to be ready
+        await self.bot.wait_until_ready()
+
+        # Initialize database
+        await initialize_database()
+
+        # Clean up stale shifts
+        await self.cleanup_stale_shifts(self.bot)
 
     def get_user_role_ids(self, member: discord.Member) -> set:
         """Cache user role IDs with TTL"""
@@ -184,6 +196,41 @@ class ShiftManagementCog(commands.Cog):
             pass
         except Exception as e:
             print(f"Error updating duty roles for {member.display_name}: {e}")
+
+    async def cleanup_stale_shifts(self, bot):
+        """Clean up shifts that were active when bot went offline"""
+        async with db.pool.acquire() as conn:
+            # Find all active shifts
+            stale_shifts = await conn.fetch('''
+                                            SELECT *
+                                            FROM shifts
+                                            WHERE end_time IS NULL
+                                            ''')
+
+            for shift in stale_shifts:
+                # Calculate total pause time
+                pause_duration = shift.get('pause_duration', 0)
+                if shift.get('pause_start'):
+                    # Add time from last pause to now
+                    pause_duration += (datetime.utcnow() - shift['pause_start']).total_seconds()
+
+                # End the shift at current time
+                await conn.execute('''
+                                   UPDATE shifts
+                                   SET end_time       = $1,
+                                       pause_duration = $2,
+                                       pause_start    = NULL
+                                   WHERE id = $3
+                                   ''', datetime.utcnow(), pause_duration, shift['id'])
+
+                # Clean up roles/nicknames
+                member = bot.get_guild(shift.get('guild_id')).get_member(shift['discord_user_id'])
+                if member:
+                    await self.update_nickname_for_shift_status(member, 'off')
+                    await self.update_duty_roles(member, shift['shift_type'], 'off')
+
+            if stale_shifts:
+                print(f"Cleaned up {len(stale_shifts)} stale shifts on startup")
 
     async def get_user_shift_types(self, member: discord.Member) -> list:
         """Get all shift types a user is eligible for"""
@@ -662,7 +709,7 @@ class ShiftManagementCog(commands.Cog):
             quota_infos = await self.get_bulk_quota_info(user_ids, interaction.guild)
 
             embed = discord.Embed(
-                title="🏆 Shift Leaderboard",
+                title="Shift Leaderboard",
                 description="",  # Remove wave info from description
                 color=discord.Color.gold()
             )
