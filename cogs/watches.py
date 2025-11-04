@@ -47,45 +47,45 @@ WATCH_INFO_BOXES = {
     "Station 1": {
         "Red": {
             "title": "🔴1️⃣ Vehicle Info",
-            "Active": "### Active Vehicles\nHAM411 - Pump\nHAM412 — Pump\nHAM415 — Aerial",
-            "Rear": "### Delayed Turnout Vehicles\nHAM4111 — City Tanker\nHAM4118 — HAZMAT/Command\nHAM4121 — ISV\nHAM4120 - OSU"
+            "Active": "‎\n**Active Vehicles**\nHAM411 - Pump\nHAM412 — Pump\nHAM415 — Aerial",
+            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM4111 — City Tanker\nHAM4118 — HAZMAT/Command\nHAM4121 — ISV\nHAM4120 - OSU"
         },
         "Blue": {
             "title": "🔵1️⃣ Vehicle Info",
-            "Active": "### Active Vehicles\nHAM411 - Pump\nHAM412 — Pump\nHAM415 — Aerial\nHAM4118 — HAZMAT/Command\nHAM4121 — ISV",
-            "Rear": "### Delayed Turnout Vehicles\nHAM4111 — City Tanker\nHAM4120 - OSU"
+            "Active": "‎\n**Active Vehicles**\nHAM411 - Pump\nHAM412 — Pump\nHAM415 — Aerial\nHAM4118 — HAZMAT/Command\nHAM4121 — ISV",
+            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM4111 — City Tanker\nHAM4120 - OSU"
         },
         "Yellow": {
             "title": "🟡1️⃣ Vehicle Info",
-            "Active": "### Active Vehicles\nHAM411 - Pump\nHAM412 — Pump\nHAM415 — Aerial\nHAM4118 — HAZMAT/Command",
-            "Rear": "### Delayed Turnout Vehicles\nHAM4111 — City Tanker\nHAM4121 — ISV\nHAM4120 - OSU"
+            "Active": "‎\n**Active Vehicles**\nHAM411 - Pump\nHAM412 — Pump\nHAM415 — Aerial\nHAM4118 — HAZMAT/Command",
+            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM4111 — City Tanker\nHAM4121 — ISV\nHAM4120 - OSU"
         },
         "Brown": {
             "title": "🟤1️⃣ Vehicle Info",
-            "Active": "### Active Vehicles\nHAM411 - Pump\nHAM415 — Aerial\nHAM4118 — HAZMAT/Command",
-            "Rear": "### Delayed Turnout Vehicles\nHAM412 — Pump\nHAM4111 — City Tanker\nHAM4121 — ISV\nHAM4120 - OSU"
+            "Active": "‎\n**Active Vehicles**\nHAM411 - Pump\nHAM415 — Aerial\nHAM4118 — HAZMAT/Command",
+            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM412 — Pump\nHAM4111 — City Tanker\nHAM4121 — ISV\nHAM4120 - OSU"
         }
     },
     "Station 2": {
         "Red": {
             "title": "🔴2️⃣ Vehicle Info",
-            "Active": "### Active Vehicles\nCAM411 - Pump\nCAM447 — Pump\nCAM4411 — Aerial",
-            "Rear": "### Delayed Turnout Vehicles\nHAM4111 — City Tanker\nHAM4118 — HAZMAT/Command\nHAM4121 — ISV\nHAM4120 - OSU\nCHA427 - Pump\nCHA4271 - Pump\nCHA4275 - Rural Tanker\nDJ8817 - Pump"
+            "Active": "‎\n**Active Vehicles**\nCAM411 - Pump\nCAM447 — Pump\nCAM4411 — Aerial",
+            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM4111 — City Tanker\nHAM4118 — HAZMAT/Command\nHAM4121 — ISV\nHAM4120 - OSU\nCHA427 - Pump\nCHA4271 - Pump\nCHA4275 - Rural Tanker\nDJ8817 - Pump"
         },
         "Blue": {
             "title": "🔵2️⃣ Vehicle Info",
-            "Active": "### Active Vehicles\nCHA427 - Pump\nCHA4275 — Rural Tanker",
-            "Rear": "### Delayed Turnout Vehicles\nHAM4111 — City Tanker\nHAM4120 - OSU\nCAM411 - Pump\nCAM447 — Pump\nCAM4411 — Aerial\nCHA4271 - Pump"
+            "Active": "‎\n**Active Vehicles**\nCHA427 - Pump\nCHA4275 — Rural Tanker",
+            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM4111 — City Tanker\nHAM4120 - OSU\nCAM411 - Pump\nCAM447 — Pump\nCAM4411 — Aerial\nCHA4271 - Pump"
         },
         "Yellow": {
             "title": "🟡2️⃣ Vehicle Info",
-            "Active": "### Active Vehicles\nCHA427 - Pump\nCHA4271 - Pump\nCHA4275 - Rural Tanker",
-            "Rear": "n### Delayed Turnout Vehicles\nHAM4111 — City Tanker\nHAM4121 — ISV\nHAM4120 - OSU\nCAM411 - Pump\nCAM447 — Pump\nCAM4411 — Aerial\nDJ8817 - Pump"
+            "Active": "‎\n**Active Vehicles**\nCHA427 - Pump\nCHA4271 - Pump\nCHA4275 - Rural Tanker",
+            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM4111 — City Tanker\nHAM4121 — ISV\nHAM4120 - OSU\nCAM411 - Pump\nCAM447 — Pump\nCAM4411 — Aerial\nDJ8817 - Pump"
         },
         "Brown": {
             "title": "🟤2️⃣ Vehicle Info",
-            "Active": "### Active Vehicles\nDJ8817 - Pump\nCAM411 - Pump",
-            "Rear": "### Delayed Turnout Vehicles\nHAM412 — Pump\nHAM4111 — City Tanker\nHAM4121 — ISV\nHAM4120 - OSU\nCAM447 — Pump\nCAM4411 — Aerial\nCHA427 - Pump\nCHA4271 - Pump\nCHA4275 - Rural Tanker"
+            "Active": "‎\n**Active Vehicles**\nDJ8817 - Pump\nCAM411 - Pump",
+            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM412 — Pump\nHAM4111 — City Tanker\nHAM4121 — ISV\nHAM4120 - OSU\nCAM447 — Pump\nCAM4411 — Aerial\nCHA427 - Pump\nCHA4271 - Pump\nCHA4275 - Rural Tanker"
         }
     }
 }
@@ -98,8 +98,8 @@ def get_watch_info(station: str, colour: str):
     """Get watch info for a given station and colour"""
     return WATCH_INFO_BOXES.get(station, {}).get(colour, {
         "title": "Vehicle Info",
-        "Active": "### Active Vehicles\nNo vehicle information available",
-        "Rear": "### Delayed Turnout Vehicles\nNo vehicle information available"
+        "Active": "‎ \n**Active Vehicles**\nNo vehicle information available",
+        "Rear": "### ‎ \n**Delayed Turnout Vehicles**\nNo vehicle information available"
     })
 
 # Initialize as empty dict - will be loaded in cog __init__
