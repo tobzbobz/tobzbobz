@@ -346,35 +346,6 @@ class Database:
                 }
             return watches  # ✅ MOVED OUTSIDE THE LOOP
 
-    async def load_watches():
-        """Load all active watches from database"""
-        async with db.pool.acquire() as conn:
-            rows = await conn.fetch('SELECT * FROM active_watches')
-            watches = {}
-            for row in rows:
-                switch_history = row.get('switch_history', [])
-                if isinstance(switch_history, str):
-                    try:
-                        switch_history = json.loads(switch_history)
-                    except:
-                        switch_history = []
-
-                watches[str(row['message_id'])] = {
-                    'user_id': row['user_id'],
-                    'user_name': row['user_name'],
-                    'channel_id': row['channel_id'],
-                    'colour': row['colour'],
-                    'station': row['station'],
-                    'started_at': int(row['started_at'].timestamp()),  # ✅ FIXED
-                    'has_voters_embed': row.get('has_voters_embed', False),
-                    'original_colour': row.get('original_colour'),
-                    'original_station': row.get('original_station'),
-                    'switch_history': switch_history,
-                    'related_messages': row.get('related_messages', [row['message_id']]),
-                    'comms_status': row.get('comms_status', 'inactive')
-                }
-            return watches
-
     async def remove_active_watch(self, message_id: int):
         """Remove an active watch"""
         async with self.pool.acquire() as conn:
