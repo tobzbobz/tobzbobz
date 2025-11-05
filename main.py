@@ -43,7 +43,7 @@ STATUS_CHANNEL_ID = 1429492069289693184
 DEVELOPMENT_MODE = False
 
 # Aggressive command sync
-AGGRESSIVE_SYNC = False  # ← CHANGE THIS TO True TEMPORARILY
+AGGRESSIVE_SYNC = True  # ← CHANGE THIS TO True TEMPORARILY
 
 
 async def health_check(request):
