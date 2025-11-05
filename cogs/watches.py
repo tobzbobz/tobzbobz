@@ -47,23 +47,23 @@ WATCH_INFO_BOXES = {
     "Station 1": {
         "Red": {
             "title": "🔴1️⃣ Vehicle Info",
-            "Active": "‎\n**Active Vehicles**\nHAM411 - Pump\nHAM412 — Pump\nHAM415 — Aerial",
-            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM4111 — City Tanker\nHAM4118 — HAZMAT/Command\nHAM4121 — ISV\nHAM4126 - OSU"
+            "Active": "‎\n**Active Vehicles**\nHAM411 — Pump\nHAM412 — Pump\nHAM415 — Aerial",
+            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM4111 — City Tanker\nHAM4118 — HAZMAT/Command\nHAM4121 — ISV\nHAM4126 — OSU"
         },
         "Blue": {
             "title": "🔵1️⃣ Vehicle Info",
-            "Active": "‎\n**Active Vehicles**\nHAM411 - Pump\nHAM412 — Pump\nHAM415 — Aerial\nHAM4118 — HAZMAT/Command\nHAM4121 — ISV",
-            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM4111 — City Tanker\nHAM4126 - OSU"
+            "Active": "‎\n**Active Vehicles**\nHAM411 — Pump\nHAM412 — Pump\nHAM415 — Aerial\nHAM4118 — HAZMAT/Command\nHAM4121 — ISV",
+            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM4111 — City Tanker\nHAM4126 — OSU"
         },
         "Yellow": {
             "title": "🟡1️⃣ Vehicle Info",
-            "Active": "‎\n**Active Vehicles**\nHAM411 - Pump\nHAM412 — Pump\nHAM415 — Aerial\nHAM4118 — HAZMAT/Command",
-            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM4111 — City Tanker\nHAM4121 — ISV\nHAM4126 - OSU"
+            "Active": "‎\n**Active Vehicles**\nHAM411 — Pump\nHAM412 — Pump\nHAM415 — Aerial\nHAM4118 — HAZMAT/Command",
+            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM4111 — City Tanker\nHAM4121 — ISV\nHAM4126 — OSU"
         },
         "Brown": {
             "title": "🟤1️⃣ Vehicle Info",
-            "Active": "‎\n**Active Vehicles**\nHAM411 - Pump\nHAM415 — Aerial\nHAM4118 — HAZMAT/Command",
-            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM412 — Pump\nHAM4111 — City Tanker\nHAM4121 — ISV\nHAM4126 - OSU"
+            "Active": "‎\n**Active Vehicles**\nHAM411 — Pump\nHAM415 — Aerial\nHAM4118 — HAZMAT/Command",
+            "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM412 — Pump\nHAM4111 — City Tanker\nHAM4121 — ISV\nHAM4126 — OSU"
         }
     },
     "Station 2": {

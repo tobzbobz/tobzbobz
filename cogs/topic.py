@@ -10,6 +10,35 @@ MODERATION_LOG_CHANNEL_ID = 1435489971342409809  # Replace with your moderation 
 STAFF_ROLE_ID = 1234567890  # Replace with your staff role ID
 COOLDOWN_MINUTES = 1  # Cooldown between requests
 
+# Role IDs that can use /topic change
+ALLOWED_ROLE_IDS = [
+    1389550689113473024,  # Replace with your role IDs
+    1389113393511923863,
+    1389113460687765534,
+    1285474077556998196,
+    1365536209681514636
+]
+
+
+def has_allowed_roles():
+    """Check if user has any of the allowed roles"""
+
+    async def predicate(interaction: discord.Interaction) -> bool:
+        if not interaction.guild:
+            return False
+
+        user_role_ids = [role.id for role in interaction.user.roles]
+        has_role = any(role_id in user_role_ids for role_id in ALLOWED_ROLE_IDS)
+
+        if not has_role:
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> You don't have permission to use this command.",
+                ephemeral=True
+            )
+        return has_role
+
+    return app_commands.check(predicate)
+
 
 class TopicCog(commands.Cog):
     """Topic management commands"""
@@ -67,13 +96,15 @@ class TopicCog(commands.Cog):
 
     @topic_group.command(name="change", description="Request a topic change from staff")
     @app_commands.describe(
+        new_topic="The new topic you want to set",
         reason="Why you want to change the topic."
     )
+    @has_allowed_roles()
     async def topic_change(
             self,
             interaction: discord.Interaction,
             new_topic: str,
-            reason: Optional[str]
+            reason: Optional[str] = None
     ):
         """Request a topic change in the current channel"""
 
@@ -90,9 +121,9 @@ class TopicCog(commands.Cog):
                 time_passed = datetime.utcnow() - last_request['requested_at']
                 remaining = COOLDOWN_MINUTES - (time_passed.total_seconds() / 60)
                 if remaining > 0:
-                    remaining_minutes = int(remaining) + 1
+                    remaining_seconds = int(remaining * 60)
                     await interaction.followup.send(
-                        f"⏱️ You're on cooldown! Please wait **{remaining_minutes} minutes** before requesting another topic change.",
+                        f"⏰ You're on cooldown! Please wait **{remaining_seconds} seconds** before requesting another topic change.",
                         ephemeral=True
                     )
                     return
@@ -152,8 +183,14 @@ class TopicCog(commands.Cog):
         )
 
         staff_embed.add_field(
+            name="New Topic:",
+            value=f"```{new_topic}```",
+            inline=False
+        )
+
+        staff_embed.add_field(
             name="Reason:",
-            value=f"```{reason}```",
+            value=f"```{reason if reason else 'No reason provided'}```",
             inline=False
         )
 
@@ -168,6 +205,7 @@ class TopicCog(commands.Cog):
                 content=f"{staff_role.mention if staff_role else '@Staff'} - Topic Change Request",
                 embed=staff_embed
             )
+
 
 async def setup(bot):
     await bot.add_cog(TopicCog(bot))
