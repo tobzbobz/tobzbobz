@@ -17,6 +17,7 @@ token = os.getenv('DISCORD_TOKEN')
 
 from database import db, ensure_database_connected
 
+
 # Define both guild IDs
 GUILD_IDS = [1282916959062851634, 1425867713183744023, 1430002479239532747, 1420770769562243083]
 
@@ -57,6 +58,7 @@ async def start_web_server():
     """Start web server for health checks"""
     app = web.Application()
     app.router.add_get('/', health_check)
+    app.router.add_get('/logs', log_view)
 
     runner = web.AppRunner(app)
     await runner.setup()
@@ -64,6 +66,20 @@ async def start_web_server():
     await site.start()
     print('🌐 Health server started on port 8080')
 
+async def log_view(request):
+    page = int(request.query.get('page', 1))
+    size = int(request.query.get('size', 50))
+    log_path = 'discord.log'
+    if not os.path.exists(log_path):
+        return web.Response(text="Log file not found.", status=404)
+    with open(log_path, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    total_lines = len(lines)
+    start = (page - 1) * size
+    end = start + size
+    page_lines = lines[start:end]
+    content = ''.join(page_lines)
+    return web.Response(text=content, content_type='text/plain')
 
 class Client(commands.Bot):
     def __init__(self, *args, **kwargs):

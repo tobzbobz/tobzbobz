@@ -656,13 +656,13 @@ class ShiftManagementCog(commands.Cog):
 
     @shift_group.command(name="leaderboard", description="View shift leaderboard")
     @app_commands.describe(
-        filter_role="Filter by role (optional)",
+        role="Filter by role (optional)",
         wave="Filter by wave number (optional)"
     )
     async def shift_leaderboard(
             self,
             interaction: discord.Interaction,
-            filter_role: discord.Role = None,
+            role: discord.Role = None,
             wave: int = None
     ):
         await interaction.response.defer()
@@ -730,8 +730,8 @@ class ShiftManagementCog(commands.Cog):
                 if not member:
                     continue
 
-                # Check if filter_role is set and user has it
-                if filter_role and filter_role not in member.roles:
+                # Check if role is set and user has it
+                if role and role not in member.roles:
                     continue
 
                 # Get quota info
@@ -753,10 +753,10 @@ class ShiftManagementCog(commands.Cog):
             if leaderboard_lines:
                 embed.description += "\n\n" + "\n".join(leaderboard_lines)
 
-            if filter_role:
-                embed.set_footer(text=f"Filtered by: {filter_role.name}")
+            if role:
+                embed.set_footer(text=f"Filtered by: {role.name}")
             else:
-                embed.set_footer(text=f"Showing all shifts")
+                embed.set_footer(text=f"Showing All Shift Types")
 
             await interaction.edit_original_response(embed=embed)
 

@@ -2025,15 +2025,15 @@ class WatchCog(commands.Cog):
     @app_commands.default_permissions(manage_nicknames=True)
     @app_commands.describe(
         watch='The active watch to switch.',
-        new_colour='New colour for the watch (optional).',
-        new_station='New station for the watch (optional).',
-        new_leader='New watch leader (mention a user, optional).',
-        new_comms='New COMMS status: active or inactive (optional).'
+        colour='New colour for the watch (optional).',
+        station='New station for the watch (optional).',
+        watch_leader='New watch leader (mention a user, optional).',
+        comms='New COMMS status: active or inactive (optional).'
     )
 
     async def watch_switch(self, interaction: discord.Interaction, watch: str,
-                           new_colour: str = None, new_station: str = None,
-                           new_leader: discord.Member = None, new_comms: str = None):
+                           colour: str = None, station: str = None,
+                           watch_leader: discord.Member = None, comms: str = None):
         try:
             allowed_role_ids = [1285474077556998196, 1389550689113473024, 1365536209681514636]
             user_roles = [role.id for role in interaction.user.roles]
@@ -2046,7 +2046,7 @@ class WatchCog(commands.Cog):
                 await interaction.response.send_message(embed=permission_embed, ephemeral=True)
                 return
 
-            if new_colour is None and new_station is None and new_leader is None and new_comms is None:
+            if colour is None and station is None and watch_leader is None and comms is None:
                 error_embed = discord.Embed(
                     description='<:Denied:1426930694633816248> You must specify at least one parameter to switch!',
                     colour=discord.Colour(0xf24d4d)
@@ -2072,11 +2072,11 @@ class WatchCog(commands.Cog):
             old_comms = watch_data.get('comms_status', 'active')
 
             # Use old values if new ones not provided
-            final_colour = new_colour if new_colour else old_colour
-            final_station = new_station if new_station else old_station
-            final_leader_id = new_leader.id if new_leader else old_leader_id
-            final_leader_name = new_leader.display_name if new_leader else old_leader_name
-            final_comms = new_comms.lower() if new_comms else old_comms
+            final_colour = colour if colour else old_colour
+            final_station = station if station else old_station
+            final_leader_id = watch_leader.id if watch_leader else old_leader_id
+            final_leader_name = watch_leader.display_name if watch_leader else old_leader_name
+            final_comms = comms.lower() if comms else old_comms
 
             # Check if switching to the EXACT SAME watch
             if (final_colour == old_colour and final_station == old_station and
@@ -2130,13 +2130,13 @@ class WatchCog(commands.Cog):
 
             # Build switch info
             switch_info = []
-            if new_colour and new_colour != old_colour:
+            if colour and colour != old_colour:
                 switch_info.append(f'**Colour changed:** {old_colour} → {final_colour}')
-            if new_station and new_station != old_station:
+            if station and station != old_station:
                 switch_info.append(f'**Station changed:** {old_station} → {final_station}')
-            if new_leader and new_leader.id != old_leader_id:
+            if watch_leader and watch_leader.id != old_leader_id:
                 switch_info.append(f'**Watch Leader changed:** {old_leader_name} → {final_leader_name}')
-            if new_comms and new_comms.lower() != old_comms:
+            if comms and comms.lower() != old_comms:
                 switch_info.append(f'**FIRE COMMS changed:** {old_comms.capitalize()} → {final_comms.capitalize()}')
 
             # Update switch history
@@ -2158,16 +2158,16 @@ class WatchCog(commands.Cog):
                 'switched_by': interaction.user.id,
                 'switched_by_name': interaction.user.display_name
             }
-            if new_colour:
+            if colour:
                 switch_entry['from_colour'] = old_colour
                 switch_entry['to_colour'] = final_colour
-            if new_station:
+            if station:
                 switch_entry['from_station'] = old_station
                 switch_entry['to_station'] = final_station
-            if new_leader:
+            if watch_leader:
                 switch_entry['from_leader'] = old_leader_id
                 switch_entry['to_leader'] = final_leader_id
-            if new_comms:
+            if comms:
                 switch_entry['from_comms'] = old_comms
                 switch_entry['to_comms'] = final_comms
 
@@ -2376,7 +2376,7 @@ class WatchCog(commands.Cog):
         return []
 
 
-    @watch_switch.autocomplete('new_comms')
+    @watch_switch.autocomplete('comms')
     async def switch_comms_autocomplete(self, interaction: discord.Interaction, current: str) -> list[
         app_commands.Choice[str]]:
         statuses = ['active', 'inactive']
@@ -2392,14 +2392,14 @@ class WatchCog(commands.Cog):
             choices.append(app_commands.Choice(name=label, value=msg_id))
         return [choice for choice in choices if current.lower() in choice.name.lower()][:25]
 
-    @watch_switch.autocomplete('new_colour')
+    @watch_switch.autocomplete('colour')
     async def switch_colour_autocomplete(self, interaction: discord.Interaction, current: str) -> list[
         app_commands.Choice[str]]:
         colours = ['Yellow', 'Blue', 'Brown', 'Red']
         return [app_commands.Choice(name=colour, value=colour) for colour in colours if
                 current.lower() in colour.lower()]
 
-    @watch_switch.autocomplete('new_station')
+    @watch_switch.autocomplete('station')
     async def switch_station_autocomplete(self, interaction: discord.Interaction, current: str) -> list[
         app_commands.Choice[str]]:
         stations = ['Station 1', 'Station 2']

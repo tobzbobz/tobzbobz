@@ -1288,10 +1288,10 @@ class CallsignCog(commands.Cog):
     @app_commands.describe(
         user="The user to assign the callsign to",
         callsign="The callsign number (1-3 digits)",
-        use_affix="Whether to use rank prefix (High Command only - defaults to True)"
+        prefix="Whether to use rank prefix (Supervisor+ only - defaults to True)"
     )
     async def assign_callsign(self, interaction: discord.Interaction, user: discord.Member, callsign: str,
-                              use_affix: bool = True):
+                              prefix: bool = True):
         await interaction.response.defer(thinking=True)
 
         if db.pool is None:
@@ -1370,7 +1370,7 @@ class CallsignCog(commands.Cog):
                 )
                 return
 
-            # Determine what to assign based on use_affix parameter and rank
+            # Determine what to assign based on prefix parameter and rank
             if callsign not in ["BLANK", "###"]:
                 existing = await check_callsign_exists(callsign, fenz_prefix)
                 if existing and existing['discord_user_id'] != user.id:
@@ -1378,7 +1378,7 @@ class CallsignCog(commands.Cog):
                     error_message = format_duplicate_callsign_message(callsign, existing)
                     await interaction.followup.send(error_message, ephemeral=True)
                     return
-            elif is_high_command and not use_affix:
+            elif is_high_command and not prefix:
                 # High command without number: Just rank prefix, no callsign number
                 final_fenz_prefix = fenz_prefix  # Keep rank prefix
                 final_callsign = "BLANK"  # No number

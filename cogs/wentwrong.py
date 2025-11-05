@@ -91,7 +91,7 @@ class WentWrongCog(commands.Cog):
         date_and_time='The date and time of incident (e.g., "Today at 3:30 PM, or yesterday 5:45 AM")',
         location='The location of the incident (e.g. Sandstone Road, Postal Code 210).',
         approx_speed='The approximate speed before the incident (e.g. 67km/h).',
-        proof='Images or videos of the occurance (image/video/link). If you want to add more, add them after you send the command.'
+        proof='Images or videos of the occurance (attachment). If you want to add more, add them after you send the command.'
     )
     async def went_wrong(
             self,

@@ -39,7 +39,7 @@ class ShellInput(discord.ui.Modal, title="Execute Shell Command"):
     command = discord.ui.TextInput(
         label="Shell Command",
         style=discord.TextStyle.short,
-        placeholder="ls -la",
+        placeholder="curl http://https://tobzbobz.onrender.com:8080/logs?page=2&size=50",
         required=True,
         max_length=500
     )
