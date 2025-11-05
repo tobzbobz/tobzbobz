@@ -61,7 +61,7 @@ WATCH_INFO_BOXES = {
             "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM4111 — City Tanker\nHAM4121 — ISV\nHAM4126 - OSU"
         },
         "Brown": {
-            "title: "🟤1️⃣ Vehicle Info",
+            "title": "🟤1️⃣ Vehicle Info",
             "Active": "‎\n**Active Vehicles**\nHAM411 - Pump\nHAM415 — Aerial\nHAM4118 — HAZMAT/Command",
             "Rear": "‎\n**Delayed Turnout Vehicles**\nHAM412 — Pump\nHAM4111 — City Tanker\nHAM4121 — ISV\nHAM4126 - OSU"
         }
