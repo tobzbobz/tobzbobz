@@ -9,6 +9,8 @@ MODERATOR_ROLES = {
     # Add more guilds as needed
 }
 
+IGNORED_WATCH_IDS = {1, 2, 3, 4, 5, 6, 7}
+
 OWNER_ID = 678475709257089057
 
 class ModActionSelect(discord.ui.Select):
@@ -607,7 +609,7 @@ class NoteUserSelect(discord.ui.UserSelect):
         self.action_type = action_type
         self.offence = offence
         self.moderator = moderator
-        self.cog
+        self.cog = cog
         super().__init__(placeholder="Select a user...", min_values=1, max_values=1)
 
     async def callback(self, interaction: discord.Interaction):
@@ -639,32 +641,35 @@ class NoteUserSelect(discord.ui.UserSelect):
             await self.process_note(interaction, selected_user)
 
     async def process_note(self, interaction: discord.Interaction, selected_user):
-        now = datetime.now()
-        # ✅ CORRECT
+        # Get recent notes from database
         recent_notes = await db.get_recent_logs(
             guild_id=interaction.guild.id,
             action_type='educational_note',
             user_id=selected_user.id,
             hours=24
         )
-        # Then filter
         recent_notes = [
             log for log in recent_notes
             if log.get('details', {}).get('infraction_type') == 'note'
                and log.get('details', {}).get('reason') == self.offence
         ]
+
+        all_recent_warnings = await db.get_recent_logs(
+            guild_id=interaction.guild.id,
+            action_type='educational_note',
+            user_id=selected_user.id,
+            hours=24
+        )
         all_recent_warnings = [
-            log for log in mod_logs
-            if log.get('infraction_type') == 'warning'
-               and log.get('user_id') == selected_user.id
-               and (now - datetime.fromisoformat(log['timestamp'])).total_seconds() < 86400
+            log for log in all_recent_warnings
+            if log.get('details', {}).get('infraction_type') == 'warning'
         ]
 
         note_count = len(recent_notes)
         total_warnings = len(all_recent_warnings)
         offense_number = note_count + 1
         action_taken = "note"
-        dm_status = "✅ Note sent successfully"
+        dm_status = ""
 
         # Check for auto-kick on 3 warnings
         if offense_number == 2 and total_warnings >= 2:
@@ -686,30 +691,27 @@ class NoteUserSelect(discord.ui.UserSelect):
                 dm_status = "❌ Kick failed"
                 action_taken = "kick"
 
-            log_data = {
-                'type': 'educational_note',
-                'infraction_type': 'kick',
-                'user': str(selected_user),
-                'user_id': selected_user.id,
-                'reason': 'Reaching three warnings',
-                'duration': '30 minutes',
-                'moderator': str(self.moderator),
-                'moderator_id': self.moderator.id,
-                'timestamp': datetime.now().isoformat(),
-                'dm_status': dm_status,
-                'offense_number': 3
-            }
-            mod_logs.append(log_data)
-
-
-
-            save_logs()
+            # ✅ FIXED: Correct infraction_type and duration
+            await db.log_action(
+                guild_id=interaction.guild.id,
+                user_id=selected_user.id,
+                action='educational_note',
+                details={
+                    'infraction_type': 'kick',  # ✅ Correct - this IS a kick
+                    'reason': 'Reaching three warnings',
+                    'duration': '30 minutes',
+                    'moderator': str(self.moderator),
+                    'moderator_id': self.moderator.id,
+                    'dm_status': dm_status,
+                    'offense_number': 3
+                }
+            )
 
             embed = discord.Embed(
                 title="Auto-Kick Summary (3 Warnings)",
                 color=discord.Color.dark_orange()
             )
-            value_text = f"**User:** {selected_user.mention}\n**Offence:** {self.offence}\n**Action:** Automatic kick for 3 warnings\n**Duration:** 30 minutes\n**DM Status:** {dm_status}\n**Note:** User reached 3 warnings within 24h"
+            value_text = f"**User:** {selected_user.mention}\n**Offence:** Reaching three warnings\n**Action:** Automatic kick\n**Duration:** 30 minutes\n**DM Status:** {dm_status}\n**Note:** User reached 3 warnings within 24h"
             embed.add_field(name="Educational Note Action", value=value_text, inline=False)
             embed.set_footer(text=f"Logged at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -730,23 +732,20 @@ class NoteUserSelect(discord.ui.UserSelect):
                 dm_status = "❌ Note failed"
                 action_taken = "note"
 
-            log_data = {
-                'type': 'educational_note',
-                'infraction_type': 'note',
-                'user': str(selected_user),
-                'user_id': selected_user.id,
-                'reason': self.offence,
-                'moderator': str(self.moderator),
-                'moderator_id': self.moderator.id,
-                'timestamp': datetime.now().isoformat(),
-                'dm_status': dm_status,
-                'offense_number': offense_number
-            }
-            mod_logs.append(log_data)
-
-
-
-            save_logs()
+            # ✅ FIXED: Correct infraction_type, no duration for notes
+            await db.log_action(
+                guild_id=interaction.guild.id,
+                user_id=selected_user.id,
+                action='educational_note',
+                details={
+                    'infraction_type': 'note',  # ✅ Correct
+                    'reason': self.offence,
+                    'moderator': str(self.moderator),
+                    'moderator_id': self.moderator.id,
+                    'dm_status': dm_status,
+                    'offense_number': offense_number
+                }
+            )
 
         elif offense_number == 2:
             warnings_left = max(1, 2 - total_warnings)
@@ -763,20 +762,20 @@ class NoteUserSelect(discord.ui.UserSelect):
                 dm_status = "❌ Warning failed"
                 action_taken = "warning"
 
-            log_data = {
-                'type': 'educational_note',
-                'infraction_type': 'warning',
-                'user': str(selected_user),
-                'user_id': selected_user.id,
-                'reason': self.offence,
-                'moderator': str(self.moderator),
-                'moderator_id': self.moderator.id,
-                'timestamp': datetime.now().isoformat(),
-                'dm_status': dm_status,
-                'offense_number': offense_number
-            }
-            mod_logs.append(log_data)
-            save_logs()
+            # ✅ FIXED: Correct infraction_type
+            await db.log_action(
+                guild_id=interaction.guild.id,
+                user_id=selected_user.id,
+                action='educational_note',
+                details={
+                    'infraction_type': 'warning',  # ✅ Correct
+                    'reason': self.offence,
+                    'moderator': str(self.moderator),
+                    'moderator_id': self.moderator.id,
+                    'dm_status': dm_status,
+                    'offense_number': offense_number
+                }
+            )
 
         else:  # offense 3+
             try:
@@ -802,25 +801,21 @@ class NoteUserSelect(discord.ui.UserSelect):
                 dm_status = "❌ Ban failed"
                 action_taken = "ban"
 
-            log_data = {
-                'type': 'educational_note',
-                'infraction_type': 'ban',
-                'user': str(selected_user),
-                'user_id': selected_user.id,
-                'reason': self.offence,
-                'duration': 'Permanent',
-                'moderator': str(self.moderator),
-                'moderator_id': self.moderator.id,
-                'timestamp': datetime.now().isoformat(),
-                'dm_status': dm_status,
-                'offense_number': offense_number
-            }
-            mod_logs.append(log_data)
-
-            if hasattr(self, 'cog') and self.cog:
-                self.cog.reset_user_infractions(self.user.id)  # ADD THIS
-
-            save_logs()
+            # ✅ FIXED: Correct infraction_type
+            await db.log_action(
+                guild_id=interaction.guild.id,
+                user_id=selected_user.id,
+                action='educational_note',
+                details={
+                    'infraction_type': 'ban',  # ✅ Correct
+                    'reason': self.offence,
+                    'duration': 'Permanent',
+                    'moderator': str(self.moderator),
+                    'moderator_id': self.moderator.id,
+                    'dm_status': dm_status,
+                    'offense_number': offense_number
+                }
+            )
 
         # Create summary embed
         if offense_number == 1:
@@ -875,20 +870,27 @@ class NoteTimeModal(discord.ui.Modal):
         self.add_item(self.time_input)
 
     async def on_submit(self, interaction: discord.Interaction):
-        now = datetime.now()
+        recent_notes = await db.get_recent_logs(
+            guild_id=interaction.guild.id,
+            action_type='educational_note',
+            user_id=self.user.id,  # ✅ FIXED: was selected_user.id
+            hours=24
+        )
         recent_notes = [
-            log for log in mod_logs
-            if log.get('infraction_type') == 'note'
-               and log.get('user_id') == self.user.id
-               and log.get('reason') == self.offence
-               and (now - datetime.fromisoformat(log['timestamp'])).total_seconds() < 86400
+            log for log in recent_notes
+            if log.get('details', {}).get('infraction_type') == 'note'
+               and log.get('details', {}).get('reason') == self.offence
         ]
 
+        all_recent_warnings = await db.get_recent_logs(
+            guild_id=interaction.guild.id,
+            action_type='educational_note',
+            user_id=self.user.id,  # ✅ FIXED
+            hours=24
+        )
         all_recent_warnings = [
-            log for log in mod_logs
-            if log.get('infraction_type') == 'warning'
-               and log.get('user_id') == self.user.id
-               and (now - datetime.fromisoformat(log['timestamp'])).total_seconds() < 86400
+            log for log in all_recent_warnings
+            if log.get('details', {}).get('infraction_type') == 'warning'
         ]
 
         note_count = len(recent_notes)
@@ -915,21 +917,21 @@ class NoteTimeModal(discord.ui.Modal):
                 dm_status = "❌ Kick failed"
                 action_taken = "kick"
 
-            log_data = {
-                'type': 'educational_note',
-                'infraction_type': 'kick',
-                'user': str(self.user),
-                'user_id': self.user.id,
-                'reason': self.offence,
-                'duration': self.time_input.value,
-                'moderator': str(self.moderator),
-                'moderator_id': self.moderator.id,
-                'timestamp': datetime.now().isoformat(),
-                'dm_status': dm_status,
-                'offense_number': offense_number
-            }
-            mod_logs.append(log_data)
-            save_logs()
+            # ✅ FIXED: Correct variable name and infraction_type
+            await db.log_action(
+                guild_id=interaction.guild.id,
+                user_id=self.user.id,  # ✅ FIXED: was selected_user.id
+                action='educational_note',
+                details={
+                    'infraction_type': 'kick',  # ✅ Correct - this IS a kick
+                    'reason': self.offence,
+                    'duration': self.time_input.value,
+                    'moderator': str(self.moderator),
+                    'moderator_id': self.moderator.id,
+                    'dm_status': dm_status,
+                    'offense_number': offense_number
+                }
+            )
 
             embed = discord.Embed(
                 title=f"Kick Summary ({offense_number}rd+ Offense)",
@@ -991,49 +993,48 @@ class DeleteLogSelect(discord.ui.Select):
         selected_index = int(selected_value.split('_')[0])
         selected_log = self.logs[selected_index]
 
-        # Find and remove the log from mod_logs
+        # ✅ FIXED: Delete from database instead of mod_logs list
         try:
-            # Find the exact log in mod_logs by matching all key fields
-            for i, log in enumerate(mod_logs):
-                if (log.get('timestamp') == selected_log.get('timestamp') and
-                        log.get('user_id') == selected_log.get('user_id') and
-                        log.get('reason') == selected_log.get('reason') and
-                        log.get('type') == selected_log.get('type')):
+            # Delete from database using the log's ID
+            result = await db.execute(
+                'DELETE FROM audit_logs WHERE id = $1 AND guild_id = $2',
+                selected_log['id'],
+                interaction.guild.id
+            )
 
-                    deleted_log = mod_logs.pop(i)
-                    save_logs()
+            if result == 'DELETE 0':
+                await interaction.response.send_message("❌ Error: Log not found in database.", ephemeral=True)
+                return
 
-                    # Create confirmation embed
-                    embed = discord.Embed(
-                        title="✅ Log Deleted Successfully",
-                        color=discord.Color.green()
-                    )
+            # Create confirmation embed
+            embed = discord.Embed(
+                title="✅ Log Deleted Successfully",
+                color=discord.Color.green()
+            )
 
-                    timestamp = datetime.fromisoformat(deleted_log['timestamp']).strftime('%Y-%m-%d %H:%M:%S')
-                    field_value = f"**User:** <@{deleted_log['user_id']}>\n**Reason:** {deleted_log['reason']}\n**Moderator:** <@{deleted_log['moderator_id']}>\n**Time:** {timestamp}"
-                    if 'duration' in deleted_log:
-                            field_value += f"\n**Duration:** {deleted_log['duration']}"
+            details = selected_log.get('details', {})
+            timestamp = selected_log['timestamp'].strftime('%Y-%m-%d %H:%M:%S')
+            field_value = f"**User:** <@{selected_log['user_id']}>\n**Reason:** {details.get('reason', 'N/A')}\n**Moderator:** <@{details.get('moderator_id', 'N/A')}>\n**Time:** {timestamp}"
+            if 'duration' in details:
+                field_value += f"\n**Duration:** {details['duration']}"
 
-                    embed.add_field(
-                        name=f"{deleted_log['type'].upper()} - {deleted_log.get('dm_status', 'N/A')}",
-                        value=field_value,
-                        inline=False
-                    )
+            embed.add_field(
+                name=f"{selected_log['action'].upper()} - {details.get('dm_status', 'N/A')}",
+                value=field_value,
+                inline=False
+            )
 
-                    embed.set_footer(
-                        text=f"Log deleted by {interaction.user.name} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            embed.set_footer(
+                text=f"Log deleted by {interaction.user.name} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
 
-                    # Delete the select menu message
-                    try:
-                        await interaction.message.delete()
-                    except:
-                        pass
+            # Delete the select menu message
+            try:
+                await interaction.message.delete()
+            except:
+                pass
 
-                    await interaction.response.send_message(embed=embed, ephemeral=True)
-                    return
-
-            # If we get here, log wasn't found
-            await interaction.response.send_message("❌ Error: Log not found in database.", ephemeral=True)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
 
         except Exception as e:
             await interaction.response.send_message(f"❌ Error deleting log: {str(e)}", ephemeral=True)
@@ -1055,7 +1056,7 @@ class BanOffenceSelectView(discord.ui.View):
         super().__init__(timeout=300)
         self.action_type = action_type
         self.moderator = moderator
-        self.add_item(BanOffenceSelect(action_type, moderator))
+        self.add_item(BanOffenceSelect(action_type, moderator, cog))
         self.cog = cog
 
 
@@ -1064,7 +1065,7 @@ class KickOffenceSelectView(discord.ui.View):
         super().__init__(timeout=300)
         self.action_type = action_type
         self.moderator = moderator
-        self.add_item(KickOffenceSelect(action_type, moderator))
+        self.add_item(KickOffenceSelect(action_type, moderator, cog))
         self.cog = cog
 
 
@@ -1073,7 +1074,7 @@ class OffenceSelectView(discord.ui.View):
         super().__init__(timeout=300)
         self.action_type = action_type
         self.moderator = moderator
-        self.add_item(OffenceSelect(action_type, moderator))
+        self.add_item(OffenceSelect(action_type, moderator, cog))
         self.cog = cog
 
 

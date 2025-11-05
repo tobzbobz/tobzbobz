@@ -958,7 +958,6 @@ class ERLC(commands.GroupCog, name="erlc"):
                         player_id = await self.get_player_id_from_name(ban_player)
                         player_link = self.format_player_link(ban_player, player_id)
 
-                        # Build ban details as a single line
                         ban_line = f"• **Player:** {player_link}"
 
                         if ban.get('Reason'):
@@ -997,12 +996,11 @@ class ERLC(commands.GroupCog, name="erlc"):
                 )
 
                 ban_list = []
-                for ban in data[:25]:  # Limit to 25 to avoid hitting embed limits
+                for ban in data[:25]:
                     ban_player = ban.get('Player', 'Unknown')
                     player_id = await self.get_player_id_from_name(ban_player)
                     player_link = self.format_player_link(ban_player, player_id)
 
-                    # Build each ban as a bullet point
                     ban_line = f"• {player_link}"
 
                     if ban.get('Reason'):

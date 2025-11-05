@@ -558,8 +558,13 @@ class WatchCog(commands.Cog):
         """Load active watches from database on startup"""
         global active_watches
         try:
-            active_watches = await load_watches()
-            print(f'✅ Loaded {len(active_watches)} active watches from database')
+            all_watches = await load_watches()
+            # Only ignore certain IDs for /watch embed
+            active_watches = {
+                k: v for k, v in all_watches.items()
+                if v.get('id') not in IGNORED_WATCH_IDS
+            }
+            print(f'✅ Loaded {len(active_watches)} active watches (ignoring IDs: {IGNORED_WATCH_IDS})')
         except Exception as e:
             print(f'❌ Error loading watches: {e}')
             active_watches = {}

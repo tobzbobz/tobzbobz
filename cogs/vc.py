@@ -6,7 +6,8 @@ import asyncio
 from database import db
 
 # Configuration
-VC_REQUEST_LOG_CHANNEL_ID = 1234567890  # Replace with your log channel ID
+VC_REQUEST_LOG_CHANNEL_ID = 1435489971342409809  # Replace with your log channel ID
+
 STAFF_ROLES = {  # Roles allowed to use /vc request
     1389550689113473024,
     1389113393511923863,
@@ -14,7 +15,6 @@ STAFF_ROLES = {  # Roles allowed to use /vc request
     1285474077556998196,
     1365536209681514636
 }
-
 
 class VCRequestCog(commands.Cog):
     vc_group = app_commands.Group(name="vc", description="Voice channel management commands")
