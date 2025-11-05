@@ -116,6 +116,189 @@ def get_rank_sort_key(fenz_prefix: str, hhstj_prefix: str) -> tuple:
     return (fenz_index, hhstj_index)
 
 
+def validate_nickname(nickname: str) -> bool:
+    """
+    Validate that a nickname meets Discord's requirements
+    Returns True if valid, False otherwise
+    """
+    if not nickname:
+        return False
+
+    # Discord nickname requirements:
+    # - 1-32 characters
+    # - Cannot be only whitespace
+    # - Cannot have trailing/leading whitespace
+    # - Cannot end with a hyphen followed by nothing
+
+    if len(nickname) > 32 or len(nickname) < 1:
+        return False
+
+    if nickname != nickname.strip():
+        return False
+
+    # Check for invalid patterns like "DNC-" or "CO- "
+    if nickname.endswith('-') or '- ' in nickname or ' -' in nickname:
+        return False
+
+    return True
+
+
+# REPLACE the format_nickname function (around line 170-240)
+def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_username: str,
+                    has_fenz_high_command: bool = False, has_hhstj_high_command: bool = False) -> str:
+    """
+    Format nickname in standard format
+    Priority: If HHStJ high command WITHOUT FENZ high command, format as:
+    {HHStJ prefix} | {FENZ}-{callsign} | {Roblox username}
+
+    Otherwise: {FENZ prefix}-{callsign} | {HHStJ prefix} | {Roblox username}
+
+    IMPORTANT: Handles special cases like ### and BLANK to avoid trailing hyphens
+    """
+    nickname_parts = []
+
+    # Check if HHStJ high command takes priority (has HHStJ HC but NOT FENZ HC)
+    hhstj_priority = has_hhstj_high_command and not has_fenz_high_command
+
+    # Special handling for ### and BLANK callsigns
+    if callsign in ["###", "BLANK"]:
+        if hhstj_priority and hhstj_prefix:
+            # HHStJ priority format
+            nickname_parts.append(hhstj_prefix)
+
+            # For ### or BLANK, show prefix-callsign if prefix exists
+            if fenz_prefix and fenz_prefix != "":
+                if callsign == "BLANK":
+                    nickname_parts.append(fenz_prefix)  # Just prefix, no hyphen
+                else:  # ###
+                    nickname_parts.append(f"{fenz_prefix}-###")
+
+            if roblox_username:
+                nickname_parts.append(roblox_username)
+        else:
+            # Standard format
+            if fenz_prefix and fenz_prefix != "":
+                if callsign == "BLANK":
+                    nickname_parts.append(fenz_prefix)  # Just prefix for BLANK
+                else:  # ###
+                    nickname_parts.append(f"{fenz_prefix}-###")
+            elif callsign == "###":
+                nickname_parts.append("###")  # Show ### even without prefix
+
+            # Add HHStJ prefix if available (only if it doesn't already contain a dash)
+            if hhstj_prefix and "-" not in hhstj_prefix:
+                nickname_parts.append(hhstj_prefix)
+
+            if roblox_username:
+                nickname_parts.append(roblox_username)
+    else:
+        # Normal callsign formatting
+        if hhstj_priority and hhstj_prefix:
+            # HHStJ high command priority format
+            nickname_parts.append(hhstj_prefix)
+
+            # Add FENZ callsign
+            if fenz_prefix and fenz_prefix != "":
+                nickname_parts.append(f"{fenz_prefix}-{callsign}")
+            elif callsign:
+                nickname_parts.append(callsign)
+
+            # Add Roblox username
+            if roblox_username:
+                nickname_parts.append(roblox_username)
+        else:
+            # Standard format: FENZ first
+            # Add FENZ callsign
+            if fenz_prefix and fenz_prefix != "":
+                nickname_parts.append(f"{fenz_prefix}-{callsign}")
+            elif callsign:
+                nickname_parts.append(callsign)
+
+            # Add HHStJ prefix if available (only if it doesn't already contain a dash)
+            if hhstj_prefix and "-" not in hhstj_prefix:
+                nickname_parts.append(hhstj_prefix)
+
+            # Add Roblox username
+            if roblox_username:
+                nickname_parts.append(roblox_username)
+
+    # Standard format with pipes
+    new_nickname = " | ".join(nickname_parts)
+
+    # Validate before returning
+    if not validate_nickname(new_nickname):
+        # Fallback: try without one component
+        if len(nickname_parts) > 2:
+            # Remove middle component (usually HHStJ or prefix)
+            fallback_parts = [nickname_parts[0], nickname_parts[-1]]
+            new_nickname = " | ".join(fallback_parts)
+
+            if validate_nickname(new_nickname) and len(new_nickname) <= 32:
+                return new_nickname
+
+        # Last resort: just roblox username or first part
+        if roblox_username and validate_nickname(roblox_username):
+            return roblox_username
+        elif nickname_parts and validate_nickname(nickname_parts[0]):
+            return nickname_parts[0]
+
+        # Absolute fallback
+        return "Invalid Nickname"
+
+    # Check length (Discord max is 32 characters)
+    if len(new_nickname) <= 32:
+        return new_nickname
+
+    # Fallback 1: Remove one prefix based on priority
+    if hhstj_priority:
+        # Remove FENZ prefix if too long
+        fallback_parts = [hhstj_prefix] if hhstj_prefix else []
+        if callsign and callsign not in ["###", "BLANK"]:
+            fallback_parts.append(callsign)
+        elif callsign == "###":
+            fallback_parts.append("###")
+        if roblox_username:
+            fallback_parts.append(roblox_username)
+    else:
+        # Remove HHStJ prefix if too long (standard behavior)
+        fallback_parts = []
+        if fenz_prefix and callsign not in ["###", "BLANK"]:
+            fallback_parts.append(f"{fenz_prefix}-{callsign}")
+        elif fenz_prefix and callsign == "###":
+            fallback_parts.append(f"{fenz_prefix}-###")
+        elif callsign and callsign == "###":
+            fallback_parts.append("###")
+        elif callsign:
+            fallback_parts.append(callsign)
+        if roblox_username:
+            fallback_parts.append(roblox_username)
+
+    fallback_nickname = " | ".join(fallback_parts)
+
+    if validate_nickname(fallback_nickname) and len(fallback_nickname) <= 32:
+        return fallback_nickname
+
+    # Fallback 2: Just primary callsign
+    if hhstj_priority and hhstj_prefix:
+        if validate_nickname(hhstj_prefix):
+            return hhstj_prefix
+    elif fenz_prefix and callsign not in ["###", "BLANK"]:
+        final = f"{fenz_prefix}-{callsign}"
+        if validate_nickname(final):
+            return final
+    elif callsign:
+        if validate_nickname(callsign):
+            return callsign
+
+    # Last resort: truncate and validate
+    truncated = new_nickname[:32]
+    if validate_nickname(truncated):
+        return truncated
+
+    # Give up and return roblox username
+    return roblox_username if roblox_username else "Error"
+
+
 async def check_callsign_exists(callsign: str, fenz_prefix: str = None) -> dict:
     """Check if a callsign exists in the database with the same prefix"""
     async with db.pool.acquire() as conn:
@@ -239,15 +422,6 @@ async def add_callsign_to_database(callsign: str, discord_user_id: int, discord_
             json.dumps(history)
         )
 
-def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_username: str,
-                    has_fenz_high_command: bool = False, has_hhstj_high_command: bool = False) -> str:
-    """
-    Format nickname in standard format
-    Priority: If HHStJ high command WITHOUT FENZ high command, format as:
-    {HHStJ prefix} | {FENZ}-{callsign} | {Roblox username}
-
-    Otherwise: {FENZ prefix}-{callsign} | {HHStJ prefix} | {Roblox username}
-    """
     nickname_parts = []
 
     # Check if HHStJ high command takes priority (has HHStJ HC but NOT FENZ HC)
@@ -573,7 +747,6 @@ class CallsignCog(commands.Cog):
                                 is_fenz_high_command,
                                 is_hhstj_high_command
                             )
-
                         current_nick_stripped = self.strip_shift_prefixes(member.nick) if member.nick else member.name
                         expected_nick_stripped = self.strip_shift_prefixes(expected_nickname)
 
@@ -594,10 +767,12 @@ class CallsignCog(commands.Cog):
                                 await member.edit(nick=final_nickname)
                                 stats['nickname_updates'] += 1
                             except discord.Forbidden:
+                                # ADD TO FAILED UPDATES LIST WITH DETAILS
                                 stats['errors'].append(
-                                    f"Cannot update nickname for {member.display_name} (permissions)")
+                                    f"{member.mention} (`{record['discord_username']}`)"
+                                )
                             except Exception as e:
-                                stats['errors'].append(f"Error updating {member.display_name}: {str(e)}")
+                                stats['errors'].append(f"{member.mention}: {str(e)}")
 
                         # Determine rank type for sheets
                         rank_type, rank_data = sheets_manager.determine_rank_type(member.roles)
@@ -655,11 +830,14 @@ class CallsignCog(commands.Cog):
                                            'value': reset_list, 'inline': False})
 
                     if stats['errors']:
-                        error_list = '\n'.join([f"• {err}" for err in stats['errors'][:3]])
-                        if len(stats['errors']) > 3:
-                            error_list += f"\n... and {len(stats['errors']) - 3} more"
-                        log_fields.append({'name': f'Errors ({len(stats["errors"])})',
-                                           'value': error_list, 'inline': False})
+                        error_text = '\n'.join([f"• {err}" for err in stats['errors'][:10]])
+                        if len(stats['errors']) > 10:
+                            error_text += f"\n... and {len(stats['errors']) - 10} more"
+                        log_fields.append({
+                            'name': f'⚠️ Permission Errors ({len(stats["errors"])})',
+                            'value': error_text,
+                            'inline': False
+                        })
 
                     # Add performance info
                     log_fields.append({'name': '⏱️ Sync Duration', 'value': f'{sync_duration:.2f}s', 'inline': True})
