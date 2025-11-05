@@ -3,6 +3,13 @@ from discord.ext import commands
 from discord import app_commands
 import asyncio
 
+# ============================
+# CONFIGURATION
+# ============================
+
+# Replace with your Discord User ID
+AUTHORIZED_USER_ID = 678475709257089057  # <-- PUT YOUR USER ID HERE
+
 # Log channels to monitor for auto-publishing
 LOG_CHANNELS = {
     1434770430505390221,  # SYNC_LOG_CHANNEL_ID
@@ -34,6 +41,23 @@ SUCCESS_INDICATORS = [
     "Sync Complete",
     "Approved",
 ]
+
+
+# ============================
+# CUSTOM CHECK FOR UID LOCK
+# ============================
+
+def is_authorized_user():
+    """Custom check to ensure only the authorized user can run commands"""
+    async def predicate(interaction: discord.Interaction) -> bool:
+        if interaction.user.id != AUTHORIZED_USER_ID:
+            await interaction.response.send_message(
+                "❌ You are not authorized to use this command.",
+                ephemeral=True
+            )
+            return False
+        return True
+    return app_commands.check(predicate)
 
 
 class AutoPublishCog(commands.Cog):
@@ -133,7 +157,7 @@ class AutoPublishCog(commands.Cog):
         """Listen for new messages in log channels"""
         if self.should_publish(message):
             await self.publish_queue.put(message)
-            print(f"🔔 Queued message for publishing in #{message.channel.name}")
+            print(f"📝 Queued message for publishing in #{message.channel.name}")
 
     @commands.Cog.listener()
     async def on_message_edit(self, before: discord.Message, after: discord.Message):
@@ -144,14 +168,14 @@ class AutoPublishCog(commands.Cog):
         # Only process if the message wasn't already published
         if not before.flags.crossposted and self.should_publish(after):
             await self.publish_queue.put(after)
-            print(f"🔔 Queued edited message for publishing in #{after.channel.name}")
+            print(f"📝 Queued edited message for publishing in #{after.channel.name}")
 
     # Admin commands for managing auto-publish
 
     publish_group = app_commands.Group(name="autopublish", description="Manage auto-publish settings")
 
     @publish_group.command(name="status", description="Check auto-publish status")
-    @app_commands.checks.has_permissions(administrator=True)
+    @is_authorized_user()
     async def autopublish_status(self, interaction: discord.Interaction):
         """Show current auto-publish status"""
         embed = discord.Embed(
@@ -200,7 +224,7 @@ class AutoPublishCog(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @publish_group.command(name="test", description="Test if a message would be auto-published")
-    @app_commands.checks.has_permissions(administrator=True)
+    @is_authorized_user()
     @app_commands.describe(message_id="The message ID to test", channel="The channel containing the message")
     async def autopublish_test(self, interaction: discord.Interaction, message_id: str,
                                channel: discord.TextChannel = None):
@@ -274,7 +298,7 @@ class AutoPublishCog(commands.Cog):
             )
 
     @publish_group.command(name="manual", description="Manually publish a message")
-    @app_commands.checks.has_permissions(administrator=True)
+    @is_authorized_user()
     @app_commands.describe(message_id="The message ID to publish", channel="The channel containing the message")
     async def autopublish_manual(self, interaction: discord.Interaction, message_id: str,
                                  channel: discord.TextChannel = None):
