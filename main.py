@@ -23,7 +23,7 @@ GUILD_IDS = [1282916959062851634, 1425867713183744023, 1430002479239532747, 1420
 # Guild-specific cog configuration
 GUILD_COGS = {
     1282916959062851634: ['!mod', 'disclaimer', 'ghost', 'inactive_ticket', 'react', 'say', 'status', 'watches',
-                          'wentwrong', 'role', 'ping', 'callsign', 'case','shift','x','autopublish'],
+                          'wentwrong', 'role', 'ping', 'callsign', 'case','shift','x','autopublish','vc','topic','purge','pings','moderation'],
     1425867713183744023: ['!mod', 'disclaimer', 'ghost', 'inactive_ticket', 'react', 'say', 'status', 'watches',
                           'wentwrong', 'role', 'ping', 'callsign', 'case','shift'],
     1430002479239532747: ['autorole', 'other'],
