@@ -14,7 +14,7 @@ FENZ_ROLE_ID = 1412790680991961149
 HHSTJ_ROLE_ID = 1414146295974727861
 CC_ROLE_ID = 1430108352377262090
 
-SHIFT_TYPES = {
+typeS = {
     FENZ_ROLE_ID: "Shift FENZ",
     HHSTJ_ROLE_ID: "Shift HHStJ",
     CC_ROLE_ID: "Shift CC"
@@ -151,19 +151,19 @@ class ShiftManagementCog(commands.Cog):
         """Check if user has super admin permissions"""
         return any(role.id in SUPER_ADMIN_ROLES for role in member.roles)
 
-    async def get_duty_roles_for_shift_type(self, shift_type: str) -> tuple:
+    async def get_duty_roles_for_type(self, type: str) -> tuple:
         """Get duty and break role IDs for a shift type"""
-        if shift_type == "Shift FENZ":
+        if type == "Shift FENZ":
             return (FENZ_DUTY_ROLE, FENZ_BREAK_ROLE)
-        elif shift_type == "Shift HHStJ":
+        elif type == "Shift HHStJ":
             return (HHSTJ_DUTY_ROLE, HHSTJ_BREAK_ROLE)
-        elif shift_type == "Shift CC":
+        elif type == "Shift CC":
             return (CC_DUTY_ROLE, CC_BREAK_ROLE)
         return (None, None)
 
-    async def update_duty_roles(self, member: discord.Member, shift_type: str, status: str):
+    async def update_duty_roles(self, member: discord.Member, type: str, status: str):
         """Update duty/break roles based on shift status"""
-        duty_role_id, break_role_id = await self.get_duty_roles_for_shift_type(shift_type)
+        duty_role_id, break_role_id = await self.get_duty_roles_for_type(type)
 
         if not duty_role_id:
             return
@@ -229,26 +229,26 @@ class ShiftManagementCog(commands.Cog):
                 member = bot.get_guild(shift.get('guild_id')).get_member(shift['discord_user_id'])
                 if member:
                     await self.update_nickname_for_shift_status(member, 'off')
-                    await self.update_duty_roles(member, shift['shift_type'], 'off')
+                    await self.update_duty_roles(member, shift['type'], 'off')
 
             if stale_shifts:
                 print(f"Cleaned up {len(stale_shifts)} stale shifts on startup")
 
-    async def get_user_shift_types(self, member: discord.Member) -> list:
+    async def get_user_types(self, member: discord.Member) -> list:
         """Get all shift types a user is eligible for"""
-        shift_types = []
-        for role_id, shift_type in SHIFT_TYPES.items():
+        types = []
+        for role_id, type in typeS.items():
             if any(role.id == role_id for role in member.roles):
-                shift_types.append(shift_type)
+                types.append(type)
 
         # Add additional shift types for specific roles
         for role in member.roles:
             if role.id in ADDITIONAL_SHIFT_ACCESS:
-                for shift_type in ADDITIONAL_SHIFT_ACCESS[role.id]:
-                    if shift_type not in shift_types:
-                        shift_types.append(shift_type)
+                for type in ADDITIONAL_SHIFT_ACCESS[role.id]:
+                    if type not in types:
+                        types.append(type)
 
-        return shift_types
+        return types
 
     async def get_active_shift(self, user_id: int):
         """Get the user's currently active shift if any"""
@@ -476,18 +476,18 @@ class ShiftManagementCog(commands.Cog):
             'completed': percentage >= 100
         }
 
-    async def get_total_active_time(self, user_id: int, shift_type: str = None) -> int:
+    async def get_total_active_time(self, user_id: int, type: str = None) -> int:
         """Get total active shift time in seconds for current round"""
         async with db.pool.acquire() as conn:
-            if shift_type:
+            if type:
                 shifts = await conn.fetch(
                     '''SELECT *
                        FROM shifts
                        WHERE discord_user_id = $1
-                         AND shift_type = $2
+                         AND type = $2
                          AND end_time IS NOT NULL
                          AND round_number IS NULL''',
-                    user_id, shift_type
+                    user_id, type
                 )
             else:
                 shifts = await conn.fetch(
@@ -855,13 +855,13 @@ class ShiftManagementCog(commands.Cog):
             traceback.print_exc()
 
     @shift_group.command(name="manage", description="Manage your shifts")
-    @app_commands.describe(shift_type="Select your shift type")
-    @app_commands.choices(shift_type=[
+    @app_commands.describe(type="Select your shift type")
+    @app_commands.choices(type=[
         app_commands.Choice(name="Shift FENZ", value="Shift FENZ"),
         app_commands.Choice(name="Shift HHStJ", value="Shift HHStJ"),
         app_commands.Choice(name="Shift CC", value="Shift CC")
     ])
-    async def shift_manage(self, interaction: discord.Interaction, shift_type: app_commands.Choice[str]):
+    async def shift_manage(self, interaction: discord.Interaction, type: app_commands.Choice[str]):
         """Main shift management command"""
         await interaction.response.defer()
 
@@ -874,9 +874,9 @@ class ShiftManagementCog(commands.Cog):
 
         try:
             # Check what shift types the user has access to
-            shift_types = await self.get_user_shift_types(interaction.user)
+            types = await self.get_user_types(interaction.user)
 
-            if not shift_types:
+            if not types:
                 await interaction.followup.send(
                     "<:Denied:1426930694633816248> You don't have any shift roles (FENZ, HHStJ, or CC).",
                     ephemeral=True
@@ -891,7 +891,7 @@ class ShiftManagementCog(commands.Cog):
                 await self.show_active_shift_panel(interaction, active_shift)
             else:
                 # No active shift - show statistics and start option
-                await self.show_shift_statistics_panel(interaction, shift_types)
+                await self.show_shift_statistics_panel(interaction, types, show_last_shift=False)
 
         except Exception as e:
             await interaction.followup.send(
@@ -920,7 +920,7 @@ class ShiftManagementCog(commands.Cog):
                     '''SELECT *
                        FROM shifts
                        WHERE end_time IS NULL
-                       ORDER BY shift_type, start_time'''
+                       ORDER BY type, start_time'''
                 )
 
             if active_shifts:
@@ -943,10 +943,10 @@ class ShiftManagementCog(commands.Cog):
             # Categorize by shift type
             shifts_by_type = {}
             for shift in active_shifts:
-                shift_type = shift['shift_type']
-                if shift_type not in shifts_by_type:
-                    shifts_by_type[shift_type] = []
-                shifts_by_type[shift_type].append(dict(shift))
+                type = shift['type']
+                if type not in shifts_by_type:
+                    shifts_by_type[type] = []
+                shifts_by_type[type].append(dict(shift))
 
             # Create embed
             embed = discord.Embed(
@@ -956,11 +956,11 @@ class ShiftManagementCog(commands.Cog):
             )
 
             # Add each shift type section
-            for shift_type in ["Shift FENZ", "Shift HHStJ", "Shift CC"]:
-                if shift_type not in shifts_by_type:
+            for type in ["Shift FENZ", "Shift HHStJ", "Shift CC"]:
+                if type not in shifts_by_type:
                     continue
 
-                shifts = shifts_by_type[shift_type]
+                shifts = shifts_by_type[type]
                 shift_lines = []
 
                 for idx, shift in enumerate(shifts, 1):
@@ -1015,7 +1015,7 @@ class ShiftManagementCog(commands.Cog):
 
                 if shift_lines:
                     embed.add_field(
-                        name=f"**{shift_type.replace('Shift ', '')} Type**",
+                        name=f"**{type.replace('Shift ', '')} Type**",
                         value="\n".join(shift_lines),
                         inline=False
                     )
@@ -1034,9 +1034,9 @@ class ShiftManagementCog(commands.Cog):
     @shift_group.command(name="admin", description="[ADMIN] Manage shifts for users")
     @app_commands.describe(
         user="The user to manage shifts for",
-        shift_type="The shift type (REQUIRED)"
+        type="The shift type (REQUIRED)"
     )
-    @app_commands.choices(shift_type=[
+    @app_commands.choices(type=[
         app_commands.Choice(name="Shift FENZ", value="Shift FENZ"),
         app_commands.Choice(name="Shift HHStJ", value="Shift HHStJ"),
         app_commands.Choice(name="Shift CC", value="Shift CC")
@@ -1045,7 +1045,7 @@ class ShiftManagementCog(commands.Cog):
             self,
             interaction: discord.Interaction,
             user: discord.Member,
-            shift_type: app_commands.Choice[str]
+            type: app_commands.Choice[str]
     ):
         """Admin shift management command"""
         await interaction.response.defer()
@@ -1067,9 +1067,9 @@ class ShiftManagementCog(commands.Cog):
 
         try:
             # Get user's shift types
-            user_shift_types = await self.get_user_shift_types(user)
+            user_types = await self.get_user_types(user)
 
-            if not user_shift_types:
+            if not user_types:
                 await interaction.followup.send(
                     f"<:Denied:1426930694633816248> {user.mention} doesn't have any shift roles.",
                     ephemeral=True
@@ -1077,15 +1077,15 @@ class ShiftManagementCog(commands.Cog):
                 return
 
             # Validate provided shift type
-            if shift_type.value not in user_shift_types:
+            if type.value not in user_types:
                 await interaction.followup.send(
-                    f"<:Denied:1426930694633816248> {user.mention} doesn't have access to {shift_type.value}.",
+                    f"<:Denied:1426930694633816248> {user.mention} doesn't have access to {type.value}.",
                     ephemeral=True
                 )
                 return
 
             # Show admin control panel
-            await self.show_admin_shift_panel(interaction, user, shift_type.value)
+            await self.show_admin_shift_panel(interaction, user, type.value)
 
         except Exception as e:
             await interaction.followup.send(
@@ -1109,9 +1109,13 @@ class ShiftManagementCog(commands.Cog):
         else:
             return f"{seconds}s"
 
+    async def show_shift_statistics_panel(self, interaction: discord.Interaction, types: list,
+                                          show_last_shift: bool = False):
+        """Show the all-time statistics panel with start button
 
-    async def show_shift_statistics_panel(self, interaction: discord.Interaction, shift_types: list):
-        """Show the all-time statistics panel with start button"""
+        Args:
+            show_last_shift: Only show last shift info if True (after ending a shift in current session)
+        """
         summary = await self.get_user_summary(interaction.user.id, interaction.user)
         stats = summary['stats']
         last_shift = summary['last_shift']
@@ -1134,7 +1138,8 @@ class ShiftManagementCog(commands.Cog):
                 inline=False
             )
 
-        if last_shift:
+        # ONLY show last shift if explicitly requested (after ending a shift)
+        if show_last_shift and last_shift:
             last_duration = last_shift['end_time'] - last_shift['start_time']
             active_duration = last_duration - timedelta(seconds=last_shift.get('pause_duration', 0))
             pause_duration = last_shift.get('pause_duration', 0)
@@ -1147,12 +1152,12 @@ class ShiftManagementCog(commands.Cog):
                       f"**Break Time:** {self.format_duration(timedelta(seconds=pause_duration))}",
                 inline=False
             )
-            embed.set_footer(text=f"Shift Type: {last_shift['shift_type']}")
+            embed.set_footer(text=f"Shift Type: {last_shift['type']}")
         else:
-            embed.set_footer(text=f"Available Shift Types: {', '.join(shift_types)}")
+            embed.set_footer(text=f"Available Shift Types: {', '.join(types)}")
 
         # Create view with only Start button
-        view = ShiftStartView(self, interaction.user, shift_types)
+        view = ShiftStartView(self, interaction.user, types)
         message = await interaction.edit_original_response(embed=embed, view=view)
         view.message = message
 
@@ -1195,7 +1200,7 @@ class ShiftManagementCog(commands.Cog):
 
             view = ShiftActiveView(self, interaction.user, shift)
 
-        embed.set_footer(text=f"Shift Type: {shift['shift_type']}")
+        embed.set_footer(text=f"Shift Type: {shift['type']}")
 
         await interaction.edit_original_response(embed=embed, view=view)
 
@@ -1254,11 +1259,14 @@ class ShiftManagementCog(commands.Cog):
             inline=False
         )
 
-        embed.set_footer(text=f"Shift Type: {shift['shift_type']}")
+        embed.set_footer(text=f"Shift Type: {shift['type']}")
 
-        await interaction.edit_original_response(embed=embed)
+        # Create view with Start button for next shift
+        types = await self.get_user_types(interaction.user)
+        view = ShiftStartView(self, interaction.user, types)
+        await interaction.edit_original_response(embed=embed, view=view)
 
-    async def show_admin_shift_panel(self, interaction: discord.Interaction, user: discord.Member, shift_type: str):
+    async def show_admin_shift_panel(self, interaction: discord.Interaction, user: discord.Member, type: str):
         """Show admin control panel for managing user's shift"""
         # Get active shift for this user
         active_shift = await self.get_active_shift(user.id)
@@ -1298,7 +1306,7 @@ class ShiftManagementCog(commands.Cog):
             inline=False
         )
 
-        embed.set_footer(text=f"Shift Type: {shift_type}")
+        embed.set_footer(text=f"Shift Type: {type}")
 
         # Show shift status
         if active_shift:
@@ -1317,18 +1325,18 @@ class ShiftManagementCog(commands.Cog):
                 inline=False
             )
 
-        view = AdminShiftControlView(self, interaction.user, user, shift_type, active_shift)
+        view = AdminShiftControlView(self, interaction.user, user, type, active_shift)
         await interaction.edit_original_response(embed=embed, view=view)
 
 
 class ShiftStartView(discord.ui.View):
     """View shown when no shift is active - only Start button"""
 
-    def __init__(self, cog: ShiftManagementCog, user: discord.Member, shift_types: list):
+    def __init__(self, cog: ShiftManagementCog, user: discord.Member, types: list):
         super().__init__(timeout=300)
         self.cog = cog
         self.user = user
-        self.shift_types = shift_types
+        self.types = types
         self.message = None
 
     async def on_timeout(self):
@@ -1354,18 +1362,8 @@ class ShiftStartView(discord.ui.View):
     async def start_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
 
-        try:
-            # If multiple shift types, ask which one
-            if len(self.shift_types) > 1:
-                view = ShiftTypeSelectView(self.cog, self.user, self.shift_types)
-                await interaction.followup.send(
-                    "You have multiple shift types available. Please select one:",
-                    view=view,
-                    ephemeral=True
-                )
-            else:
-                # Only one shift type, start it directly
-                await self.start_shift(interaction, self.shift_types[0])
+        # Only one shift type, start it directly
+        await self.start_shift(interaction, self.types[0])
 
         except Exception as e:
             await interaction.followup.send(
@@ -1373,21 +1371,21 @@ class ShiftStartView(discord.ui.View):
                 ephemeral=True
             )
 
-    async def start_shift(self, interaction: discord.Interaction, shift_type: str):
+    async def start_shift(self, interaction: discord.Interaction, type: str):
         """Start a new shift"""
         async with db.pool.acquire() as conn:
             await conn.execute(
                 '''INSERT INTO shifts
-                   (discord_user_id, discord_username, shift_type, start_time, pause_duration)
+                   (discord_user_id, discord_username, type, start_time, pause_duration)
                    VALUES ($1, $2, $3, $4, 0)''',
-                self.user.id, str(self.user), shift_type, datetime.utcnow()
+                self.user.id, str(self.user), type, datetime.utcnow()
             )
 
         # Update nickname to DUTY
         await self.cog.update_nickname_for_shift_status(self.user, 'duty')
 
         # Update duty roles
-        await self.cog.update_duty_roles(self.user, shift_type, 'duty')
+        await self.cog.update_duty_roles(self.user, type, 'duty')
 
         # Get the newly created shift
         shift = await self.cog.get_active_shift(self.user.id)
@@ -1395,7 +1393,7 @@ class ShiftStartView(discord.ui.View):
         # Build the embed directly instead of calling show_active_shift_panel
         embed = discord.Embed(
             title="**Shift Started**",
-            color=discord.Color.green()
+            color=discord.Color(0x000000)  # Black
         )
 
         embed.add_field(
@@ -1405,7 +1403,7 @@ class ShiftStartView(discord.ui.View):
             inline=False
         )
 
-        embed.set_footer(text=f"Shift Type: {shift['shift_type']}")
+        embed.set_footer(text=f"Shift Type: {shift['type']}")
 
         # Create the active view
         view = ShiftActiveView(self.cog, self.user, shift)
@@ -1444,6 +1442,12 @@ class ShiftActiveView(discord.ui.View):
 
     @discord.ui.button(label="Pause", style=discord.ButtonStyle.primary, emoji="<:Pause:1434982402593390632>")
     async def pause_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+        if button.disabled:
+            button.disabled = False
+            await interaction.response.edit_message(view=self)
+            return
+
         await interaction.response.defer()
 
         try:
@@ -1460,7 +1464,7 @@ class ShiftActiveView(discord.ui.View):
             await self.cog.update_nickname_for_shift_status(self.user, 'break')
 
             # Update duty roles
-            await self.cog.update_duty_roles(self.user, self.shift['shift_type'], 'break')
+            await self.cog.update_duty_roles(self.user, self.shift['type'], 'break')
 
             # Get updated shift
             updated_shift = await self.cog.get_active_shift(self.user.id)
@@ -1479,7 +1483,7 @@ class ShiftActiveView(discord.ui.View):
                 inline=False
             )
 
-            embed.set_footer(text=f"Shift Type: {updated_shift['shift_type']}")
+            embed.set_footer(text=f"Shift Type: {updated_shift['type']}")
 
             # Create break view
             view = ShiftBreakView(self.cog, self.user, updated_shift)
@@ -1495,6 +1499,12 @@ class ShiftActiveView(discord.ui.View):
 
     @discord.ui.button(label="End", style=discord.ButtonStyle.danger, emoji="<:Reset:1434959478796714074>")
     async def end_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+        if button.disabled:
+            button.disabled = False
+            await interaction.response.edit_message(view=self)
+            return
+
         await interaction.response.defer()
 
         try:
@@ -1502,7 +1512,7 @@ class ShiftActiveView(discord.ui.View):
             await self.cog.update_nickname_for_shift_status(self.user, 'off')
 
             # Update duty roles
-            await self.cog.update_duty_roles(self.user, self.shift['shift_type'], 'off')
+            await self.cog.update_duty_roles(self.user, self.shift['type'], 'off')
 
             # Calculate final pause duration
             pause_duration = self.shift.get('pause_duration', 0)
@@ -1556,11 +1566,11 @@ class ShiftActiveView(discord.ui.View):
                 inline=False
             )
 
-            embed.set_footer(text=f"Shift Type: {self.shift['shift_type']}")
+            embed.set_footer(text=f"Shift Type: {self.shift['type']}")
 
-            shift_types = await self.cog.get_user_shift_types(self.user)
-            view = ShiftStartView(self.cog, self.user, shift_types)
-            await interaction.edit_original_response(embed=embed, view=view)  # Only this one
+            await self.cog.end_shift_and_show_summary(interaction, self.shift)
+            # Don't create new view - the embed already shows the summary with last shift
+            await interaction.edit_original_response(embed=embed, view=None)
 
         except Exception as e:
             await interaction.followup.send(
@@ -1620,7 +1630,7 @@ class ShiftBreakView(discord.ui.View):
             await self.cog.update_nickname_for_shift_status(self.user, 'duty')
 
             # Update duty roles
-            await self.cog.update_duty_roles(self.user, self.shift['shift_type'], 'duty')
+            await self.cog.update_duty_roles(self.user, self.shift['type'], 'duty')
 
             # Get updated shift
             updated_shift = await self.cog.get_active_shift(self.user.id)
@@ -1638,7 +1648,7 @@ class ShiftBreakView(discord.ui.View):
                 inline=False
             )
 
-            embed.set_footer(text=f"Shift Type: {updated_shift['shift_type']}")
+            embed.set_footer(text=f"Shift Type: {updated_shift['type']}")
 
             # Create active view
             view = ShiftActiveView(self.cog, self.user, updated_shift)
@@ -1661,7 +1671,7 @@ class ShiftBreakView(discord.ui.View):
             await self.cog.update_nickname_for_shift_status(self.user, 'off')
 
             # Update duty roles
-            await self.cog.update_duty_roles(self.user, self.shift['shift_type'], 'off')
+            await self.cog.update_duty_roles(self.user, self.shift['type'], 'off')
 
             # Calculate final pause duration
             pause_duration = self.shift.get('pause_duration', 0)
@@ -1692,7 +1702,7 @@ class ShiftBreakView(discord.ui.View):
                 color=discord.Color(0xffffff)
             )
 
-            embed.set_footer(text=f"Shift Type: {self.shift['shift_type']}")
+            embed.set_footer(text=f"Shift Type: {self.shift['type']}")
 
             # Add quota info if available
             member = interaction.guild.get_member(self.user.id)
@@ -1715,10 +1725,9 @@ class ShiftBreakView(discord.ui.View):
                 inline=False
             )
 
-            embed.set_footer(text=f"Shift Type: {self.shift['shift_type']}")
+            embed.set_footer(text=f"Shift Type: {self.shift['type']}")
 
-            shift_types = await self.cog.get_user_shift_types(self.user)
-            view = ShiftStartView(self.cog, self.user, shift_types)
+            await self.cog.end_shift_and_show_summary(interaction, self.shift)
             await interaction.edit_original_response(embed=embed, view=view)  # Only this one
 
 
@@ -1731,7 +1740,7 @@ class ShiftBreakView(discord.ui.View):
 class ShiftTypeSelectView(discord.ui.View):
     """View for selecting shift type when user has multiple options"""
 
-    def __init__(self, cog: ShiftManagementCog, user: discord.Member, shift_types: list):
+    def __init__(self, cog: ShiftManagementCog, user: discord.Member, types: list):
         super().__init__(timeout=60)
         self.cog = cog
         self.user = user
@@ -1748,25 +1757,25 @@ class ShiftTypeSelectView(discord.ui.View):
                     pass
 
         # Add a button for each shift type
-        for shift_type in shift_types:
+        for type in types:
             button = discord.ui.Button(
-                label=shift_type,
+                label=type,
                 style=discord.ButtonStyle.primary,
-                custom_id=f"shift_type_{shift_type}"
+                custom_id=f"type_{type}"
             )
-            button.callback = self.create_callback(shift_type)
+            button.callback = self.create_callback(type)
             self.add_item(button)
 
-    def create_callback(self, shift_type: str):
+    def create_callback(self, type: str):
         async def callback(interaction: discord.Interaction):
             await interaction.response.defer()
 
             # Verify user still has access to this shift type
-            user_shift_types = await self.cog.get_user_shift_types(interaction.user)
+            user_types = await self.cog.get_user_types(interaction.user)
 
-            if shift_type not in user_shift_types:
+            if type not in user_types:
                 await interaction.followup.send(
-                    f"<:Denied:1426930694633816248> You don't have access to **{shift_type}** shifts!",
+                    f"<:Denied:1426930694633816248> You don't have access to **{type}** shifts!",
                     ephemeral=True
                 )
                 return
@@ -1775,16 +1784,16 @@ class ShiftTypeSelectView(discord.ui.View):
             async with db.pool.acquire() as conn:
                 await conn.execute(
                     '''INSERT INTO shifts
-                       (discord_user_id, discord_username, shift_type, start_time, pause_duration)
+                       (discord_user_id, discord_username, type, start_time, pause_duration)
                        VALUES ($1, $2, $3, $4, 0)''',
-                    self.user.id, str(self.user), shift_type, datetime.utcnow()
+                    self.user.id, str(self.user), type, datetime.utcnow()
                 )
 
             # Update nickname to DUTY
             await self.cog.update_nickname_for_shift_status(self.user, 'duty')
 
             # Update duty roles
-            await self.cog.update_duty_roles(self.user, shift_type, 'duty')
+            await self.cog.update_duty_roles(self.user, type, 'duty')
 
             # Get the newly created shift
             shift = await self.cog.get_active_shift(self.user.id)
@@ -1802,7 +1811,7 @@ class ShiftTypeSelectView(discord.ui.View):
                 inline=False
             )
 
-            embed.set_footer(text=f"Shift Type: {shift['shift_type']}")
+            embed.set_footer(text=f"Shift Type: {shift['type']}")
 
             # Create the active view
             view = ShiftActiveView(self.cog, self.user, shift)
@@ -1828,7 +1837,7 @@ class ShiftTypeSelectView(discord.ui.View):
 class AdminShiftTypeSelectView(discord.ui.View):
     """View for admins to select shift type"""
 
-    def __init__(self, cog: ShiftManagementCog, admin: discord.Member, target_user: discord.Member, shift_types: list):
+    def __init__(self, cog: ShiftManagementCog, admin: discord.Member, target_user: discord.Member, types: list):
         super().__init__(timeout=60)
         self.cog = cog
         self.admin = admin
@@ -1845,19 +1854,19 @@ class AdminShiftTypeSelectView(discord.ui.View):
                 except:
                     pass
 
-        for shift_type in shift_types:
+        for type in types:
             button = discord.ui.Button(
-                label=shift_type,
+                label=type,
                 style=discord.ButtonStyle.primary,
-                custom_id=f"admin_shift_type_{shift_type}"
+                custom_id=f"admin_type_{type}"
             )
-            button.callback = self.create_callback(shift_type)
+            button.callback = self.create_callback(type)
             self.add_item(button)
 
-    def create_callback(self, shift_type: str):
+    def create_callback(self, type: str):
         async def callback(interaction: discord.Interaction):
             await interaction.response.defer()
-            await self.cog.show_admin_shift_panel(interaction, self.target_user, shift_type)
+            await self.cog.show_admin_shift_panel(interaction, self.target_user, type)
             self.stop()
 
         return callback
@@ -1875,18 +1884,18 @@ class AdminShiftTypeSelectView(discord.ui.View):
 class AdminShiftControlView(discord.ui.View):
     """Main admin control view with dropdown and action buttons"""
 
-    def __init__(self, cog: ShiftManagementCog, admin: discord.Member, target_user: discord.Member, shift_type: str,
+    def __init__(self, cog: ShiftManagementCog, admin: discord.Member, target_user: discord.Member, type: str,
                  active_shift: dict):
         super().__init__(timeout=300)
         self.cog = cog
         self.admin = admin
         self.target_user = target_user
-        self.shift_type = shift_type
+        self.type = type
         self.active_shift = active_shift
         self.message = None
 
         # Add dropdown for admin actions
-        self.add_item(AdminActionsSelect(cog, admin, target_user, shift_type))
+        self.add_item(AdminActionsSelect(cog, admin, target_user, type))
 
         async def on_timeout(self):
             """Clean up when view times out"""
@@ -1940,14 +1949,14 @@ class AdminShiftControlView(discord.ui.View):
             async with db.pool.acquire() as conn:
                 await conn.execute(
                     '''INSERT INTO shifts
-                       (discord_user_id, discord_username, shift_type, start_time, pause_duration)
+                       (discord_user_id, discord_username, type, start_time, pause_duration)
                        VALUES ($1, $2, $3, $4, 0)''',
-                    self.target_user.id, str(self.target_user), self.shift_type, datetime.utcnow()
+                    self.target_user.id, str(self.target_user), self.type, datetime.utcnow()
                 )
 
             # Update nickname and roles
             await self.cog.update_nickname_for_shift_status(self.target_user, 'duty')
-            await self.cog.update_duty_roles(self.target_user, self.shift_type, 'duty')
+            await self.cog.update_duty_roles(self.target_user, self.type, 'duty')
 
             await interaction.followup.send(
                 f"<:Accepted:1426930333789585509> Started shift for {self.target_user.mention}",
@@ -1955,7 +1964,7 @@ class AdminShiftControlView(discord.ui.View):
             )
 
             # Refresh panel
-            await self.cog.show_admin_shift_panel(interaction, self.target_user, self.shift_type)
+            await self.cog.show_admin_shift_panel(interaction, self.target_user, self.type)
         except Exception as e:
             await interaction.followup.send(
                 f"<:Denied:1426930694633816248> Error: {str(e)}",
@@ -1975,7 +1984,7 @@ class AdminShiftControlView(discord.ui.View):
                 )
 
             await self.cog.update_nickname_for_shift_status(self.target_user, 'break')
-            await self.cog.update_duty_roles(self.target_user, self.shift_type, 'break')
+            await self.cog.update_duty_roles(self.target_user, self.type, 'break')
 
             await interaction.followup.send(
                 f"⏸️ Paused shift for {self.target_user.mention}",
@@ -1983,7 +1992,7 @@ class AdminShiftControlView(discord.ui.View):
             )
 
             # Refresh panel
-            await self.cog.show_admin_shift_panel(interaction, self.target_user, self.shift_type)
+            await self.cog.show_admin_shift_panel(interaction, self.target_user, self.type)
         except Exception as e:
             await interaction.followup.send(
                 f"<:Denied:1426930694633816248> Error: {str(e)}",
@@ -2007,7 +2016,7 @@ class AdminShiftControlView(discord.ui.View):
                 )
 
             await self.cog.update_nickname_for_shift_status(self.target_user, 'duty')
-            await self.cog.update_duty_roles(self.target_user, self.shift_type, 'duty')
+            await self.cog.update_duty_roles(self.target_user, self.type, 'duty')
 
             await interaction.followup.send(
                 f"▶️ Resumed shift for {self.target_user.mention}",
@@ -2015,7 +2024,7 @@ class AdminShiftControlView(discord.ui.View):
             )
 
             # Refresh panel
-            await self.cog.show_admin_shift_panel(interaction, self.target_user, self.shift_type)
+            await self.cog.show_admin_shift_panel(interaction, self.target_user, self.type)
         except Exception as e:
             await interaction.followup.send(
                 f"<:Denied:1426930694633816248> Error: {str(e)}",
@@ -2041,7 +2050,7 @@ class AdminShiftControlView(discord.ui.View):
                 )
 
             await self.cog.update_nickname_for_shift_status(self.target_user, 'off')
-            await self.cog.update_duty_roles(self.target_user, self.shift_type, 'off')
+            await self.cog.update_duty_roles(self.target_user, self.type, 'off')
 
             await interaction.followup.send(
                 f"⏹️ Stopped shift for {self.target_user.mention}",
@@ -2049,7 +2058,7 @@ class AdminShiftControlView(discord.ui.View):
             )
 
             # Refresh panel
-            await self.cog.show_admin_shift_panel(interaction, self.target_user, self.shift_type)
+            await self.cog.show_admin_shift_panel(interaction, self.target_user, self.type)
         except Exception as e:
             await interaction.followup.send(
                 f"<:Denied:1426930694633816248> Error: {str(e)}",
@@ -2060,11 +2069,11 @@ class AdminShiftControlView(discord.ui.View):
 class AdminActionsSelect(discord.ui.Select):
     """Dropdown menu for admin actions"""
 
-    def __init__(self, cog: ShiftManagementCog, admin: discord.Member, target_user: discord.Member, shift_type: str):
+    def __init__(self, cog: ShiftManagementCog, admin: discord.Member, target_user: discord.Member, type: str):
         self.cog = cog
         self.admin = admin
         self.target_user = target_user
-        self.shift_type = shift_type
+        self.type = type
 
         options = [
             discord.SelectOption(label="Shift List", description="View shift history", emoji="<:List:1434953240155525201>"),
@@ -2123,12 +2132,12 @@ class AdminActionsSelect(discord.ui.Select):
 
     async def show_shift_list(self, interaction: discord.Interaction):
         """Show paginated shift list"""
-        view = ShiftListView(self.cog, self.admin, self.target_user, self.shift_type)
+        view = ShiftListView(self.cog, self.admin, self.target_user, self.type)
         await view.show_page(interaction, 0)
 
     async def show_modify_shift(self, interaction: discord.Interaction):
         """Show modify shift interface"""
-        view = ModifyShiftSelectView(self.cog, self.admin, self.target_user, self.shift_type)
+        view = ModifyShiftSelectView(self.cog, self.admin, self.target_user, self.type)
         await view.populate_shift_dropdown()  # Add this line
         await interaction.edit_original_response(
             content=f"Select a shift to modify for {self.target_user.mention}:",
@@ -2137,7 +2146,7 @@ class AdminActionsSelect(discord.ui.Select):
 
     async def show_delete_shift(self, interaction: discord.Interaction):
         """Show delete shift interface"""
-        view = DeleteShiftSelectView(self.cog, self.admin, self.target_user, self.shift_type)
+        view = DeleteShiftSelectView(self.cog, self.admin, self.target_user, self.type)
         await view.populate_shift_dropdown()  # Add this line
         await interaction.edit_original_response(
             content=f"Select a shift to delete for {self.target_user.mention}:",
@@ -2152,17 +2161,17 @@ class AdminActionsSelect(discord.ui.Select):
                 '''SELECT COUNT(*)
                    FROM shifts
                    WHERE discord_user_id = $1
-                     AND shift_type = $2''',
-                self.target_user.id, self.shift_type
+                     AND type = $2''',
+                self.target_user.id, self.type
             )
 
         embed = discord.Embed(
             title=f"**Clear User Shifts**",
-            description=f"Are you sure you want to clear **{count}** shifts for this user under the `**{self.shift_type}**` shift type?\n\nThis cannot be undone.",
+            description=f"Are you sure you want to clear **{count}** shifts for this user under the `**{self.type}**` shift type?\n\nThis cannot be undone.",
             color=discord.Color.red()
         )
 
-        view = ClearShiftsConfirmView(self.cog, self.admin, self.target_user, self.shift_type, count)
+        view = ClearShiftsConfirmView(self.cog, self.admin, self.target_user, self.type, count)
         await interaction.followup.send(embed=embed, view=view)
 
 
@@ -2170,12 +2179,12 @@ class ShiftListView(discord.ui.View):
     """Paginated shift list view"""
     ITEMS_PER_PAGE = 4
 
-    def __init__(self, cog: ShiftManagementCog, admin: discord.Member, target_user: discord.Member, shift_type: str):
+    def __init__(self, cog: ShiftManagementCog, admin: discord.Member, target_user: discord.Member, type: str):
         super().__init__(timeout=300)
         self.cog = cog
         self.admin = admin
         self.target_user = target_user
-        self.shift_type = shift_type
+        self.type = type
         self.current_page = 0
         self.total_pages = 0
         self.shifts = []
@@ -2198,10 +2207,10 @@ class ShiftListView(discord.ui.View):
                 '''SELECT *
                    FROM shifts
                    WHERE discord_user_id = $1
-                     AND shift_type = $2
+                     AND type = $2
                      AND end_time IS NOT NULL
                    ORDER BY end_time DESC''',
-                self.target_user.id, self.shift_type
+                self.target_user.id, self.type
             )
         self.total_pages = max(1, math.ceil(len(self.shifts) / self.ITEMS_PER_PAGE))
 
@@ -2246,7 +2255,7 @@ class ShiftListView(discord.ui.View):
                 inline=False
             )
 
-        embed.set_footer(text=f"Shift Type: {self.shift_type} • Page {self.current_page + 1}/{self.total_pages}")
+        embed.set_footer(text=f"Shift Type: {self.type} • Page {self.current_page + 1}/{self.total_pages}")
 
         # Update buttons
         for item in self.children:
@@ -2305,12 +2314,12 @@ class ShiftListView(discord.ui.View):
 class ModifyShiftSelectView(discord.ui.View):
     """View for selecting which shift to modify"""
 
-    def __init__(self, cog: ShiftManagementCog, admin: discord.Member, target_user: discord.Member, shift_type: str):
+    def __init__(self, cog: ShiftManagementCog, admin: discord.Member, target_user: discord.Member, type: str):
         super().__init__(timeout=60)
         self.cog = cog
         self.admin = admin
         self.target_user = target_user
-        self.shift_type = shift_type
+        self.type = type
         self.message = None
 
     async def on_timeout(self):
@@ -2361,7 +2370,7 @@ class ModifyShiftSelectView(discord.ui.View):
             description=f"**Status:** <:Offline:1434951694319620197> Ended\n**Duration:** {self.cog.format_duration(active_duration)}",
             color=discord.Color(0x00000)
         )
-        embed.set_footer(text=f"{shift['id']} • Shift Type: {shift['shift_type']}")
+        embed.set_footer(text=f"{shift['id']} • Shift Type: {shift['type']}")
 
         view = ModifyShiftActionsView(self.cog, self.admin, self.target_user, shift)
         await interaction.followup.send(embed=embed, view=view)
@@ -2444,10 +2453,10 @@ class ModifyShiftActionsView(discord.ui.View):
                 '''SELECT *
                    FROM shifts
                    WHERE discord_user_id = $1
-                     AND shift_type = $2
+                     AND type = $2
                      AND end_time IS NOT NULL
                    ORDER BY end_time DESC LIMIT 10''',
-                self.target_user.id, self.shift_type
+                self.target_user.id, self.type
             )
 
         if not recent_shifts:
@@ -2630,12 +2639,12 @@ class TimeModifyModal(discord.ui.Modal):
 class DeleteShiftSelectView(discord.ui.View):
     """View for selecting which shift to delete"""
 
-    def __init__(self, cog: ShiftManagementCog, admin: discord.Member, target_user: discord.Member, shift_type: str):
+    def __init__(self, cog: ShiftManagementCog, admin: discord.Member, target_user: discord.Member, type: str):
         super().__init__(timeout=60)
         self.cog = cog
         self.admin = admin
         self.target_user = target_user
-        self.shift_type = shift_type
+        self.type = type
         self.message = None
 
     async def on_timeout(self):
@@ -2691,7 +2700,7 @@ class DeleteShiftSelectView(discord.ui.View):
             color=discord.Color.red()
         )
 
-        embed.set_footer(text=f"{shift['id']} • Shift Type: {shift['shift_type']}")
+        embed.set_footer(text=f"{shift['id']} • Shift Type: {shift['type']}")
 
         view = DeleteShiftConfirmView(self.cog, self.admin, self.target_user, shift)
         await interaction.followup.send(embed=embed, view=view)
@@ -2769,10 +2778,10 @@ class DeleteShiftConfirmView(discord.ui.View):
                 '''SELECT *
                    FROM shifts
                    WHERE discord_user_id = $1
-                     AND shift_type = $2
+                     AND type = $2
                      AND end_time IS NOT NULL
                    ORDER BY end_time DESC LIMIT 10''',
-                self.target_user.id, self.shift_type
+                self.target_user.id, self.type
             )
 
         if not recent_shifts:
@@ -2840,13 +2849,13 @@ class DeleteShiftConfirmView(discord.ui.View):
 class ClearShiftsConfirmView(discord.ui.View):
     """Confirmation view for clearing all shifts"""
 
-    def __init__(self, cog: ShiftManagementCog, admin: discord.Member, target_user: discord.Member, shift_type: str,
+    def __init__(self, cog: ShiftManagementCog, admin: discord.Member, target_user: discord.Member, type: str,
                  count: int):
         super().__init__(timeout=60)
         self.cog = cog
         self.admin = admin
         self.target_user = target_user
-        self.shift_type = shift_type
+        self.type = type
         self.count = count
         self.armed = False
         self.message = None
@@ -2922,12 +2931,12 @@ class ClearShiftsConfirmView(discord.ui.View):
                     '''DELETE
                        FROM shifts
                        WHERE discord_user_id = $1
-                         AND shift_type = $2''',
-                    self.target_user.id, self.shift_type
+                         AND type = $2''',
+                    self.target_user.id, self.type
                 )
 
             await interaction.followup.send(
-                f"<:Accepted:1426930333789585509> Cleared {self.count} shifts for {self.target_user.mention} ({self.shift_type})",
+                f"<:Accepted:1426930333789585509> Cleared {self.count} shifts for {self.target_user.mention} ({self.type})",
                 ephemeral=True
             )
 
@@ -2998,11 +3007,11 @@ class ShiftIDModal(discord.ui.Modal):
 
             if self.action == "modify":
                 # Show modify panel
-                view = ModifyShiftSelectView(self.cog, self.admin, self.target_user, shift_dict['shift_type'])
+                view = ModifyShiftSelectView(self.cog, self.admin, self.target_user, shift_dict['type'])
                 await view.show_modify_panel(interaction, shift_dict)
             elif self.action == "delete":
                 # Show delete confirm
-                view = DeleteShiftSelectView(self.cog, self.admin, self.target_user, shift_dict['shift_type'])
+                view = DeleteShiftSelectView(self.cog, self.admin, self.target_user, shift_dict['type'])
                 await view.show_delete_confirm(interaction, shift_dict)
 
         except ValueError:

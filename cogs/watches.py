@@ -16,7 +16,15 @@ from database import db, load_watches, load_scheduled_votes, load_completed_watc
 # Bot owner ID
 OWNER_ID = 678475709257089057
 
-IGNORED_WATCH_MESSAGE_IDS = {1392378992555855903, 1398915640995086427, 1403241099505438730, 1406853589821034506, 1421301778552717353, 1422094211670478930, 1428968521735602246}  # replace with actual message IDs
+IGNORED_STATS_MESSAGE_IDS = {
+    1392378992555855903,
+    1398915640995086427,
+    1403241099505438730,
+    1406853589821034506,
+    1421301778552717353,
+    1422094211670478930,
+    1428968521735602246
+}
 
 
 # Configuration for multiple guilds
@@ -214,14 +222,8 @@ class VoteButton(discord.ui.View):
                     start_embed.set_author(name=f'Requested by {interaction.user.display_name}',
                                            icon_url=interaction.user.display_avatar.url)
 
-                    # Add voters embed
-                    voters_embed = discord.Embed(title='Voters:', colour=embed_colour)
-                    voter_mentions = []
-                    for user_id in self.voted_users:
-                        user = interaction.guild.get_member(user_id)
-                        if user:
-                            voter_mentions.append(user.mention)
-                    voters_embed.description = '\n'.join(voter_mentions)
+                    voters_content = "**Voters:**\n" + "\n".join([f"<@{uid}>" for uid in self.voted_users])
+                    voters_msg = await interaction.channel.send(content=voters_content)
 
                     watch_view = WatchRoleButton(self.message_id)
                     guild_config = get_guild_config(interaction.guild.id)
@@ -230,8 +232,14 @@ class VoteButton(discord.ui.View):
                     # SINGLE response - edit message to watch state
                     await interaction.response.edit_message(
                         content=f'-# ||<@&{watch_role_id}> {interaction.user.mention} <@&1285474077556998196> <@&1365536209681514636>||' if watch_role_id else '',
-                        embeds=[start_embed, voters_embed],
+                        embeds=[start_embed],
                         view=watch_view
+                    )
+
+                    # Send voters as reply
+                    voters_msg = await interaction.channel.send(
+                        content=voters_content,
+                        reference=interaction.message
                     )
 
                     await db.add_active_watch(
@@ -244,6 +252,7 @@ class VoteButton(discord.ui.View):
                         station=self.station,
                         started_at=interaction.created_at,
                         has_voters_embed=True,
+                        related_messages=[msg.id, voters_msg.id],
                         comms_status=self.comms_status
                     )
 
@@ -256,6 +265,7 @@ class VoteButton(discord.ui.View):
                         'station': self.station,
                         'started_at': int(interaction.created_at.timestamp()),
                         'has_voters_embed': True,
+                        'related_messages': [msg.id, voters_msg.id],
                         'comms_status': self.comms_status
                     }
 
@@ -588,7 +598,7 @@ class WatchCog(commands.Cog):
         print("✅ Reloaded active watch cache")
 
     async def calculate_watch_statistics(self) -> dict:
-        """Calculate statistics from completed watches"""
+        """Calculate statistics from completed watches (with filtering)"""
         try:
             completed_watches = await load_completed_watches()
 
@@ -605,9 +615,28 @@ class WatchCog(commands.Cog):
                     'average_duration': 'N/A'
                 }
 
+            filtered_watches = {
+                msg_id: watch_data
+                for msg_id, watch_data in completed_watches.items()
+                if watch_data.get('colour', '').upper() != 'LCS'
+            }
+
+            print(f"🔍 Filtered out {len(completed_watches) - len(filtered_watches)} watches from stats")
+
+            if not filtered_watches:
+                print("⚠️ All watches were filtered out")
+                return {
+                    'total_watches': 0,
+                    'longest_duration': 'N/A',
+                    'most_attendees': 'N/A',
+                    'most_common_colour': 'N/A',
+                    'most_active_station': 'N/A',
+                    'average_duration': 'N/A'
+                }
+
             # Filter successful watches
             successful_watches = []
-            for watch in completed_watches.values():
+            for watch in filtered_watches.values():
                 status = watch.get('status', 'completed')
                 if status != 'failed':
                     started_at = watch.get('started_at', 0)
@@ -615,7 +644,7 @@ class WatchCog(commands.Cog):
                     if started_at > 0 and ended_at > 0 and ended_at > started_at:
                         successful_watches.append(watch)
 
-            print(f"✅ Stats Calculation: {len(successful_watches)} successful watches")
+            print(f"✅ Stats Calculation: {len(successful_watches)} successful watches (after filtering)")
 
             if not successful_watches:
                 return {
@@ -866,7 +895,7 @@ class WatchCog(commands.Cog):
             }
             embed_colour = colour_map.get(colour, discord.Colour.orange())
 
-            embed = discord.Embed(title=f'🚨 {colour} Watch Announcement 🚨', colour=embed_colour)
+            embed = discord.Embed(title=f'{colour} Watch Announcement', colour=embed_colour)
             embed.add_field(name='Station', value=f'`{station}`', inline=True)
             embed.add_field(name='Time', value=f'<t:{int(interaction.created_at.timestamp())}:R>', inline=True)
             embed.add_field(name='Watch Leader', value=f'{interaction.user.mention}\n‎', inline=True)
@@ -1109,7 +1138,6 @@ class WatchCog(commands.Cog):
     )
     async def watch_end(self, interaction: discord.Interaction, watch: str, attendees: int):
         try:
-
             allowed_role_ids = [1285474077556998196, 1389550689113473024, 1365536209681514636]
             user_roles = [role.id for role in interaction.user.roles]
 
@@ -1141,9 +1169,11 @@ class WatchCog(commands.Cog):
                 )
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
                 await db.remove_active_watch(int(watch))
-                await self.update_stats_embed(channel)
                 del active_watches[watch]
-                await self.update_stats_embed(channel)
+
+                # Only update stats if not LCS
+                if watch_data.get('colour', '').upper() != 'LCS':
+                    await self.update_stats_embed(channel)
                 return
 
             # Get the original message
@@ -1159,22 +1189,10 @@ class WatchCog(commands.Cog):
                 del active_watches[watch]
                 return
 
-            # DELETE ALL RELATED MESSAGES (boosts, etc.)
-            related_messages = watch_data.get('related_messages', [int(watch)])
-            for msg_id in related_messages:
-                try:
-                    msg_to_delete = await channel.fetch_message(msg_id)
-                    await msg_to_delete.delete()
-                except (discord.NotFound, discord.Forbidden):
-                    pass
-                except Exception as e:
-                    print(f'Error deleting related message {msg_id}: {e}')
-
             # DELETE ALL USER MESSAGES (keep bot messages) since watch started
             try:
                 deleted_count = 0
                 async for message in channel.history(after=discord.Object(id=int(watch)), limit=None):
-                    # Delete if it's a user message (not from a bot)
                     if not message.author.bot:
                         try:
                             await message.delete()
@@ -1252,6 +1270,10 @@ class WatchCog(commands.Cog):
             # Remove from active watches
             await db.remove_active_watch(int(watch))
             del active_watches[watch]
+
+            # ALWAYS update stats embed - the calculation function will filter out LCS watches
+            await self.update_stats_embed(channel)
+            print("✅ Stats embed updated (LCS watches are filtered in calculation)")
 
             success_embed = discord.Embed(
                 description=f'<:Accepted:1426930333789585509> Watch ended successfully with {attendees} attendees!',
@@ -1624,7 +1646,7 @@ class WatchCog(commands.Cog):
                 missed_by_minutes = (current_time - vote_data['scheduled_time']) // 60
 
                 embed = discord.Embed(
-                    title='⚠️ Missed Scheduled Vote',
+                    title='Missed Scheduled Vote',
                     description=f"A **{vote_data['colour']} Watch Vote** for **{vote_data['station']}** was scheduled but not sent because the bot was offline.",
                     colour=discord.Colour.orange()
                 )
@@ -1685,7 +1707,7 @@ class WatchCog(commands.Cog):
             }
             embed_colour = colour_map.get(vote_data['colour'], discord.Colour.orange())
 
-            embed = discord.Embed(title=f"🗳️ {vote_data['colour']} Watch Vote 🗳️", colour=embed_colour)
+            embed = discord.Embed(title=f"{vote_data['colour']} Watch Vote", colour=embed_colour)
             embed.add_field(name='Station', value=f"`{vote_data['station']}`", inline=True)
             embed.add_field(name='Required Votes', value=f"`{vote_data['votes']}`", inline=True)
 
@@ -1893,7 +1915,7 @@ class WatchCog(commands.Cog):
             }
             embed_colour = colour_map.get(colour, discord.Colour.orange())
 
-            start_embed = discord.Embed(title=f'🚨 {colour} Watch Announcement 🚨', colour=embed_colour)
+            start_embed = discord.Embed(title=f'{colour} Watch Announcement', colour=embed_colour)
             start_embed.add_field(name='Station', value=f'`{station}`', inline=True)
             start_embed.add_field(name='Time', value=discord.utils.format_dt(discord.utils.utcnow(), style='R'),
                                   inline=True)
@@ -1934,11 +1956,8 @@ class WatchCog(commands.Cog):
                 start_embed.set_author(name=f'Requested by {user_name}')
 
             # Add voters embed
-            voters_embed = discord.Embed(title='Voters:', colour=embed_colour)
-            voter_mentions = []
-            for voter_id in voters:
-                voter_mentions.append(f'<@{voter_id}>')
-            voters_embed.description = '\n'.join(voter_mentions)
+            voters_content = "**Voters:**\n" + "\n".join([f"<@{voter_id}>" for voter_id in voters])
+            voters_msg = await channel.send(content=voters_content)
 
             view = WatchRoleButton(0)
 
@@ -1947,6 +1966,12 @@ class WatchCog(commands.Cog):
                 content=f'-# ||<@&{watch_role_id}><@{user_id}><@&1285474077556998196><@&1365536209681514636>||' if watch_role_id else '',
                 embeds=[start_embed, voters_embed],
                 view=view
+            )
+
+            # Send voters as reply
+            voters_msg = await interaction.channel.send(
+                content=voters_content,
+                reference=interaction.message
             )
 
             view.message_id = msg.id
@@ -1965,7 +1990,7 @@ class WatchCog(commands.Cog):
                 station=station,
                 started_at=current_timestamp,
                 has_voters_embed=True,  # Changed to True since we have voters
-                related_messages=[msg.id],
+                related_messages=[self.message_id, voters_msg.id],
                 comms_status=comms_status
             )
 
@@ -1978,7 +2003,7 @@ class WatchCog(commands.Cog):
                 'station': station,
                 'started_at': current_timestamp,
                 'has_voters_embed': True,
-                'related_messages': [msg.id],
+                'related_messages': [self.message_id, voters_msg.id],
                 'comms_status': comms_status
             }
 
@@ -2443,7 +2468,7 @@ class WatchCog(commands.Cog):
             embed_colour = colour_map.get(watch_data['colour'], discord.Colour.orange())
 
             boost_embed = discord.Embed(
-                title=f"🚨 {watch_data['colour']} Watch Boost - Join Now! 🚨",
+                title=f"{watch_data['colour']} Watch Low",
                 description=f"A **{watch_data['colour']} Watch** is currently active at **{watch_data['station']}**!\n\nWe need more people to join! If you're available, hop in now!",
                 colour=embed_colour
             )
@@ -2456,7 +2481,7 @@ class WatchCog(commands.Cog):
                                    icon_url=interaction.user.display_avatar.url)
 
             boost_msg = await channel.send(
-                content=f'||<@&{watch_role_id}> <@&1285474077556998196> <@&1365536209681514636>||' if watch_role_id else '',
+                content=f'||<@&{watch_role_id}><@&1285474077556998196><@{interaction.user.id}><@&1365536209681514636>||' if watch_role_id else '',
                 embed=boost_embed
             )
 
