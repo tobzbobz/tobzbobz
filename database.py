@@ -558,6 +558,102 @@ class Database:
                 traceback.print_exc()
                 return False
 
+    # === SOUNDBOARD MODERATION ===
+    async def add_soundboard_disconnect(self, user_id: int, user_name: str,
+                                        channel_id: int, channel_name: str,
+                                        guild_id: int, count: int, timespan: float):
+        """Log a soundboard spam disconnect"""
+        async with self.pool.acquire() as conn:
+            try:
+                await conn.execute(
+                    '''INSERT INTO soundboard_disconnects
+                       (user_id, user_name, channel_id, channel_name, guild_id, count, timespan)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7)''',
+                    user_id, user_name, channel_id, channel_name, guild_id, count, timespan
+                )
+                return True
+            except Exception as e:
+                print(f'<:Denied:1426930694633816248> Error logging soundboard disconnect: {e}')
+                return False
+
+    async def get_soundboard_logs(self, guild_id: int, user_id: int = None,
+                                  limit: int = 10) -> List[Dict]:
+        """Get soundboard disconnect logs"""
+        async with self.pool.acquire() as conn:
+            if user_id:
+                rows = await conn.fetch(
+                    '''SELECT *
+                       FROM soundboard_disconnects
+                       WHERE guild_id = $1
+                         AND user_id = $2
+                       ORDER BY timestamp DESC LIMIT $3''',
+                    guild_id, user_id, limit
+                )
+            else:
+                rows = await conn.fetch(
+                    '''SELECT *
+                       FROM soundboard_disconnects
+                       WHERE guild_id = $1
+                       ORDER BY timestamp DESC LIMIT $2''',
+                    guild_id, limit
+                )
+            return [dict(row) for row in rows]
+
+    async def get_soundboard_log_count(self, guild_id: int, user_id: int = None) -> int:
+        """Get total count of soundboard disconnects"""
+        async with self.pool.acquire() as conn:
+            if user_id:
+                return await conn.fetchval(
+                    'SELECT COUNT(*) FROM soundboard_disconnects WHERE guild_id = $1 AND user_id = $2',
+                    guild_id, user_id
+                )
+            else:
+                return await conn.fetchval(
+                    'SELECT COUNT(*) FROM soundboard_disconnects WHERE guild_id = $1',
+                    guild_id
+                )
+
+    async def clear_soundboard_logs(self, guild_id: int, days: int = 0,
+                                    user_id: int = None) -> int:
+        """Clear old soundboard logs, returns number of deleted rows"""
+        async with self.pool.acquire() as conn:
+            if days == 0:
+                # Clear all logs
+                if user_id:
+                    result = await conn.execute(
+                        'DELETE FROM soundboard_disconnects WHERE guild_id = $1 AND user_id = $2',
+                        guild_id, user_id
+                    )
+                else:
+                    result = await conn.execute(
+                        'DELETE FROM soundboard_disconnects WHERE guild_id = $1',
+                        guild_id
+                    )
+            else:
+                # Clear logs older than X days
+                if user_id:
+                    result = await conn.execute(
+                        '''DELETE
+                           FROM soundboard_disconnects
+                           WHERE guild_id = $1
+                             AND user_id = $2
+                             AND timestamp
+                               < NOW() - INTERVAL '%s days' ''',
+                        guild_id, user_id, days
+                    )
+                else:
+                    result = await conn.execute(
+                        '''DELETE
+                           FROM soundboard_disconnects
+                           WHERE guild_id = $1
+                             AND timestamp
+                               < NOW() - INTERVAL '%s days' ''',
+                        guild_id, days
+                    )
+
+            # Extract the number from "DELETE X"
+            return int(result.split()[-1]) if result.split()[-1].isdigit() else 0
+
 # === GLOBAL DATABASE INSTANCE ===
 db = Database()
 

@@ -170,4 +170,4 @@ class TopicCog(commands.Cog):
             )
 
 async def setup(bot):
-    await bot.add_cog(TopicChangeCog(bot))
+    await bot.add_cog(TopicCog(bot))
