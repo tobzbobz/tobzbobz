@@ -8,7 +8,7 @@ OWNER_ID = 678475709257089057
 # Configuration for multiple guilds
 GUILD_CONFIGS = {
     1282916959062851634: {
-        'allowed_role_ids': [1365536209681514636, 1389113393511923863, 1285474077556998196, 1389113460687765534]  # Role IDs that can use the command
+        'allowed_role_ids': [1365536209681514636, 1389113393511923863, 1285474077556998196, 1389113460687765534, 1389550689113473024]  # Role IDs that can use the command
     },
     1425867713183744023: {
         'allowed_role_ids': None  # Role IDs that can use the command
@@ -74,7 +74,7 @@ class InactiveTicketCog(commands.Cog):
             # Create the inactive ticket embed
             # Create the inactive ticket embed
             embed = discord.Embed(
-                title='⚠️ Inactive Ticket Alert ⚠️',
+                title='Inactive Ticket Alert',
                 description=f'''Kia Ora {user.mention},\n\nWe've noticed that this ticket has been inactive for a bit of time. To ensure we can assist you to the fullest, please respond within 12 hours of this message and let us know what still needs to be done or how else we can help! If you don't respond to us it's ok, the ticket will be automatically closed to help keep things organised for us.\n\nIf the ticket does get closed and you still need assistance, don't worry you can always open a new ticket at any time.\n\nWe're always here to help, so please let us know how we can assist you further or what else we can assist you with!\n\nThank you for your patience and understanding.\n\n*Cheers, {interaction.user.mention}.*''',
                 colour=discord.Colour(0xFFFFFF)
             )

@@ -6,7 +6,9 @@ import asyncio
 # Log channels to monitor for auto-publishing
 LOG_CHANNELS = {
     1434770430505390221,  # SYNC_LOG_CHANNEL_ID
-    1435318020619632851,  # CALLSIGN_REQUEST_LOG_CHANNEL_ID
+    1435318020619632851,
+    1435489971342409809,
+    1435499104221532231   # CALLSIGN_REQUEST_LOG_CHANNEL_ID
 }
 
 # Error indicators to check for (messages containing these will NOT be published)
@@ -82,48 +84,23 @@ class AutoPublishCog(commands.Cog):
     def is_error_message(self, message: discord.Message) -> bool:
         """
         Check if a message is an error message.
-        Returns True if it's an error (should NOT be published).
-        Returns False if it's a success message (should be published).
+        Returns True if it's a RED error (should NOT be published).
+        Returns False if it's not a red error (should be published).
         """
-        # Check message content
-        content = message.content.lower() if message.content else ""
-
-        # Check for error indicators in content
-        for indicator in ERROR_INDICATORS:
-            if indicator.lower() in content:
-                return True
-
-        # Check embeds
+        # Check embeds for RED color - this is the key indicator
         if message.embeds:
             for embed in message.embeds:
-                # Check embed title
-                if embed.title:
-                    title_lower = embed.title.lower()
-                    for indicator in ERROR_INDICATORS:
-                        if indicator.lower() in title_lower:
-                            return True
-
-                # Check embed description
-                if embed.description:
-                    desc_lower = embed.description.lower()
-                    for indicator in ERROR_INDICATORS:
-                        if indicator.lower() in desc_lower:
-                            return True
-
-                # Check embed color (red = error)
+                # Check embed color - RED = error (do not publish)
                 if embed.color and embed.color == discord.Color.red():
                     return True
 
-                # Check embed fields
-                for field in embed.fields:
-                    field_name_lower = field.name.lower() if field.name else ""
-                    field_value_lower = field.value.lower() if field.value else ""
+                # Also check for "Failed" or "Error" in title of RED embeds
+                if embed.title:
+                    title_lower = embed.title.lower()
+                    if ("failed" in title_lower or "error" in title_lower) and embed.color == discord.Color.red():
+                        return True
 
-                    for indicator in ERROR_INDICATORS:
-                        if indicator.lower() in field_name_lower or indicator.lower() in field_value_lower:
-                            return True
-
-        # If we get here, it's not an error message
+        # If we get here, it's not a red error message (blue messages with errors are fine)
         return False
 
     def should_publish(self, message: discord.Message) -> bool:
