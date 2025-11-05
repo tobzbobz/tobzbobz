@@ -4,8 +4,6 @@ from discord import app_commands
 from datetime import datetime, timedelta
 
 from database import db, ensure_database_connected
-from your_db_module import initialize_database
-await db.connect()
 
 import asyncio
 import math
@@ -95,10 +93,10 @@ class ShiftManagementCog(commands.Cog):
     async def on_cog_load(self):
         """Run initialization tasks when cog loads"""
         # Wait for bot to be ready
-        await ensure_database_connected()
         await self.bot.wait_until_ready()
 
-        await initialize_database()
+        # Ensure database is connected
+        await ensure_database_connected()
 
         # Clean up stale shifts
         await self.cleanup_stale_shifts(self.bot)

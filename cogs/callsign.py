@@ -174,6 +174,16 @@ async def add_callsign_to_database(callsign: str, discord_user_id: int, discord_
                                    hhstj_prefix: str, approved_by_id: int, approved_by_name: str):
     """Add a new callsign to the database"""
     async with db.pool.acquire() as conn:
+        # ✅ CHECK FOR CONFLICTS FIRST (before any DELETE)
+        if callsign not in ["BLANK", "###"]:
+            existing = await conn.fetchrow(
+                'SELECT discord_user_id FROM callsigns WHERE callsign = $1 AND fenz_prefix = $2',
+                callsign, fenz_prefix
+            )
+            if existing and existing['discord_user_id'] != discord_user_id:
+                raise ValueError(
+                    f"Callsign {fenz_prefix}-{callsign} is already assigned to user {existing['discord_user_id']}")
+
         # Check if user already has ANY callsign
         old_callsigns = await conn.fetch(
             'SELECT * FROM callsigns WHERE discord_user_id = $1',
@@ -197,47 +207,22 @@ async def add_callsign_to_database(callsign: str, discord_user_id: int, discord_
             discord_user_id
         )
 
-        existing = await conn.fetchrow(
-            "SELECT discord_user_id, discord_username FROM callsigns WHERE callsign = $1 AND fenz_prefix = $2",
-            record['callsign'], record['fenz_prefix']
-        )
-
-        if existing and existing['discord_user_id'] != record['discord_user_id']:
-            # Someone else owns this callsign → track it
-            failed_callsigns.append({
-                "discord_username": record['discord_username'],
-                "discord_user_id": record['discord_user_id'],
-                "callsign": record['callsign'],
-                "owned_by": existing['discord_username'],
-                "owner_id": existing['discord_user_id']
-            })
-
-        # Insert the new callsign with proper approved_by fields
+        # Insert the new callsign
         await conn.execute(
             '''INSERT INTO callsigns
                (callsign, discord_user_id, discord_username, roblox_user_id, roblox_username,
                 fenz_prefix, hhstj_prefix, approved_by_id, approved_by_name, callsign_history)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (callsign, fenz_prefix) DO
-            UPDATE SET
-                discord_user_id = EXCLUDED.discord_user_id,
-                discord_username = EXCLUDED.discord_username,
-                roblox_user_id = EXCLUDED.roblox_user_id,
-                roblox_username = EXCLUDED.roblox_username,
-                hhstj_prefix = EXCLUDED.hhstj_prefix,
-                approved_by_id = EXCLUDED.approved_by_id,
-                approved_by_name = EXCLUDED.approved_by_name,
-                callsign_history = EXCLUDED.callsign_history,
-                approved_at = NOW()''',
-            record['callsign'],
-            record['discord_user_id'],
-            record['discord_username'],
-            record['roblox_user_id'],
-            record['roblox_username'],
-            record['fenz_prefix'],
-            record['hhstj_prefix'],
-            self.bot.user.id,
-            "Auto-sync",
-            json.dumps(record.get('callsign_history', []))
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)''',
+            callsign,
+            discord_user_id,
+            discord_username,
+            roblox_user_id,
+            roblox_username,
+            fenz_prefix,
+            hhstj_prefix,
+            approved_by_id,
+            approved_by_name,
+            json.dumps(history)
         )
 
 def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_username: str,
