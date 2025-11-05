@@ -775,7 +775,7 @@ async def load_watches():
                 'channel_id': row['channel_id'],
                 'colour': row['colour'],
                 'station': row['station'],
-                'started_at': int(row['started_at'].timestamp())
+                'started_at': int(row['started_at'].timestamp()),
                 'has_voters_embed': row.get('has_voters_embed', False),
                 'original_colour': row.get('original_colour'),
                 'original_station': row.get('original_station'),
