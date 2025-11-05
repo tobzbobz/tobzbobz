@@ -1361,15 +1361,16 @@ class ShiftStartView(discord.ui.View):
     @discord.ui.button(label="Start", style=discord.ButtonStyle.success, emoji="<:Play:1434957147829047467>")
     async def start_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
-
-        # Only one shift type, start it directly
-        await self.start_shift(interaction, self.types[0])
+        try:
+            # Only one shift type, start it directly
+            await self.start_shift(interaction, self.types[0])
 
         except Exception as e:
             await interaction.followup.send(
                 f"<:Denied:1426930694633816248> Error: {str(e)}",
                 ephemeral=True
             )
+
 
     async def start_shift(self, interaction: discord.Interaction, type: str):
         """Start a new shift"""
@@ -1569,8 +1570,6 @@ class ShiftActiveView(discord.ui.View):
             embed.set_footer(text=f"Shift Type: {self.shift['type']}")
 
             await self.cog.end_shift_and_show_summary(interaction, self.shift)
-            # Don't create new view - the embed already shows the summary with last shift
-            await interaction.edit_original_response(embed=embed, view=None)
 
         except Exception as e:
             await interaction.followup.send(
@@ -1728,7 +1727,6 @@ class ShiftBreakView(discord.ui.View):
             embed.set_footer(text=f"Shift Type: {self.shift['type']}")
 
             await self.cog.end_shift_and_show_summary(interaction, self.shift)
-            await interaction.edit_original_response(embed=embed, view=view)  # Only this one
 
 
         except Exception as e:
@@ -1842,7 +1840,7 @@ class AdminShiftTypeSelectView(discord.ui.View):
         self.cog = cog
         self.admin = admin
         self.target_user = target_user
-        self.message = none
+        self.message = None
 
         async def on_timeout(self):
             """Clean up when view times out"""
