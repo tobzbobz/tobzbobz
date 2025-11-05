@@ -654,6 +654,104 @@ class Database:
             # Extract the number from "DELETE X"
             return int(result.split()[-1]) if result.split()[-1].isdigit() else 0
 
+    # === VC REQUESTS === (Add this section to your database.py)
+
+    async def add_vc_request(self, message_id: int, channel_id: int, user_id: int,
+                             requested_channel_id: int, requester_id: int, reason: str,
+                             start_time, end_time, guild_id: int):
+        """Add a VC request to track"""
+        async with self.pool.acquire() as conn:
+            try:
+                # Convert to timezone-aware datetime
+                if isinstance(start_time, datetime):
+                    if start_time.tzinfo is None:
+                        start_time = start_time.replace(tzinfo=timezone.utc)
+
+                if isinstance(end_time, datetime):
+                    if end_time.tzinfo is None:
+                        end_time = end_time.replace(tzinfo=timezone.utc)
+
+                await conn.execute(
+                    '''INSERT INTO vc_requests
+                       (message_id, channel_id, user_id, requested_channel_id, requester_id,
+                        reason, start_time, end_time, guild_id, completed)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, FALSE)''',
+                    message_id, channel_id, user_id, requested_channel_id, requester_id,
+                    reason, start_time, end_time, guild_id
+                )
+                return True
+            except Exception as e:
+                print(f'<:Denied:1426930694633816248> Error adding VC request: {e}')
+                return False
+
+    async def get_active_vc_request(self, user_id: int):
+        """Get active VC request for a user"""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                '''SELECT *
+                   FROM vc_requests
+                   WHERE user_id = $1
+                     AND end_time > NOW()
+                     AND completed = FALSE
+                   ORDER BY start_time DESC LIMIT 1''',
+                user_id
+            )
+            return dict(row) if row else None
+
+    async def get_expired_vc_requests(self):
+        """Get all expired VC requests that haven't been completed"""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                '''SELECT *
+                   FROM vc_requests
+                   WHERE end_time <= NOW()
+                     AND completed = FALSE'''
+            )
+            return [dict(row) for row in rows]
+
+    async def add_vc_activity(self, request_id: int, activity_type: str,
+                              from_channel_id: int = None, to_channel_id: int = None,
+                              timestamp=None):
+        """Add a VC activity event"""
+        async with self.pool.acquire() as conn:
+            try:
+                if timestamp is None:
+                    timestamp = datetime.now(timezone.utc)
+                elif isinstance(timestamp, datetime) and timestamp.tzinfo is None:
+                    timestamp = timestamp.replace(tzinfo=timezone.utc)
+
+                await conn.execute(
+                    '''INSERT INTO vc_activity
+                           (request_id, activity_type, from_channel_id, to_channel_id, timestamp)
+                       VALUES ($1, $2, $3, $4, $5)''',
+                    request_id, activity_type, from_channel_id, to_channel_id, timestamp
+                )
+                return True
+            except Exception as e:
+                print(f'<:Denied:1426930694633816248> Error adding VC activity: {e}')
+                return False
+
+    async def get_vc_activities(self, request_id: int):
+        """Get all activities for a VC request"""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                '''SELECT *
+                   FROM vc_activity
+                   WHERE request_id = $1
+                   ORDER BY timestamp ASC''',
+                request_id
+            )
+            return [dict(row) for row in rows]
+
+    async def mark_vc_request_completed(self, request_id: int):
+        """Mark a VC request as completed"""
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                'UPDATE vc_requests SET completed = TRUE WHERE id = $1',
+                request_id
+            )
+            return True
+
 # === GLOBAL DATABASE INSTANCE ===
 db = Database()
 
@@ -677,7 +775,7 @@ async def load_watches():
                 'channel_id': row['channel_id'],
                 'colour': row['colour'],
                 'station': row['station'],
-                'started_at': started_at,
+                'started_at': int(row['started_at'].timestamp())
                 'has_voters_embed': row.get('has_voters_embed', False),
                 'original_colour': row.get('original_colour'),
                 'original_station': row.get('original_station'),

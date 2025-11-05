@@ -3,10 +3,10 @@ from discord.ext import commands
 from discord import app_commands
 from datetime import datetime, timedelta
 import asyncio
-from database import db  # Your existing database connection
+from database import db
 
 # Configuration
-VC_REQUEST_LOG_CHANNEL_ID = 1234567890  # Replace with your channel ID
+VC_REQUEST_LOG_CHANNEL_ID = 1234567890  # Replace with your log channel ID
 STAFF_ROLES = {  # Roles allowed to use /vc request
     1389550689113473024,
     1389113393511923863,
@@ -28,14 +28,14 @@ class VCRequestCog(commands.Cog):
     @app_commands.describe(
         user="The user being requested to join voice",
         voice_channel="The voice channel they should join",
-        reason="Reason for the request (optional)"
+        reason="Reason for the request"
     )
     async def vc_request(
             self,
             interaction: discord.Interaction,
             user: discord.Member,
             voice_channel: discord.VoiceChannel,
-            reason: str = "Need to speak."
+            reason: str
     ):
         """Request a user to join a voice channel"""
 
@@ -47,74 +47,70 @@ class VCRequestCog(commands.Cog):
             )
             return
 
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer(ephemeral=False)  # Show publicly in the channel
 
         try:
-            # Get the log channel
-            log_channel = self.bot.get_channel(VC_REQUEST_LOG_CHANNEL_ID)
-            if not log_channel:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> Could not find the log channel. Please contact an admin.",
-                    ephemeral=True
-                )
-                return
-
-            # Create the initial embed
+            # Create the request embed
             embed = discord.Embed(
                 title="VC Request",
-                description=f"**Hello!**\n\n"
-                            f"You have been requested to join {voice_channel.mention} for **{reason}**\n"
+                description=f"**Hello, {user.mention}!**\n\n"
+                            f"You have been requested to join {voice_channel.mention} for `{reason}`.\n"
                             f"Please join within the next **10 minutes**.\n\n"
-                            f"*Failure to comply may result in moderation or disciplinary actions. "
-                            f"If you are not able to join, please DM the user requesting you or reply to this message, thank you!*",
+                            f"*Failure to comply may result in moderation or disciplinary actions.*"
+                            f"*If you are not able to join, please DM the user requesting you or reply to this message, thank you!*\n\n"
+                            f"*Requested by {interaction.user.mention}*",
                 color=discord.Color.blue(),
                 timestamp=datetime.utcnow()
-            )
-
-            embed.add_field(
-                name="Requested by:",
-                value=f"{interaction.user.mention} `{interaction.user.display_name}`",
-                inline=False
             )
 
             if interaction.guild.icon:
                 embed.set_thumbnail(url=interaction.guild.icon.url)
 
-            # Send to log channel with ping
-            log_message = await log_channel.send(
+            # Send in CURRENT channel with ping
+            request_message = await interaction.followup.send(
                 content=f"{user.mention}",
                 embed=embed
             )
 
-            # Store tracking data in database
+            # Store in database
             end_time = datetime.utcnow() + timedelta(hours=1)
+            await db.add_vc_request(
+                message_id=request_message.id,
+                channel_id=interaction.channel.id,
+                user_id=user.id,
+                requested_channel_id=voice_channel.id,
+                requester_id=interaction.user.id,
+                reason=reason,
+                start_time=datetime.utcnow(),
+                end_time=end_time,
+                guild_id=interaction.guild.id
+            )
 
-            async with db.pool.acquire() as conn:
-                await conn.execute(
-                    '''INSERT INTO vc_requests
-                       (message_id, channel_id, user_id, requested_channel_id, requester_id,
-                        start_time, end_time, guild_id)
-                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)''',
-                    log_message.id,
-                    log_channel.id,
-                    user.id,
-                    voice_channel.id,
-                    interaction.user.id,
-                    datetime.utcnow(),
-                    end_time,
-                    interaction.guild.id
+            # Send log to logging channel
+            log_channel = self.bot.get_channel(VC_REQUEST_LOG_CHANNEL_ID)
+            if log_channel:
+                log_embed = discord.Embed(
+                    title="VC Request Created",
+                    color=discord.Color.blue(),
+                    timestamp=datetime.utcnow()
                 )
 
-            # Confirm to requester
-            await interaction.followup.send(
-                f"<:Accepted:1426930333789585509> **VC Request Submitted!**\n\n"
-                f"**User:** {user.mention}\n"
-                f"**Channel:** {voice_channel.mention}\n"
-                f"**Reason:** {reason}\n\n"
-                f"🔍 Now tracking {user.display_name}'s voice activity for the next **1 hour**.\n"
-                f"Results will be posted in <#{VC_REQUEST_LOG_CHANNEL_ID}>",
-                ephemeral=True
-            )
+                log_embed.add_field(name="Requested User", value=f"{user.mention} `{user.display_name}`", inline=True)
+                log_embed.add_field(name="Voice Channel", value=voice_channel.mention, inline=True)
+                log_embed.add_field(name="Reason", value=reason, inline=False)
+                log_embed.add_field(name="Requested By",
+                                    value=f"{interaction.user.mention} `{interaction.user.display_name}`", inline=True)
+                log_embed.add_field(name="Request Channel", value=interaction.channel.mention, inline=True)
+
+                # Current voice state
+                if user.voice and user.voice.channel:
+                    log_embed.add_field(name="Current Voice", value=f"🔊 {user.voice.channel.mention}", inline=False)
+                else:
+                    log_embed.add_field(name="Current Voice", value="❌ Not in voice", inline=False)
+
+                log_embed.set_footer(text=f"Request ID: {request_message.id}")
+
+                await log_channel.send(embed=log_embed)
 
         except Exception as e:
             await interaction.followup.send(
@@ -131,18 +127,13 @@ class VCRequestCog(commands.Cog):
 
         try:
             # Check if this user is being tracked
-            async with db.pool.acquire() as conn:
-                tracking = await conn.fetchrow(
-                    '''SELECT *
-                       FROM vc_requests
-                       WHERE user_id = $1
-                         AND end_time > $2
-                         AND completed = FALSE''',
-                    member.id,
-                    datetime.utcnow()
-                )
+            tracking = await db.get_active_vc_request(member.id)
 
             if not tracking:
+                return
+
+            # Check if tracking has expired
+            if datetime.utcnow() > tracking['end_time']:
                 return
 
             # Determine what happened
@@ -168,17 +159,13 @@ class VCRequestCog(commands.Cog):
 
             if activity_type:
                 # Store activity in database
-                async with db.pool.acquire() as conn:
-                    await conn.execute(
-                        '''INSERT INTO vc_activity
-                               (request_id, activity_type, from_channel_id, to_channel_id, timestamp)
-                           VALUES ($1, $2, $3, $4, $5)''',
-                        tracking['id'],
-                        activity_type,
-                        from_channel,
-                        to_channel,
-                        datetime.utcnow()
-                    )
+                await db.add_vc_activity(
+                    request_id=tracking['id'],
+                    activity_type=activity_type,
+                    from_channel_id=from_channel,
+                    to_channel_id=to_channel,
+                    timestamp=datetime.utcnow()
+                )
 
         except Exception as e:
             print(f"Error tracking voice activity: {e}")
@@ -191,15 +178,8 @@ class VCRequestCog(commands.Cog):
 
         while not self.bot.is_closed():
             try:
-                async with db.pool.acquire() as conn:
-                    # Get all expired tracking that hasn't been completed
-                    expired = await conn.fetch(
-                        '''SELECT *
-                           FROM vc_requests
-                           WHERE end_time <= $1
-                             AND completed = FALSE''',
-                        datetime.utcnow()
-                    )
+                # Get all expired tracking that hasn't been completed
+                expired = await db.get_expired_vc_requests()
 
                 for tracking in expired:
                     await self.post_tracking_results(tracking)
@@ -211,33 +191,24 @@ class VCRequestCog(commands.Cog):
             await asyncio.sleep(30)
 
     async def post_tracking_results(self, tracking):
-        """Post the tracking results as a reply to the original message"""
+        """Post the tracking results to the log channel"""
         try:
-            # Get the channel and message
-            channel = self.bot.get_channel(tracking['channel_id'])
-            if not channel:
+            # Get the channel where request was made
+            request_channel = self.bot.get_channel(tracking['channel_id'])
+            if not request_channel:
+                await db.mark_vc_request_completed(tracking['id'])
                 return
 
+            # Try to get the original message
             try:
-                original_message = await channel.fetch_message(tracking['message_id'])
+                original_message = await request_channel.fetch_message(tracking['message_id'])
             except discord.NotFound:
                 # Message was deleted, mark as completed
-                async with db.pool.acquire() as conn:
-                    await conn.execute(
-                        'UPDATE vc_requests SET completed = TRUE WHERE id = $1',
-                        tracking['id']
-                    )
+                await db.mark_vc_request_completed(tracking['id'])
                 return
 
             # Get all activity for this tracking
-            async with db.pool.acquire() as conn:
-                activities = await conn.fetch(
-                    '''SELECT *
-                       FROM vc_activity
-                       WHERE request_id = $1
-                       ORDER BY timestamp ASC''',
-                    tracking['id']
-                )
+            activities = await db.get_vc_activities(tracking['id'])
 
             # Get guild to fetch channel names
             guild = self.bot.get_guild(tracking['guild_id'])
@@ -292,7 +263,7 @@ class VCRequestCog(commands.Cog):
             requested_channel = guild.get_channel(tracking['requested_channel_id'])
 
             result_embed = discord.Embed(
-                title="📊 VC Request - 1 Hour Tracking Results",
+                title="VC Request - 1 Hour Tracking Results",
                 color=discord.Color.green() if joined_requested_channel else discord.Color.orange(),
                 timestamp=datetime.utcnow()
             )
@@ -316,6 +287,12 @@ class VCRequestCog(commands.Cog):
             )
 
             result_embed.add_field(
+                name="Reason",
+                value=tracking.get('reason', 'Need to speak.'),
+                inline=False
+            )
+
+            result_embed.add_field(
                 name="Requested by",
                 value=requester.mention if requester else f"<@{tracking['requester_id']}>",
                 inline=False
@@ -323,7 +300,6 @@ class VCRequestCog(commands.Cog):
 
             # Add activity log
             if activity_lines:
-                # Split into chunks if too long
                 activity_text = "\n".join(activity_lines)
                 if len(activity_text) > 1024:
                     # Take first 10 and last 10
@@ -355,15 +331,13 @@ class VCRequestCog(commands.Cog):
 
             result_embed.set_footer(text=f"Request ID: {tracking['id']}")
 
-            # Reply to original message
-            await original_message.reply(embed=result_embed)
+            # Send to LOG channel (not the original request channel)
+            log_channel = self.bot.get_channel(VC_REQUEST_LOG_CHANNEL_ID)
+            if log_channel:
+                await log_channel.send(embed=result_embed)
 
             # Mark as completed
-            async with db.pool.acquire() as conn:
-                await conn.execute(
-                    'UPDATE vc_requests SET completed = TRUE WHERE id = $1',
-                    tracking['id']
-                )
+            await db.mark_vc_request_completed(tracking['id'])
 
         except Exception as e:
             print(f"Error posting tracking results: {e}")
