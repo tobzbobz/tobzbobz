@@ -16,6 +16,9 @@ from database import db, load_watches, load_scheduled_votes, load_completed_watc
 # Bot owner ID
 OWNER_ID = 678475709257089057
 
+IGNORED_WATCH_MESSAGE_IDS = {1392378992555855903, 1398915640995086427, 1403241099505438730, 1406853589821034506, 1421301778552717353, 1422094211670478930, 1428968521735602246}  # replace with actual message IDs
+
+
 # Configuration for multiple guilds
 GUILD_CONFIGS = {
     1282916959062851634: {
@@ -559,12 +562,14 @@ class WatchCog(commands.Cog):
         global active_watches
         try:
             all_watches = await load_watches()
-            # Only ignore certain IDs for /watch embed
+
+            # Filter out ignored message IDs (only for /watch embed)
             active_watches = {
                 k: v for k, v in all_watches.items()
-                if v.get('id') not in IGNORED_WATCH_IDS
+                if int(k) not in IGNORED_WATCH_MESSAGE_IDS
             }
-            print(f'✅ Loaded {len(active_watches)} active watches (ignoring IDs: {IGNORED_WATCH_IDS})')
+
+            print(f'✅ Loaded {len(active_watches)} active watches (ignored IDs: {IGNORED_WATCH_MESSAGE_IDS})')
         except Exception as e:
             print(f'❌ Error loading watches: {e}')
             active_watches = {}

@@ -73,7 +73,7 @@ class VCRequestCog(commands.Cog):
             )
 
             # Store in database
-            end_time = datetime.utcnow() + timedelta(hours=1)
+            end_time = datetime.utcnow() + timedelta(minutes=30)
             await db.add_vc_request(
                 message_id=request_message.id,
                 channel_id=interaction.channel.id,
@@ -263,13 +263,13 @@ class VCRequestCog(commands.Cog):
             requested_channel = guild.get_channel(tracking['requested_channel_id'])
 
             result_embed = discord.Embed(
-                title="VC Request - 1 Hour Tracking Results",
+                title="VC Request Results",
                 color=discord.Color.green() if joined_requested_channel else discord.Color.orange(),
                 timestamp=datetime.utcnow()
             )
 
             result_embed.add_field(
-                name="Tracked User",
+                name="User",
                 value=user.mention if user else f"<@{tracking['user_id']}>",
                 inline=True
             )
@@ -303,24 +303,24 @@ class VCRequestCog(commands.Cog):
                 activity_text = "\n".join(activity_lines)
                 if len(activity_text) > 1024:
                     # Take first 10 and last 10
-                    first_activities = "\n".join(activity_lines[:10])
-                    last_activities = "\n".join(activity_lines[-10:])
-                    activity_text = f"{first_activities}\n\n*... {len(activity_lines) - 20} more activities ...*\n\n{last_activities}"
+                    first_activities = "\n".join(activity_lines[:15])
+                    last_activities = "\n".join(activity_lines[-15:])
+                    activity_text = f"{first_activities}\n\n*... {len(activity_lines) - 30} more activities ...*\n\n{last_activities}"
 
                 result_embed.add_field(
-                    name=f"📋 Activity Log ({len(activities)} total)",
+                    name=f"Activity Log ({len(activities)} total)",
                     value=activity_text,
                     inline=False
                 )
             else:
                 result_embed.add_field(
-                    name="📋 Activity Log",
+                    name="Activity Log",
                     value="*No voice activity detected during tracking period*",
                     inline=False
                 )
 
             result_embed.add_field(
-                name="⏱️ Tracking Duration",
+                name="Check Duration",
                 value=f"Started: <t:{int(tracking['start_time'].timestamp())}:R>\n"
                       f"Ended: <t:{int(tracking['end_time'].timestamp())}:R>",
                 inline=False
@@ -340,7 +340,7 @@ class VCRequestCog(commands.Cog):
             await db.mark_vc_request_completed(tracking['id'])
 
         except Exception as e:
-            print(f"Error posting tracking results: {e}")
+            print(f"Error posting results: {e}")
             import traceback
             traceback.print_exc()
 
