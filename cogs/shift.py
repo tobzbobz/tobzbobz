@@ -593,7 +593,8 @@ class ShiftManagementCog(commands.Cog):
 
             if not quota_info['has_quota']:
                 await interaction.edit_original_response(
-                    content="📊 You don't have a shift quota assigned."
+                    content="You don't have a shift quota assigned.",
+                    ephemeral=True
                 )
                 return
 
@@ -649,7 +650,8 @@ class ShiftManagementCog(commands.Cog):
                 )
 
             await interaction.edit_original_response(
-                content=f"<:Accepted:1426930333789585509> Set quota for {role.mention} to {self.format_duration(timedelta(seconds=total_seconds))}"
+                content=f"<:Accepted:1426930333789585509> Set quota for {role.mention} to {self.format_duration(timedelta(seconds=total_seconds))}",
+                ephemeral=True
             )
 
     @shift_group.command(name="leaderboard", description="View shift leaderboard")
@@ -703,7 +705,7 @@ class ShiftManagementCog(commands.Cog):
 
             if not results:
                 await interaction.edit_original_response(
-                    content="📊 No shift data available."
+                    content="No shift data available."
                 )
                 return
 
@@ -713,10 +715,10 @@ class ShiftManagementCog(commands.Cog):
             embed = discord.Embed(
                 title="Shift Leaderboard",
                 description="",  # Remove wave info from description
-                color=discord.Color.gold()
+                color=discord.Color(0x000000)
             )
             embed.set_author(
-                name=f"Leaderboard: Activity Wave {wave if wave else 'Current'}",
+                name=f"{interaction.guild.name}: Activity Wave {wave if wave else 'Current'}",
                 icon_url=interaction.guild.icon.url if interaction.guild.icon else None
             )
 
@@ -744,7 +746,7 @@ class ShiftManagementCog(commands.Cog):
                 # Check if this is the requesting user
                 if row['discord_user_id'] == interaction.user.id:
                     user_position = idx
-                    leaderboard_lines.append(f"**`{idx}.` {member.mention} • {time_str} - {quota_status}**")
+                    leaderboard_lines.append(f"`{idx}.` {member.mention} • {time_str} - {quota_status}")
                 else:
                     leaderboard_lines.append(f"`{idx}.` {member.mention} • {time_str} - {quota_status}")
 
@@ -753,6 +755,8 @@ class ShiftManagementCog(commands.Cog):
 
             if filter_role:
                 embed.set_footer(text=f"Filtered by: {filter_role.name}")
+            else:
+                embed.set_footer(text=f"Showing all shifts")
 
             await interaction.edit_original_response(embed=embed)
 
@@ -923,15 +927,16 @@ class ShiftManagementCog(commands.Cog):
                        ORDER BY type, start_time'''
                 )
 
-            if active_shifts:
-                user_ids = [shift['discord_user_id'] for shift in active_shifts]
-                callsigns = await conn.fetch(
-                    'SELECT discord_user_id, callsign, fenz_prefix FROM callsigns WHERE discord_user_id = ANY($1)',
-                    user_ids
-                )
-                callsign_map = {c['discord_user_id']: c for c in callsigns}
-            else:
-                callsign_map = {}
+                # Move this INSIDE the context manager
+                if active_shifts:
+                    user_ids = [shift['discord_user_id'] for shift in active_shifts]
+                    callsigns = await conn.fetch(
+                        'SELECT discord_user_id, callsign, fenz_prefix FROM callsigns WHERE discord_user_id = ANY($1)',
+                        user_ids
+                    )
+                    callsign_map = {c['discord_user_id']: c for c in callsigns}
+                else:
+                    callsign_map = {}
 
             if not active_shifts:
                 await interaction.followup.send(
@@ -950,9 +955,14 @@ class ShiftManagementCog(commands.Cog):
 
             # Create embed
             embed = discord.Embed(
-                title="🚨 HNZRP | FENZ & HHStJ",
-                description="🕒 **Active Shifts**",
+                title="**<:Clock:1434949269554597978> Active Shifts**",
+                description='',
                 color=discord.Color(0xffffff)
+            )
+
+            embed.set_author(
+                name=interaction.guild.name,  # Use guild name instead
+                icon_url=interaction.guild.icon.url if interaction.guild.icon else None
             )
 
             # Add each shift type section
@@ -988,12 +998,6 @@ class ShiftManagementCog(commands.Cog):
 
                     # Get display name or username
                     display_name = member.display_name
-                    async with db.pool.acquire() as conn:
-                        callsign_row = await conn.fetchrow(
-                            'SELECT * FROM callsigns WHERE discord_user_id = $1',
-                            member.id
-                        )
-
                     callsign_row = callsign_map.get(member.id)
 
                     if callsign_row:
@@ -1007,11 +1011,13 @@ class ShiftManagementCog(commands.Cog):
                         break_time = self.format_duration_short(current_break)
                         # Bold if break is over 20 minutes
                         if current_break.total_seconds() > 1200:  # 20 minutes = 1200 seconds
-                            shift_lines.append(f"{idx}. 🟠 {display_name} | **{break_time}**")
+                            shift_lines.append(f"`{idx}.` {display_name} | *{break_time}*")
                         else:
-                            shift_lines.append(f"{idx}. 🟠 {display_name} | {break_time}")
+                            shift_lines.append(f"`{idx}.` {display_name} | *{break_time}*")
                     else:
-                        shift_lines.append(f"{idx}. 🟢 {display_name} • {shift_time}")
+                        member = interaction.guild.get_member(shift['discord_user_id'])
+                        if member:
+                            shift_lines.append(f"`{idx}.` {member.mention} • {shift_time}")
 
                 if shift_lines:
                     embed.add_field(
@@ -1124,7 +1130,7 @@ class ShiftManagementCog(commands.Cog):
         embed = discord.Embed(
             title="<:Checklist:1434948670226432171> **All Time Information**",
             description=f"**Shift Count:** {str(stats['count'])}\n**Total Duration:** {self.format_duration(stats['total_duration'])}\n**Average Duration:** {self.format_duration(stats['average_duration'])}",
-            color=discord.Color(0xffffff)
+            color=discord.Color(0x000000)
         )
         embed.set_author(name="Shift Management", icon_url=interaction.user.display_avatar.url)
 
@@ -1153,8 +1159,6 @@ class ShiftManagementCog(commands.Cog):
                 inline=False
             )
             embed.set_footer(text=f"Shift Type: {last_shift['type']}")
-        else:
-            embed.set_footer(text=f"Available Shift Types: {', '.join(types)}")
 
         # Create view with only Start button
         view = ShiftStartView(self, interaction.user, types)
@@ -1169,14 +1173,14 @@ class ShiftManagementCog(commands.Cog):
         if is_on_break:
             # On Break status
             embed = discord.Embed(
-                title="📋 Shift Management",
+                title="Shift Management",
                 description="**Break Started**",
                 color=discord.Color.gold()
             )
 
             embed.add_field(
-                name="🕒 Current Shift",
-                value=f"**Status:** 🟡 On Break\n"
+                name="Current Shift",
+                value=f"**Status:** <:Idle:1434949872968273940> On Break\n"
                       f"**Started:** <t:{int(shift['start_time'].timestamp())}:R>\n"
                       f"**Break Started:** <t:{int(shift['pause_start'].timestamp())}:R>",
                 inline=False
@@ -1186,20 +1190,21 @@ class ShiftManagementCog(commands.Cog):
         else:
             # On Shift status
             embed = discord.Embed(
-                title="📋 Shift Management",
+                title="Shift Management",
                 description="**Shift Started**",
                 color=discord.Color.green()
             )
 
             embed.add_field(
-                name="🕒 Current Shift",
-                value=f"**Status:** 🟢 On Shift\n"
+                name="Current Shift",
+                value=f"**Status:** <:Online:1434949591303983194> On Shift\n"
                       f"**Started:** <t:{int(shift['start_time'].timestamp())}:R>",
                 inline=False
             )
 
             view = ShiftActiveView(self, interaction.user, shift)
 
+        embed.set_author(name="Shift Management", icon_url=interaction.user.display_avatar.url)
         embed.set_footer(text=f"Shift Type: {shift['type']}")
 
         await interaction.edit_original_response(embed=embed, view=view)
@@ -1233,7 +1238,7 @@ class ShiftManagementCog(commands.Cog):
         embed = discord.Embed(
             title="<:Checklist:1434948670226432171> **All Time Information**",
             description=f"**Shift Count:** {str(stats['count'])}\n**Total Duration:** {self.format_duration(stats['total_duration'])}\n**Average Duration:** {self.format_duration(stats['average_duration'])}",
-            color=discord.Color(0xffffff)
+            color=discord.Color(0x000000)
         )
         embed.set_author(name="Shift Management", icon_url=interaction.user.display_avatar.url)
 
@@ -1277,7 +1282,7 @@ class ShiftManagementCog(commands.Cog):
         embed = discord.Embed(
             title="<:Checklist:1434948670226432171> **All Time Information**",
             description=f"**Shift Count:** {str(stats['count'])}\n**Total Duration:** {self.format_duration(stats['total_duration'])}\n**Average Duration:** {self.format_duration(stats['average_duration'])}",
-            color=discord.Color(0xffffff)
+            color=discord.Color(0x000000)
         )
         embed.set_author(
             name=f"Shift Management: {user.display_name}",
@@ -1287,13 +1292,13 @@ class ShiftManagementCog(commands.Cog):
         # Add quota info if available
         member = interaction.guild.get_member(self.user.id)
         if member:
-            quota_info = await self.cog.get_quota_info(member)
+            quota_info = await self.get_quota_info(user)
             if quota_info['has_quota']:
                 status_emoji = "<:Accepted:1426930333789585509>" if quota_info[
                     'completed'] else "<:Denied:1426930694633816248>"
                 embed.add_field(
                     name="Quota Progress",
-                    value=f"> {status_emoji} **{quota_info['percentage']:.1f}%** of {self.cog.format_duration(timedelta(seconds=quota_info['quota_seconds']))}",
+                    value=f"> {status_emoji} **{quota_info['percentage']:.1f}%** of {self.format_duration(timedelta(seconds=quota_info['quota_seconds']))}",
                     inline=False
                 )
 
@@ -1301,8 +1306,8 @@ class ShiftManagementCog(commands.Cog):
         embed.add_field(
             name="<:Clock:1434949269554597978> Last Shift",
             value=f"**Status:** <:Offline:1434951694319620197> Ended\n"
-                  f"**Total Time:** {self.cog.format_duration(active_duration)}\n"
-                  f"**Break Time:** {self.cog.format_duration(timedelta(seconds=pause_duration))}",
+                  f"**Total Time:** {self.format_duration(active_duration)}\n"
+                  f"**Break Time:** {self.format_duration(timedelta(seconds=pause_duration))}",
             inline=False
         )
 
@@ -1394,8 +1399,10 @@ class ShiftStartView(discord.ui.View):
         # Build the embed directly instead of calling show_active_shift_panel
         embed = discord.Embed(
             title="**Shift Started**",
-            color=discord.Color(0x000000)  # Black
+            color=discord.Color(0x57f288)
         )
+
+        embed.set_author(name="Shift Management", icon_url=interaction.user.display_avatar.url)
 
         embed.add_field(
             name="<:Clock:1434949269554597978> Current Shift",
@@ -1509,11 +1516,10 @@ class ShiftActiveView(discord.ui.View):
         await interaction.response.defer()
 
         try:
-            # Update nickname back to normal (remove prefix)
-            await self.cog.update_nickname_for_shift_status(self.user, 'off')
-
-            # Update duty roles
-            await self.cog.update_duty_roles(self.user, self.shift['type'], 'off')
+            await asyncio.gather(
+                self.cog.update_nickname_for_shift_status(self.user, 'off'),
+                self.cog.update_duty_roles(self.user, self.shift['type'], 'off')
+            )
 
             # Calculate final pause duration
             pause_duration = self.shift.get('pause_duration', 0)
@@ -1540,8 +1546,8 @@ class ShiftActiveView(discord.ui.View):
             # Create summary embed
             embed = discord.Embed(
                 title="<:Checklist:1434948670226432171> **All Time Information**",
-                description=f"**Shift Count:** {str(stats['count'])}\n**Total Duration:** {self.cog.format_duration(stats['total_duration'])}\n**Average Duration:** self.cog.format_duration(stats['average_duration'])",
-                color=discord.Color(0xffffff)
+                description=f"**Shift Count:** {str(stats['count'])}\n**Total Duration:** {self.cog.format_duration(stats['total_duration'])}\n**Average Duration:** {self.cog.format_duration(stats['average_duration'])}",
+                color=discord.Color(0x000000)
             )
             embed.set_author(name="Shift Management", icon_url=interaction.user.display_avatar.url)
 
@@ -1558,12 +1564,18 @@ class ShiftActiveView(discord.ui.View):
                         inline=False
                     )
 
-            # Last shift (the one we just ended)
+                value_parts = [
+                    f"**Status:** <:Offline:1434951694319620197> Ended\n"
+                    f"**Total Time:** {self.cog.format_duration(active_duration)}",
+                ]
+
+            # Only add break info if there was actually break time
+            if total_break.total_seconds() > 0:
+                value_parts.append(f"**Break Time:** {self.cog.format_duration(total_break)}")
+
             embed.add_field(
                 name="<:Clock:1434949269554597978> Last Shift",
-                value=f"**Status:** <:Offline:1434951694319620197> Ended\n"
-                      f"**Total Time:** {self.cog.format_duration(active_duration)}\n"
-                      f"**Break Time:** {self.cog.format_duration(timedelta(seconds=pause_duration))}",
+                value="\n".join(value_parts),
                 inline=False
             )
 
@@ -1607,7 +1619,7 @@ class ShiftBreakView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="Resume", style=discord.ButtonStyle.success, emoji="<:Play:1434957147829047467>")
+    @discord.ui.button(label="Resume", style=discord.ButtonStyle.success, emoji="<:Pause:1434982402593390632>")
     async def resume_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
 
@@ -1633,6 +1645,8 @@ class ShiftBreakView(discord.ui.View):
 
             # Get updated shift
             updated_shift = await self.cog.get_active_shift(self.user.id)
+            total_break = timedelta(seconds=updated_shift.get('pause_duration', 0))
+            last_break = timedelta(seconds=pause_duration)  # Use the pause_duration we calculated
 
             # Build active panel embed directly
             embed = discord.Embed(
@@ -1640,14 +1654,30 @@ class ShiftBreakView(discord.ui.View):
                 color=discord.Color.green()
             )
 
+            # Build the value string conditionally
+            value_parts = [
+                f"**Status:** <:Online:1434949591303983194> On Shift",
+                f"**Started:** <t:{int(updated_shift['start_time'].timestamp())}:R>"
+            ]
+
+            # Only add break info if there was actually break time
+            if total_break.total_seconds() > 0:
+                value_parts.append(f"**Total Break Time:** {self.cog.format_duration(total_break)}")
+                value_parts.append(f"**Last Break Time:** {self.cog.format_duration(last_break)}")
+
             embed.add_field(
                 name="<:Clock:1434949269554597978> Current Shift",
-                value=f"**Status:** <:Online:1434949591303983194> On Shift\n"
-                      f"**Started:** <t:{int(updated_shift['start_time'].timestamp())}:R>",
+                value="\n".join(value_parts),
                 inline=False
             )
 
             embed.set_footer(text=f"Shift Type: {updated_shift['type']}")
+
+            # Create active view
+            view = ShiftActiveView(self.cog, self.user, updated_shift)
+
+            # Edit the message
+            await interaction.edit_original_response(embed=embed, view=view)
 
             # Create active view
             view = ShiftActiveView(self.cog, self.user, updated_shift)
@@ -1697,8 +1727,8 @@ class ShiftBreakView(discord.ui.View):
             # Create summary embed
             embed = discord.Embed(
                 title="<:Checklist:1434948670226432171> **All Time Information**",
-                description=f"**Shift Count:** {str(stats['count'])}\n**Total Duration:** {self.cog.format_duration(stats['total_duration'])}\n**Average Duration:** self.cog.format_duration(stats['average_duration'])",
-                color=discord.Color(0xffffff)
+                description=f"**Shift Count:** {str(stats['count'])}\n**Total Duration:** {self.cog.format_duration(stats['total_duration'])}\n**Average Duration:** {self.cog.format_duration(stats['average_duration'])}",
+                color=discord.Color(0x000000)
             )
 
             embed.set_footer(text=f"Shift Type: {self.shift['type']}")
@@ -1715,12 +1745,18 @@ class ShiftBreakView(discord.ui.View):
                         inline=False
                     )
 
-            # Last shift (the one we just ended)
+                value_parts = [
+                    f"**Status:** <:Offline:1434951694319620197> Ended\n"
+                    f"**Total Time:** {self.cog.format_duration(active_duration)}"
+                ]
+
+            # Only add break info if there was actually break time
+            if total_break.total_seconds() > 0:
+                value_parts.append(f"**Break Time:** {self.cog.format_duration(total_break)}")
+
             embed.add_field(
                 name="<:Clock:1434949269554597978> Last Shift",
-                value=f"**Status:** <:Offline:1434951694319620197> Ended\n"
-                      f"**Total Time:** {self.cog.format_duration(active_duration)}\n"
-                      f"**Break Time:** {self.cog.format_duration(timedelta(seconds=pause_duration))}",
+                value="\n".join(value_parts),
                 inline=False
             )
 
