@@ -2380,7 +2380,7 @@ class QuotaConflictView(discord.ui.View):
             pass
         self.stop()
 
-clas    s QuotaConflictView(discord.ui.View):
+    class QuotaConflictView(discord.ui.View):
     """Confirmation view for overwriting existing quotas"""
 
     def __init__(self, cog: ShiftManagementCog, admin: discord.Member, role_ids: list,
