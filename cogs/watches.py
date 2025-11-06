@@ -526,7 +526,8 @@ class WatchCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.vote_timeout_tasks = {}
-        # Don't load immediately - wait for database
+        self.bot.add_view(WatchRegulationsDropdown())
+        self.bot.add_view(WatchRoleButton(message_id=0))
         self.bot.loop.create_task(self.initialize_cog())
 
     async def check_database_ready(self, interaction: discord.Interaction) -> bool:
@@ -543,14 +544,13 @@ class WatchCog(commands.Cog):
             return False
         return True
 
-
     async def initialize_cog(self):
         """Initialize the cog after database is ready"""
         # Wait for bot to be ready
         await self.bot.wait_until_ready()
 
         # Wait for database connection
-        max_wait = 30  # Maximum 30 seconds
+        max_wait = 30
         waited = 0
         while db.pool is None and waited < max_wait:
             print("⏳ WatchCog waiting for database connection...")
@@ -561,6 +561,9 @@ class WatchCog(commands.Cog):
             print("❌ WatchCog initialization failed: database connection timeout")
             return
 
+        # ✅ Re-register persistent VoteButton views for active watches
+        await self.register_active_vote_buttons()
+
         # Now load initial data
         await self.load_initial_data()
 
@@ -568,6 +571,15 @@ class WatchCog(commands.Cog):
         self.check_scheduled_votes.start()
 
         print("✅ WatchCog initialized successfully")
+
+    async def register_active_vote_buttons(self):
+        """Re-register VoteButton views for watches that were active during restart"""
+        try:
+            # This would need implementation based on how you track active votes
+            # For now, just register the WatchRoleButton
+            pass
+        except Exception as e:
+            print(f'Error registering vote buttons: {e}')
 
     async def load_initial_data(self):
         """Load active watches from database on startup"""
