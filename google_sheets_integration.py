@@ -1,9 +1,12 @@
 import gspread
 from google.oauth2.service_account import Credentials
+from datetime import datetime, timezone, timedelta
 import os
 import json
 import time
 import asyncio
+import pytz
+
 
 HHSTJ_RANK_MAP = {
     1389113026900394064: ("First Responder", "FR"),
@@ -88,6 +91,8 @@ class GoogleSheetsManager:
         self.client = None
         self.spreadsheet = None
         self._cached_validations = {}  # Cache for dropdown validations
+
+    NZST = pytz.timezone('Pacific/Auckland')
 
     def authenticate(self):
         """Authenticate with Google Sheets API using environment variables"""
