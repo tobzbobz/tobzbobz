@@ -1273,10 +1273,18 @@ class ShiftManagementCog(commands.Cog):
                 quota_info = await self.get_quota_info(interaction.user, type.value if type else None)
 
                 if not quota_info['has_quota']:
-                    await interaction.followup.send(
-                        "You don't have any shift quotas set.",
-                        ephemeral=True
+
+                    embed = discord.Embed(
+                        title="<:Search:1434957367505719457> Your Quota",
+                        color=discord.Color(0x000000)
                     )
+
+                    embed.set_author(
+                        name=f"{interaction.guild.name}",
+                        icon_url=interaction.guild.icon.url if interaction.guild.icon else None
+                    )
+
+                    await interaction.followup.send(embed=embed, epheremal=True)
                     return
 
                 embed = discord.Embed(
@@ -1360,12 +1368,22 @@ class ShiftManagementCog(commands.Cog):
                 # Calculate total seconds
                 total_seconds = (hours * 3600) + (minutes * 60)
 
-                if total_seconds <= 0:
+                if total_seconds < 0:
                     await interaction.followup.send(
-                        "<:Denied:1426930694633816248> Quota must be greater than 0.",
+                        "<:Denied:1426930694633816248> Quota cannot be negative.",
                         ephemeral=True
                     )
                     return
+
+                # Allow 0 as a valid quota (means no requirement for this role)
+                if total_seconds == 0:
+                    # Confirm the user wants to set a 0 quota
+                    if not (hours == 0 and minutes == 0):
+                        await interaction.followup.send(
+                            "<:Denied:1426930694633816248> Invalid time values.",
+                            ephemeral=True
+                        )
+                        return
 
                 # Check for conflicts and save to database
                 async with db.pool.acquire() as conn:
@@ -2211,6 +2229,9 @@ class ShiftManagementCog(commands.Cog):
         view = ShiftStartView(self, interaction.user, types)
         await interaction.edit_original_response(embed=embed, view=view)
 
+    # Fix for show_admin_shift_panel method (around line 2220-2280)
+    # Replace the existing show_admin_shift_panel method with this corrected version:
+
     async def show_admin_shift_panel(self, interaction: discord.Interaction, user: discord.Member, type: str):
         """Show admin control panel for managing user's shift"""
         # Get active shift for this user
@@ -2230,44 +2251,30 @@ class ShiftManagementCog(commands.Cog):
         )
 
         # Add quota info if available
-        member = interaction.guild.get_member(user.id)  # use the parameter 'user', not 'self.user'
+        member = interaction.guild.get_member(user.id)
         if member:
             quota_info = await self.get_quota_info(user)
             if quota_info['has_quota']:
-                status_emoji = "<:Accepted:1426930333789585509>" if quota_info[
-                    'completed'] else "<:Denied:1426930694633816248>"
-                if quota_info and quota_info['has_quota']:
-                    if quota_info['bypass_type']:
-                        if quota_info['bypass_type'] == 'RA':
-                            status_text = f"<:Accepted:1426930333789585509> **{quota_info['percentage']:.1f}%** (RA - 50% Required)"
-                        else:
-                            status_text = f"<:Accepted:1426930333789585509> **100%** ({quota_info['bypass_type']} Bypass)"
+                if quota_info['bypass_type']:
+                    if quota_info['bypass_type'] == 'RA':
+                        status_text = f"<:Accepted:1426930333789585509> **{quota_info['percentage']:.1f}%** (RA - 50% Required)"
                     else:
-                        status_emoji = "<:Accepted:1426930333789585509>" if quota_info[
-                            'completed'] else "<:Denied:1426930694633816248>"
-                        status_text = f"{status_emoji} **{quota_info['percentage']:.1f}%**"
+                        status_text = f"<:Accepted:1426930333789585509> **100%** ({quota_info['bypass_type']} Bypass)"
+                else:
+                    status_emoji = "<:Accepted:1426930333789585509>" if quota_info[
+                        'completed'] else "<:Denied:1426930694633816248>"
+                    status_text = f"{status_emoji} **{quota_info['percentage']:.1f}%**"
 
-                    embed.add_field(
-                        name="Quota Progress",
-                        value=f"> {status_text} of {self.format_duration(timedelta(seconds=quota_info['quota_seconds']))}",
-                        inline=False
-                    )
+                embed.add_field(
+                    name="Quota Progress",
+                    value=f"> {status_text} of {self.format_duration(timedelta(seconds=quota_info['quota_seconds']))}",
+                    inline=False
+                )
 
-        # Last shift (the one we just ended)
-        embed.add_field(
-            name="<:Clock:1434949269554597978> Last Shift",
-            value=f"**Status:** <:Offline:1434951694319620197> Ended\n"
-                  f"**Total Time:** {self.format_duration(active_duration)}\n"
-                  f"**Break Time:** {self.format_duration(timedelta(seconds=pause_duration))}",
-            inline=False
-        )
-
-        embed.set_footer(text=f"Shift Type: {shift['type']}")
-
-        # Show shift status
+        # Show shift status if active
         if active_shift:
             is_on_break = active_shift.get('pause_start') is not None
-            status = "🟡 On Break" if is_on_break else "🟢 On Shift"
+            status = "<:Idle:1434949872968273940> On Break" if is_on_break else "<:Online:1434949591303983194> On Shift"
 
             shift_info = f"**Status:** {status}\n"
             shift_info += f"**Started:** <t:{int(active_shift['start_time'].timestamp())}:R>"
@@ -2276,10 +2283,12 @@ class ShiftManagementCog(commands.Cog):
                 shift_info += f"\n**Break Started:** <t:{int(active_shift['pause_start'].timestamp())}:R>"
 
             embed.add_field(
-                name="🕒 Current Shift",
+                name="Current Shift",
                 value=shift_info,
                 inline=False
             )
+
+        embed.set_footer(text=f"Shift Type: {type}")
 
         view = AdminShiftControlView(self, interaction.user, user, type, active_shift)
         await interaction.edit_original_response(embed=embed, view=view)
@@ -2342,7 +2351,12 @@ class QuotaConflictView(discord.ui.View):
             # Disable buttons
             for item in self.children:
                 item.disabled = True
-            await interaction.message.edit(view=self)
+            try:
+                await interaction.message.edit(view=self)
+            except discord.NotFound:
+                pass  # Message was deleted, ignore
+            except discord.HTTPException:
+                pass
             self.stop()
 
         except Exception as e:
@@ -2358,10 +2372,15 @@ class QuotaConflictView(discord.ui.View):
 
         for item in self.children:
             item.disabled = True
-        await interaction.message.edit(view=self)
+        try:
+            await interaction.message.edit(view=self)
+        except discord.NotFound:
+            pass  # Message was deleted, ignore
+        except discord.HTTPException:
+            pass
         self.stop()
 
-class QuotaConflictView(discord.ui.View):
+clas    s QuotaConflictView(discord.ui.View):
     """Confirmation view for overwriting existing quotas"""
 
     def __init__(self, cog: ShiftManagementCog, admin: discord.Member, role_ids: list,
@@ -2392,6 +2411,7 @@ class QuotaConflictView(discord.ui.View):
             return False
         return True
 
+
     @discord.ui.button(label="Confirm Overwrite", style=discord.ButtonStyle.danger)
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
@@ -2402,9 +2422,9 @@ class QuotaConflictView(discord.ui.View):
                 for role_id in self.role_ids:
                     await conn.execute(
                         '''INSERT INTO shift_quotas (role_id, quota_seconds, type)
-                           VALUES ($1, $2, $3) 
-                           ON CONFLICT (role_id, type) 
-                           DO UPDATE SET quota_seconds = $2''',
+                           VALUES ($1, $2, $3) ON CONFLICT (role_id, type) 
+                               DO
+                        UPDATE SET quota_seconds = $2''',
                         role_id, self.quota_seconds, self.type
                     )
                     role = interaction.guild.get_role(role_id)
@@ -2416,10 +2436,17 @@ class QuotaConflictView(discord.ui.View):
                 ephemeral=True
             )
 
-            # Disable buttons
+            # Disable buttons and edit only if the message still exists
             for item in self.children:
                 item.disabled = True
-            await interaction.message.edit(view=self)
+
+            try:
+                await interaction.message.edit(view=self)
+            except discord.NotFound:
+                pass  # Message was deleted, ignore
+            except discord.HTTPException:
+                pass  # Other HTTP error, ignore
+
             self.stop()
 
         except Exception as e:
@@ -2435,9 +2462,15 @@ class QuotaConflictView(discord.ui.View):
 
         for item in self.children:
             item.disabled = True
-        await interaction.message.edit(view=self)
-        self.stop()
 
+        try:
+            await interaction.message.edit(view=self)
+        except discord.NotFound:
+            pass  # Message was deleted, ignore
+        except discord.HTTPException:
+            pass  # Other HTTP error, ignore
+
+        self.stop()
 
 class ShiftStartView(discord.ui.View):
     """View shown when no shift is active - only Start button"""

@@ -753,6 +753,11 @@ class CallsignCog(commands.Cog):
 
                                     if roblox_username:
                                         hhstj_prefix = get_hhstj_prefix_from_roles(member.roles)
+                                        is_fenz_high_command = any(
+                                            role.id in HIGH_COMMAND_RANKS for role in member.roles)
+                                        is_hhstj_high_command = any(
+                                            role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
+
                                         await add_callsign_to_database(
                                             sheet_data['callsign'],
                                             discord_id,
@@ -762,7 +767,9 @@ class CallsignCog(commands.Cog):
                                             sheet_data['fenz_prefix'],
                                             hhstj_prefix or '',
                                             self.bot.user.id,
-                                            "Auto-sync"
+                                            "Auto-sync",
+                                            is_fenz_high_command,
+                                            is_hhstj_high_command
                                         )
 
                                         # Track addition
@@ -1448,6 +1455,10 @@ class CallsignCog(commands.Cog):
                                 hhstj_prefix = get_hhstj_prefix_from_roles(member.roles)
 
                                 # Add to database
+                                is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
+                                is_hhstj_high_command = any(
+                                    role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
+
                                 await add_callsign_to_database(
                                     sheet_data['callsign'],
                                     discord_id,
@@ -1457,8 +1468,11 @@ class CallsignCog(commands.Cog):
                                     sheet_data['fenz_prefix'],
                                     hhstj_prefix or '',
                                     self.bot.user.id,
-                                    "Manual Sync"
+                                    "Manual Sync",
+                                    is_fenz_high_command,
+                                    is_hhstj_high_command
                                 )
+
                                 added_from_sheets += 1
                     else:
                         missing_in_sheets.append(
@@ -1767,11 +1781,16 @@ class CallsignCog(commands.Cog):
                 final_callsign = callsign
 
             # Add to database
+            is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in user.roles)
+            is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in user.roles)
+
             await add_callsign_to_database(
                 final_callsign, user.id, str(user), roblox_id, roblox_username,
                 final_fenz_prefix, hhstj_prefix or "",
                 interaction.user.id,
-                interaction.user.display_name
+                interaction.user.display_name,
+                is_fenz_high_command,
+                is_hhstj_high_command
             )
 
             # Format nickname
@@ -2330,11 +2349,16 @@ class CallsignCog(commands.Cog):
                 return
 
             # FOR NON-HIGH COMMAND - Auto-accept with prefix
+            is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in interaction.user.roles)
+            is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in interaction.user.roles)
+
             await add_callsign_to_database(
                 callsign, interaction.user.id, str(interaction.user),
                 roblox_id, roblox_username, fenz_prefix, hhstj_prefix,
-                interaction.user.id,  # Self-requested
-                interaction.user.display_name  # Self-requested
+                interaction.user.id,
+                interaction.user.display_name,
+                is_fenz_high_command,
+                is_hhstj_high_command
             )
 
             # Check for high command roles (for formatting)
@@ -2806,12 +2830,17 @@ class HighCommandPrefixChoice(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
 
         # Save to database WITH prefix
+        is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in self.user.roles)
+        is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in self.user.roles)
+
         await add_callsign_to_database(
             self.callsign, self.user.id, str(self.user),
             self.roblox_id, self.roblox_username,
             self.fenz_prefix, self.hhstj_prefix,
-            self.user.id,  # Self-requested
-            self.user.display_name  # Self-requested
+            self.user.id,
+            self.user.display_name,
+            is_fenz_high_command,
+            is_hhstj_high_command
         )
 
         is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in self.user.roles)
@@ -2871,12 +2900,17 @@ class HighCommandPrefixChoice(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
 
         # Save to database WITHOUT prefix (empty string)
+        is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in self.user.roles)
+        is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in self.user.roles)
+
         await add_callsign_to_database(
             self.callsign, self.user.id, str(self.user),
             self.roblox_id, self.roblox_username,
             self.fenz_prefix, self.hhstj_prefix,
-            self.user.id,  # Self-requested
-            self.user.display_name  # Self-requested
+            self.user.id,
+            self.user.display_name,
+            is_fenz_high_command,
+            is_hhstj_high_command
         )
 
         is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in self.user.roles)
@@ -3094,8 +3128,11 @@ class BulkAssignView(discord.ui.View):
             hhstj_prefix = get_hhstj_prefix_from_roles(member.roles)
 
             # Add to database with ### as callsign
+            is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
+            is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
+
             await add_callsign_to_database(
-                "###",  # NIL callsign
+                "###",
                 member.id,
                 str(member),
                 user_data['roblox_id'],
@@ -3103,7 +3140,9 @@ class BulkAssignView(discord.ui.View):
                 user_data['fenz_prefix'],
                 hhstj_prefix or '',
                 interaction.user.id,
-                interaction.user.display_name
+                interaction.user.display_name,
+                is_fenz_high_command,
+                is_hhstj_high_command
             )
 
             # Update nickname to PREFIX-###
@@ -3200,6 +3239,9 @@ class BulkAssignModal(discord.ui.Modal):
                 return
 
             # Assign callsign to database
+            is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
+            is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
+
             await add_callsign_to_database(
                 callsign,
                 member.id,
@@ -3209,7 +3251,9 @@ class BulkAssignModal(discord.ui.Modal):
                 self.user_data['fenz_prefix'],
                 hhstj_prefix or '',
                 interaction.user.id,
-                interaction.user.display_name
+                interaction.user.display_name,
+                is_fenz_high_command,
+                is_hhstj_high_command
             )
 
             # Update nickname
