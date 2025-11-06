@@ -2,7 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, List
 from collections import defaultdict, deque
 from database import db
 
@@ -122,42 +122,187 @@ class ModerateCog(commands.Cog):
             print(f"❌ Failed to disconnect {member.name}: {e}")
             return False
 
-    @app_commands.command(name="moderate", description="Moderate a user (owner only)")
+    @app_commands.command(name="moderate", description="Moderate users with multiple actions (owner only)")
     @app_commands.describe(
-        user="The user to moderate",
+        users="The users to moderate (separate with spaces)",
         reason="Reason for moderation",
         timeout="Timeout duration (e.g., '5m', '1h', '1d')",
-        server_mute="Mute the user in voice channels",
-        server_deafen="Deafen the user in voice channels",
-        disconnect="Disconnect user from voice channel",
-        move_to="Move user to a specific voice channel"
+        server_mute="Toggle server mute (toggles current state)",
+        server_deafen="Toggle server deafen (toggles current state)",
+        disconnect="Disconnect users from voice channel",
+        move_to="Move users through voice channels (separate with commas, e.g., 'Channel1, Channel2')"
     )
     @is_owner()
     async def moderate(
             self,
             interaction: discord.Interaction,
-            user: discord.Member,
+            users: str,
             reason: Optional[str] = "No reason provided",
             timeout: Optional[str] = None,
             server_mute: Optional[bool] = None,
             server_deafen: Optional[bool] = None,
             disconnect: Optional[bool] = None,
-            move_to: Optional[discord.VoiceChannel] = None
+            move_to: Optional[str] = None
     ):
-        """Moderate a user with various troll options"""
+        """Moderate multiple users with various options including sequential channel moves"""
 
         await interaction.response.defer(ephemeral=True)
 
-        actions_taken = []
-        errors = []
+        # Parse users (by mention, ID, or name)
+        member_list = await self.parse_users(interaction, users)
+
+        if not member_list:
+            await interaction.followup.send(
+                "❌ No valid users found. Use mentions, IDs, or names.",
+                ephemeral=True
+            )
+            return
+
+        # Parse move_to channels if provided
+        channel_list = []
+        if move_to:
+            channel_list = await self.parse_channels(interaction, move_to)
+            if not channel_list:
+                await interaction.followup.send(
+                    "❌ No valid channels found. Use channel mentions, IDs, or names separated by commas.",
+                    ephemeral=True
+                )
+                return
 
         # Check if any action was specified
-        if not any([timeout, server_mute is not None, server_deafen is not None, disconnect, move_to]):
+        if not any([timeout, server_mute is not None, server_deafen is not None, disconnect, channel_list]):
             await interaction.followup.send(
                 "❌ Please specify at least one moderation action.",
                 ephemeral=True
             )
             return
+
+        # Process each user
+        all_results = []
+        for user in member_list:
+            result = await self.moderate_single_user(
+                interaction, user, reason, timeout, server_mute,
+                server_deafen, disconnect, channel_list
+            )
+            all_results.append((user, result))
+
+        # Create summary embed
+        embed = discord.Embed(
+            title="🛡️ Mass Moderation Action",
+            description=f"Moderated {len(member_list)} user(s)",
+            color=discord.Color.orange(),
+            timestamp=datetime.now()
+        )
+
+        embed.add_field(name="Reason:", value=reason, inline=False)
+
+        # Summarize results
+        for user, (actions_taken, errors) in all_results:
+            status = "✅" if actions_taken and not errors else "⚠️" if actions_taken else "❌"
+
+            field_value = ""
+            if actions_taken:
+                field_value += "**Actions:** " + ", ".join(actions_taken) + "\n"
+            if errors:
+                field_value += "**Errors:** " + ", ".join(errors)
+
+            if not field_value:
+                field_value = "No actions performed"
+
+            embed.add_field(
+                name=f"{status} {user.name}",
+                value=field_value,
+                inline=False
+            )
+
+        embed.set_footer(text=f"Executed by {interaction.user.name}")
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+        # Send to mod logs
+        await self.send_to_mod_logs(interaction.guild, embed)
+
+    async def parse_users(self, interaction: discord.Interaction, users_str: str) -> List[discord.Member]:
+        """Parse user string into list of members"""
+        members = []
+        parts = users_str.split()
+
+        for part in parts:
+            member = None
+
+            # Try as mention
+            if part.startswith('<@') and part.endswith('>'):
+                user_id = part.strip('<@!>')
+                try:
+                    member = interaction.guild.get_member(int(user_id))
+                except ValueError:
+                    pass
+
+            # Try as ID
+            if not member:
+                try:
+                    member = interaction.guild.get_member(int(part))
+                except ValueError:
+                    pass
+
+            # Try as name
+            if not member:
+                member = discord.utils.find(lambda m: m.name.lower() == part.lower(), interaction.guild.members)
+
+            if member and member not in members:
+                members.append(member)
+
+        return members
+
+    async def parse_channels(self, interaction: discord.Interaction, channels_str: str) -> List[discord.VoiceChannel]:
+        """Parse channel string into list of voice channels"""
+        channels = []
+        parts = [p.strip() for p in channels_str.split(',')]
+
+        for part in parts:
+            channel = None
+
+            # Try as mention
+            if part.startswith('<#') and part.endswith('>'):
+                channel_id = part.strip('<#>')
+                try:
+                    channel = interaction.guild.get_channel(int(channel_id))
+                except ValueError:
+                    pass
+
+            # Try as ID
+            if not channel:
+                try:
+                    channel = interaction.guild.get_channel(int(part))
+                except ValueError:
+                    pass
+
+            # Try as name
+            if not channel:
+                channel = discord.utils.find(
+                    lambda c: isinstance(c, discord.VoiceChannel) and c.name.lower() == part.lower(),
+                    interaction.guild.channels
+                )
+
+            if channel and isinstance(channel, discord.VoiceChannel) and channel not in channels:
+                channels.append(channel)
+
+        return channels
+
+    async def moderate_single_user(
+            self,
+            interaction: discord.Interaction,
+            user: discord.Member,
+            reason: str,
+            timeout: Optional[str],
+            server_mute: Optional[bool],
+            server_deafen: Optional[bool],
+            disconnect: Optional[bool],
+            channel_list: List[discord.VoiceChannel]
+    ):
+        """Moderate a single user and return results"""
+        actions_taken = []
+        errors = []
 
         # 1. Timeout
         if timeout:
@@ -168,33 +313,45 @@ class ModerateCog(commands.Cog):
                     await user.timeout(until, reason=f"{reason} | By {interaction.user.name}")
                     actions_taken.append(f"⏱️ Timed out for {timeout}")
                 else:
-                    errors.append("Invalid timeout format (use: 5m, 1h, 2d)")
+                    errors.append("Invalid timeout format")
             except discord.Forbidden:
-                errors.append("Failed to timeout (missing permissions)")
+                errors.append("Failed to timeout (permissions)")
             except discord.HTTPException as e:
-                errors.append(f"Failed to timeout: {str(e)}")
+                errors.append(f"Timeout failed: {str(e)[:30]}")
 
-        # 2. Server Mute
+        # 2. Server Mute (Toggle behavior)
         if server_mute is not None:
             try:
-                await user.edit(mute=server_mute, reason=f"{reason} | By {interaction.user.name}")
-                action_text = "muted" if server_mute else "unmuted"
+                # Determine target state (toggle if True, otherwise explicitly set)
+                if server_mute and user.voice:
+                    target_mute = not user.voice.mute
+                else:
+                    target_mute = server_mute
+
+                await user.edit(mute=target_mute, reason=f"{reason} | By {interaction.user.name}")
+                action_text = "muted" if target_mute else "unmuted"
                 actions_taken.append(f"🔇 Server {action_text}")
             except discord.Forbidden:
-                errors.append("Failed to mute/unmute (missing permissions)")
+                errors.append("Failed to mute (permissions)")
             except discord.HTTPException as e:
-                errors.append(f"Failed to mute/unmute: {str(e)}")
+                errors.append(f"Mute failed: {str(e)[:30]}")
 
-        # 3. Server Deafen
+        # 3. Server Deafen (Toggle behavior)
         if server_deafen is not None:
             try:
-                await user.edit(deafen=server_deafen, reason=f"{reason} | By {interaction.user.name}")
-                action_text = "deafened" if server_deafen else "undeafened"
+                # Determine target state (toggle if True, otherwise explicitly set)
+                if server_deafen and user.voice:
+                    target_deafen = not user.voice.deaf
+                else:
+                    target_deafen = server_deafen
+
+                await user.edit(deafen=target_deafen, reason=f"{reason} | By {interaction.user.name}")
+                action_text = "deafened" if target_deafen else "undeafened"
                 actions_taken.append(f"🔈 Server {action_text}")
             except discord.Forbidden:
-                errors.append("Failed to deafen/undeafen (missing permissions)")
+                errors.append("Failed to deafen (permissions)")
             except discord.HTTPException as e:
-                errors.append(f"Failed to deafen/undeafen: {str(e)}")
+                errors.append(f"Deafen failed: {str(e)[:30]}")
 
         # 4. Disconnect from Voice
         if disconnect:
@@ -203,67 +360,30 @@ class ModerateCog(commands.Cog):
                     await user.move_to(None, reason=f"{reason} | By {interaction.user.name}")
                     actions_taken.append("🚪 Disconnected from voice")
                 else:
-                    errors.append("User is not in a voice channel")
+                    errors.append("User not in voice")
             except discord.Forbidden:
-                errors.append("Failed to disconnect (missing permissions)")
+                errors.append("Failed to disconnect (permissions)")
             except discord.HTTPException as e:
-                errors.append(f"Failed to disconnect: {str(e)}")
+                errors.append(f"Disconnect failed: {str(e)[:30]}")
 
-        # 5. Move to Voice Channel
-        if move_to:
+        # 5. Move through Voice Channels sequentially
+        if channel_list:
             try:
                 if user.voice:
-                    await user.move_to(move_to, reason=f"{reason} | By {interaction.user.name}")
-                    actions_taken.append(f"🔀 Moved to {move_to.mention}")
+                    for i, channel in enumerate(channel_list, 1):
+                        await user.move_to(channel, reason=f"{reason} | By {interaction.user.name}")
+                        actions_taken.append(f"🔀 Moved to {channel.name} (step {i}/{len(channel_list)})")
+                        # Add small delay to ensure moves are processed
+                        if i < len(channel_list):
+                            await discord.utils.sleep_until(discord.utils.utcnow() + timedelta(milliseconds=500))
                 else:
-                    errors.append("User is not in a voice channel")
+                    errors.append("User not in voice for moves")
             except discord.Forbidden:
-                errors.append("Failed to move user (missing permissions)")
+                errors.append(f"Failed to move (permissions)")
             except discord.HTTPException as e:
-                errors.append(f"Failed to move user: {str(e)}")
+                errors.append(f"Move failed: {str(e)[:30]}")
 
-        # Create response embed
-        embed = discord.Embed(
-            title="🛡️ Moderation Action",
-            color=discord.Color.orange() if not errors else discord.Color.red(),
-            timestamp=datetime.now()
-        )
-
-        embed.add_field(
-            name="Target:",
-            value=f"{user.mention} (`{user.name}` - `{user.id}`)",
-            inline=False
-        )
-
-        embed.add_field(
-            name="Reason:",
-            value=reason,
-            inline=False
-        )
-
-        if actions_taken:
-            embed.add_field(
-                name="✅ Actions Taken:",
-                value="\n".join(actions_taken),
-                inline=False
-            )
-
-        if errors:
-            embed.add_field(
-                name="❌ Errors:",
-                value="\n".join(errors),
-                inline=False
-            )
-
-        embed.set_thumbnail(url=user.display_avatar.url)
-        embed.set_footer(text=f"Executed by {interaction.user.name}")
-
-        # Send to user (ephemeral)
-        await interaction.followup.send(embed=embed, ephemeral=True)
-
-        # Send to mod logs if actions were successful
-        if actions_taken:
-            await self.send_to_mod_logs(interaction.guild, embed)
+        return actions_taken, errors
 
     def parse_duration(self, duration_str: str) -> Optional[timedelta]:
         """Parse duration string like '5m', '1h', '2d' into timedelta"""

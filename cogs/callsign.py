@@ -22,6 +22,22 @@ EXCLUDED_GUILDS = {
     1425867713183744023   # Example: Development Server
 }
 
+NAUGHTY_ROLES = {
+    1432540488312950805: "Under Investigation",
+    1365536207726973060: "Strike 3!! F",
+    1365536206892437545: "Strike 2! F",
+    1365536206083067927: "Strike 1 F",
+    1389606936856756406: "Strike 1 H",
+    1389607171863347220: "Strike 2! H",
+    1389607397269569596: "Strike 3!! H",
+    1430126585834504314: "Strike 1 C",
+    1430126817465077820: "Strike 2! C",
+    1430126920447692863: "Strike 3!! C",
+    1412792728630202378: "FENZ Termination",
+    1389607789088866405: "HHStJ Termination",
+    1430127047061274645: "CC Termination",
+    1435787285995196468: "Rank Lock",
+}
 
 # Configuration: Map Discord Role IDs to FENZ Ranks
 FENZ_RANK_MAP = {
@@ -351,7 +367,7 @@ def format_duplicate_callsign_message(callsign: str, existing_data: dict) -> str
     # Who has it
     message += f"**Currently assigned to:** <@{existing_data['discord_user_id']}>\n"
     message += f"**Discord:** {existing_data['discord_username']}\n"
-    message += f"**Roblox:** {existing_data['[roblox_username](https://www.roblox.com/users/roblox_id/profile)']}\n"
+    message += f"**Roblox:** {existing_data['roblox_username']}\n"
 
     # When assigned
     if existing_data.get('approved_at'):
@@ -371,56 +387,57 @@ async def add_callsign_to_database(callsign: str, discord_user_id: int, discord_
                                    hhstj_prefix: str, approved_by_id: int, approved_by_name: str):
     """Add a new callsign to the database"""
     async with db.pool.acquire() as conn:
-        # ✅ CHECK FOR CONFLICTS FIRST (before any DELETE)
-        if callsign not in ["BLANK", "###"]:
-            existing = await conn.fetchrow(
-                'SELECT discord_user_id FROM callsigns WHERE callsign = $1 AND fenz_prefix = $2',
-                callsign, fenz_prefix
+        async with conn.transaction():  # ✅ Proper transaction
+            # ✅ CHECK FOR CONFLICTS FIRST (before any DELETE)
+            if callsign not in ["BLANK", "###"]:
+                existing = await conn.fetchrow(
+                    'SELECT discord_user_id FROM callsigns WHERE callsign = $1 AND fenz_prefix = $2',
+                    callsign, fenz_prefix
+                )
+                if existing and existing['discord_user_id'] != discord_user_id:
+                    raise ValueError(
+                        f"Callsign {fenz_prefix}-{callsign} is already assigned to user {existing['discord_user_id']}")
+
+            # Check if user already has ANY callsign
+            old_callsigns = await conn.fetch(
+                'SELECT * FROM callsigns WHERE discord_user_id = $1',
+                discord_user_id
             )
-            if existing and existing['discord_user_id'] != discord_user_id:
-                raise ValueError(
-                    f"Callsign {fenz_prefix}-{callsign} is already assigned to user {existing['discord_user_id']}")
 
-        # Check if user already has ANY callsign
-        old_callsigns = await conn.fetch(
-            'SELECT * FROM callsigns WHERE discord_user_id = $1',
-            discord_user_id
-        )
+            # Store history of previous callsigns
+            history = []
+            for old_data in old_callsigns:
+                history.append({
+                    "callsign": old_data.get("callsign"),
+                    "fenz_prefix": old_data.get("fenz_prefix"),
+                    "hhstj_prefix": old_data.get("hhstj_prefix"),
+                    "approved_at": old_data.get("approved_at").isoformat() if old_data.get("approved_at") else None,
+                    "replaced_at": int(datetime.utcnow().timestamp())
+                })
 
-        # Store history of previous callsigns
-        history = []
-        for old_data in old_callsigns:
-            history.append({
-                "callsign": old_data.get("callsign"),
-                "fenz_prefix": old_data.get("fenz_prefix"),
-                "hhstj_prefix": old_data.get("hhstj_prefix"),
-                "approved_at": old_data.get("approved_at").isoformat() if old_data.get("approved_at") else None,
-                "replaced_at": int(datetime.utcnow().timestamp())
-            })
+            # Delete ALL old callsigns for this user
+            await conn.execute(
+                'DELETE FROM callsigns WHERE discord_user_id = $1',
+                discord_user_id
+            )
 
-        # Delete ALL old callsigns for this user
-        await conn.execute(
-            'DELETE FROM callsigns WHERE discord_user_id = $1',
-            discord_user_id
-        )
-
-        # Insert the new callsign
-        await conn.execute(
-            '''INSERT INTO callsigns
-               (callsign, discord_user_id, discord_username, roblox_user_id, roblox_username,
-                fenz_prefix, hhstj_prefix, approved_by_id, approved_by_name, callsign_history)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)''',
-            callsign,
-            discord_user_id,
-            discord_username,
-            roblox_user_id,
-            roblox_username,
-            fenz_prefix,
-            hhstj_prefix,
-            approved_by_id,
-            approved_by_name,
-            json.dumps(history)
-        )
+            # Insert the new callsign
+            await conn.execute(
+                '''INSERT INTO callsigns
+                   (callsign, discord_user_id, discord_username, roblox_user_id, roblox_username,
+                    fenz_prefix, hhstj_prefix, approved_by_id, approved_by_name, callsign_history)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)''',
+                callsign,
+                discord_user_id,
+                discord_username,
+                roblox_user_id,
+                roblox_username,
+                fenz_prefix,
+                hhstj_prefix,
+                approved_by_id,
+                approved_by_name,
+                json.dumps(history)
+            )
 
     nickname_parts = []
 
@@ -532,9 +549,6 @@ class CallsignCog(commands.Cog):
     @tasks.loop(minutes=60)
     async def auto_sync_loop(self):
         """Background task for automatic syncing with nickname updates"""
-        # Safety check: ensure database is connected
-        failed_callsigns = []
-
         if db.pool is None:
             print("⚠️ Auto-sync skipped: database not connected")
             return
@@ -551,7 +565,7 @@ class CallsignCog(commands.Cog):
                 async with db.pool.acquire() as conn:
                     callsigns = await conn.fetch('SELECT * FROM callsigns ORDER BY callsign')
 
-                # Track detailed statistics
+                # Track detailed statistics with actual changes
                 stats = {
                     'total_callsigns': len(callsigns),
                     'members_found': 0,
@@ -563,18 +577,26 @@ class CallsignCog(commands.Cog):
                     'removed_inactive': 0,
                     'last_seen_updates': 0,
                     'errors': [],
-                    # Detailed change tracking
                     'nickname_changes': [],
                     'rank_changes': [],
-                    'removed_users': []
+                    'removed_users': [],
+                    'added_users': [],
+                    # ✅ NEW: Naughty role tracking
+                    'naughty_roles_found': 0,
+                    'naughty_roles_stored': 0,
+                    'naughty_roles_removed': 0,
                 }
 
-                # In auto_sync_loop, after fetching callsigns:
+                # ✅ NEW: Track all naughty roles in the server during sync
+                naughty_role_data = []
+
+                # Check each callsign in database
                 for record in callsigns:
                     member = guild.get_member(record['discord_user_id'])
 
                     if member:
                         stats['members_found'] += 1
+
                         # Update last_seen_at to now
                         async with db.pool.acquire() as conn:
                             await conn.execute(
@@ -582,6 +604,22 @@ class CallsignCog(commands.Cog):
                                 member.id
                             )
                         stats['last_seen_updates'] += 1
+
+                        # ✅ NEW: Check for naughty roles on this member
+                        member_naughty_roles = []
+                        for role in member.roles:
+                            if role.id in NAUGHTY_ROLES:
+                                member_naughty_roles.append({
+                                    'discord_user_id': member.id,
+                                    'discord_username': str(member),
+                                    'role_id': role.id,
+                                    'role_name': NAUGHTY_ROLES[role.id]
+                                })
+                                stats['naughty_roles_found'] += 1
+
+                        if member_naughty_roles:
+                            naughty_role_data.extend(member_naughty_roles)
+
                     else:
                         stats['members_not_found'] += 1
                         # User not in server - check if been gone > 7 days
@@ -589,6 +627,17 @@ class CallsignCog(commands.Cog):
                         if last_seen:
                             days_gone = (datetime.utcnow() - last_seen).days
                             if days_gone >= 7:
+                                # Store removal details
+                                callsign_display = f"{record['fenz_prefix']}-{record['callsign']}" if record[
+                                    'fenz_prefix'] else record['callsign']
+                                stats['removed_users'].append({
+                                    'username': record['discord_username'],
+                                    'id': record['discord_user_id'],
+                                    'callsign': callsign_display,
+                                    'days_gone': days_gone,
+                                    'reason': f'Inactive for {days_gone} days'
+                                })
+
                                 # Remove from database
                                 async with db.pool.acquire() as conn:
                                     await conn.execute(
@@ -599,6 +648,90 @@ class CallsignCog(commands.Cog):
                                 await sheets_manager.remove_callsign_from_sheets(record['discord_user_id'])
                                 stats['removed_inactive'] += 1
                                 continue
+
+                # ✅ NEW: Sync naughty roles to database
+                if naughty_role_data:
+                    async with db.pool.acquire() as conn:
+                        # Get all currently stored naughty roles
+                        stored_roles = await conn.fetch(
+                            'SELECT discord_user_id, role_id FROM naughty_roles WHERE removed_at IS NULL'
+                        )
+                        stored_set = {(r['discord_user_id'], r['role_id']) for r in stored_roles}
+
+                        # Current roles in server
+                        current_set = {(r['discord_user_id'], r['role_id']) for r in naughty_role_data}
+
+                        # Roles to add (in server but not in DB)
+                        to_add = current_set - stored_set
+
+                        # Roles to remove (in DB but not in server)
+                        to_remove = stored_set - current_set
+
+                        # Add new naughty roles
+                        for user_id, role_id in to_add:
+                            role_info = next(r for r in naughty_role_data if
+                                             r['discord_user_id'] == user_id and r['role_id'] == role_id)
+                            await conn.execute(
+                                '''INSERT INTO naughty_roles
+                                       (discord_user_id, discord_username, role_id, role_name, last_seen_at)
+                                   VALUES ($1, $2, $3, $4, NOW()) ON CONFLICT (discord_user_id, role_id) 
+                                   DO UPDATE SET removed_at = NULL, last_seen_at = NOW(), discord_username = $2''',
+                                role_info['discord_user_id'],
+                                role_info['discord_username'],
+                                role_info['role_id'],
+                                role_info['role_name']
+                            )
+                            stats['naughty_roles_stored'] += 1
+
+                        # Mark removed roles (user no longer has them)
+                        for user_id, role_id in to_remove:
+                            await conn.execute(
+                                '''UPDATE naughty_roles
+                                   SET removed_at = NOW()
+                                   WHERE discord_user_id = $1
+                                     AND role_id = $2
+                                     AND removed_at IS NULL''',
+                                user_id, role_id
+                            )
+                            stats['naughty_roles_removed'] += 1
+
+                        # Update last_seen_at for all current naughty roles
+                        for role_info in naughty_role_data:
+                            await conn.execute(
+                                '''UPDATE naughty_roles
+                                   SET last_seen_at = NOW()
+                                   WHERE discord_user_id = $1
+                                     AND role_id = $2''',
+                                role_info['discord_user_id'],
+                                role_info['role_id']
+                            )
+
+                    # âœ… Track individual naughty role changes for detailed logging (OUTSIDE transaction)
+                    stats['naughty_role_details'] = {
+                        'added': [],
+                        'removed': []
+                    }
+
+                    # Track who got roles added
+                    for user_id, role_id in to_add:
+                        role_info = next(r for r in naughty_role_data if
+                                       r['discord_user_id'] == user_id and r['role_id'] == role_id)
+                        member = guild.get_member(user_id)
+                        if member:
+                            stats['naughty_role_details']['added'].append({
+                                'member': member,
+                                'role_name': role_info['role_name']
+                            })
+
+                    # Track who got roles removed
+                    for user_id, role_id in to_remove:
+                        member = guild.get_member(user_id)
+                        role_name = NAUGHTY_ROLES.get(role_id, "Unknown")
+                        if member:
+                            stats['naughty_role_details']['removed'].append({
+                                'member': member,
+                                'role_name': role_name
+                            })
 
                 if callsigns:
                     callsign_data = []
@@ -631,6 +764,14 @@ class CallsignCog(commands.Cog):
                                             self.bot.user.id,
                                             "Auto-sync"
                                         )
+
+                                        # Track addition
+                                        callsign_display = f"{sheet_data['fenz_prefix']}-{sheet_data['callsign']}" if \
+                                            sheet_data['fenz_prefix'] else sheet_data['callsign']
+                                        stats['added_users'].append({
+                                            'member': member,
+                                            'callsign': callsign_display
+                                        })
                                         stats['added_from_sheets'] += 1
 
                     # Re-fetch database if we added entries
@@ -700,7 +841,7 @@ class CallsignCog(commands.Cog):
                                 'member': member,
                                 'old_callsign': old_callsign,
                                 'new_prefix': correct_fenz_prefix,
-                                'reason': f'Rank changed: {current_fenz_prefix} → {correct_fenz_prefix}'
+                                'reason': f'FENZ rank changed: {current_fenz_prefix} → {correct_fenz_prefix}'
                             })
 
                             current_fenz_prefix = correct_fenz_prefix
@@ -708,6 +849,13 @@ class CallsignCog(commands.Cog):
                             stats['rank_updates'] += 1
                         elif fenz_rank_changed:
                             # Rank changed but callsign is already ### or BLANK, just update prefix
+                            stats['rank_changes'].append({
+                                'member': member,
+                                'old_rank': current_fenz_prefix or 'None',
+                                'new_rank': correct_fenz_prefix,
+                                'type': 'FENZ'
+                            })
+
                             async with db.pool.acquire() as conn:
                                 await conn.execute(
                                     'UPDATE callsigns SET fenz_prefix = $1 WHERE discord_user_id = $2',
@@ -718,6 +866,13 @@ class CallsignCog(commands.Cog):
 
                         # Update HHStJ prefix if changed
                         if correct_hhstj_prefix != current_hhstj_prefix:
+                            stats['rank_changes'].append({
+                                'member': member,
+                                'old_rank': current_hhstj_prefix or 'None',
+                                'new_rank': correct_hhstj_prefix or 'None',
+                                'type': 'HHStJ'
+                            })
+
                             async with db.pool.acquire() as conn:
                                 await conn.execute(
                                     'UPDATE callsigns SET hhstj_prefix = $1 WHERE discord_user_id = $2',
@@ -747,12 +902,16 @@ class CallsignCog(commands.Cog):
                                 is_fenz_high_command,
                                 is_hhstj_high_command
                             )
+
                         current_nick_stripped = self.strip_shift_prefixes(member.nick) if member.nick else member.name
                         expected_nick_stripped = self.strip_shift_prefixes(expected_nickname)
 
                         # Only update if the stripped versions don't match
                         if current_nick_stripped != expected_nick_stripped:
                             try:
+                                # Store old nickname for logging
+                                old_nickname = member.nick or member.name
+
                                 # Preserve shift prefix if it exists
                                 shift_prefix = ""
                                 if member.nick:
@@ -765,14 +924,26 @@ class CallsignCog(commands.Cog):
                                 final_nickname = shift_prefix + expected_nickname
 
                                 await member.edit(nick=final_nickname)
+
+                                # Track nickname change
+                                stats['nickname_changes'].append({
+                                    'member': member,
+                                    'old': old_nickname,
+                                    'new': final_nickname
+                                })
                                 stats['nickname_updates'] += 1
                             except discord.Forbidden:
-                                # ADD TO FAILED UPDATES LIST WITH DETAILS
-                                stats['errors'].append(
-                                    f"{member.mention} (`{record['discord_username']}`)"
-                                )
+                                stats['errors'].append({
+                                    'member': member,
+                                    'username': record['discord_username'],
+                                    'error': 'Missing permissions'
+                                })
                             except Exception as e:
-                                stats['errors'].append(f"{member.mention}: {str(e)}")
+                                stats['errors'].append({
+                                    'member': member,
+                                    'username': record['discord_username'],
+                                    'error': str(e)
+                                })
 
                         # Determine rank type for sheets
                         rank_type, rank_data = sheets_manager.determine_rank_type(member.roles)
@@ -801,69 +972,28 @@ class CallsignCog(commands.Cog):
                     # Calculate sync duration
                     sync_duration = (datetime.utcnow() - sync_start_time).total_seconds()
 
-                    # Send enhanced log to channel
-                    log_fields = [
-                        {'name': 'Total Callsigns', 'value': str(stats['total_callsigns']), 'inline': True},
-                        {'name': 'Members Found', 'value': str(stats['members_found']), 'inline': True},
-                        {'name': 'Not in Server', 'value': str(stats['members_not_found']), 'inline': True},
-                        {'name': 'Nicknames Updated', 'value': str(stats['nickname_updates']), 'inline': True},
-                        {'name': 'Rank Changes', 'value': str(stats['rank_updates']), 'inline': True},
-                        {'name': 'Last Seen Updates', 'value': str(stats['last_seen_updates']), 'inline': True},
-                    ]
-
-                    if stats['added_from_sheets'] > 0:
-                        log_fields.append(
-                            {'name': 'Added from Sheets', 'value': str(stats['added_from_sheets']), 'inline': True})
-
-                    if stats['removed_inactive'] > 0:
-                        log_fields.append(
-                            {'name': 'Removed (Inactive 7+ days)', 'value': str(stats['removed_inactive']),
-                             'inline': True})
-
-                    if stats['callsigns_reset']:
-                        reset_list = '\n'.join(
-                            [f"• {r['member'].mention}: ~~{r['old_callsign']}~~ → {r['new_prefix']}-### ({r['reason']})"
-                             for r in stats['callsigns_reset'][:5]])
-                        if len(stats['callsigns_reset']) > 5:
-                            reset_list += f"\n... and {len(stats['callsigns_reset']) - 5} more"
-                        log_fields.append({'name': f'Callsigns Reset ({len(stats["callsigns_reset"])})',
-                                           'value': reset_list, 'inline': False})
-
-                    if stats['errors']:
-                        error_text = '\n'.join([f"• {err}" for err in stats['errors'][:10]])
-                        if len(stats['errors']) > 10:
-                            error_text += f"\n... and {len(stats['errors']) - 10} more"
-                        log_fields.append({
-                            'name': f'⚠️ Permission Errors ({len(stats["errors"])})',
-                            'value': error_text,
-                            'inline': False
-                        })
-
-                    # Add performance info
-                    log_fields.append({'name': '⏱️ Sync Duration', 'value': f'{sync_duration:.2f}s', 'inline': True})
-
-                    await self.send_sync_log(
-                        self.bot,
-                        "🔄 Auto-Sync Completed",
-                        f"Automatic sync completed for **{guild.name}**",
-                        log_fields,
-                        discord.Color.blue()
-                    )
+                    # Send enhanced log with DETAILED changes
+                    await self.send_detailed_sync_log(self.bot, guild.name, stats, sync_duration)
 
                     print(f"✅ Auto-sync completed for guild {guild.name}:")
-                    print(f"    {stats['total_callsigns']} callsigns synced to Google Sheets")
-                    print(f"    {stats['members_found']} members found / {stats['members_not_found']} not in server")
-                    print(f"   ️ {stats['nickname_updates']} nicknames updated")
-                    print(f"   ️ {stats['rank_updates']} rank changes detected and saved")
+                    print(f"    📊 {stats['total_callsigns']} callsigns synced to Google Sheets")
+                    print(f"    👥 {stats['members_found']} members found / {stats['members_not_found']} not in server")
+                    print(f"    🏷️ {stats['nickname_updates']} nicknames updated")
+                    print(f"    🎖️ {stats['rank_updates']} rank changes detected and saved")
                     if stats['added_from_sheets'] > 0:
-                        print(f"    {stats['added_from_sheets']} added from sheets")
+                        print(f"    ➕ {stats['added_from_sheets']} added from sheets")
                     if stats['removed_inactive'] > 0:
-                        print(f"   ️ {stats['removed_inactive']} removed (inactive 7+ days)")
+                        print(f"    🗑️ {stats['removed_inactive']} removed (inactive 7+ days)")
                     if stats['callsigns_reset']:
-                        print(f"    {len(stats['callsigns_reset'])} callsigns reset due to rank changes")
+                        print(f"    🔄 {len(stats['callsigns_reset'])} callsigns reset due to rank changes")
+                    # ✅ NEW: Print naughty role stats
+                    if stats['naughty_roles_found'] > 0:
+                        print(f"    🚨 {stats['naughty_roles_found']} naughty roles found")
+                        print(f"    💾 {stats['naughty_roles_stored']} new naughty roles stored")
+                        print(f"    ✂️ {stats['naughty_roles_removed']} naughty roles removed")
                     if stats['errors']:
-                        print(f"   ️ {len(stats['errors'])} errors occurred")
-                    print(f"    Completed in {sync_duration:.2f}s")
+                        print(f"    ⚠️ {len(stats['errors'])} errors occurred")
+                    print(f"    ⏱️ Completed in {sync_duration:.2f}s")
 
             except Exception as e:
                 print(f"❌ Error during auto-sync for {guild.name}: {e}")
@@ -882,32 +1012,288 @@ class CallsignCog(commands.Cog):
                 except:
                     pass
 
-    @staticmethod
-    async def send_sync_log(bot, title: str, description: str, fields: list, color: discord.Color):
-        """Send sync logs to designated channel"""
+    async def send_detailed_sync_log(self, bot, guild_name: str, stats: dict, sync_duration: float):
+        """Send detailed sync logs with specific changes to designated channel"""
         try:
             channel = bot.get_channel(SYNC_LOG_CHANNEL_ID)
             if not channel:
                 print(f"⚠️ Could not find sync log channel {SYNC_LOG_CHANNEL_ID}")
                 return
 
-            embed = discord.Embed(
-                title=title,
-                description=description,
-                color=color,
+            # Main summary embed
+            summary_embed = discord.Embed(
+                title="🔄 Auto-Sync Completed",
+                description=f"Automatic sync completed for **{guild_name}**",
+                color=discord.Color.blue(),
                 timestamp=datetime.utcnow()
             )
 
-            for field in fields:
-                embed.add_field(
-                    name=field['name'],
-                    value=field['value'],
-                    inline=field.get('inline', False)
+            summary_embed.add_field(name='Total Callsigns', value=str(stats['total_callsigns']), inline=True)
+            summary_embed.add_field(name='Members Found', value=str(stats['members_found']), inline=True)
+            summary_embed.add_field(name='Not in Server', value=str(stats['members_not_found']), inline=True)
+            summary_embed.add_field(name='Nicknames Updated', value=str(stats['nickname_updates']), inline=True)
+            summary_embed.add_field(name='Rank Changes', value=str(stats['rank_updates']), inline=True)
+            summary_embed.add_field(name='Duration', value=f'{sync_duration:.2f}s', inline=True)
+
+            # ✅ Naughty role stats
+            if stats.get('naughty_roles_found', 0) > 0:
+                summary_embed.add_field(
+                    name='🚨 Naughty Roles',
+                    value=f"Found: {stats['naughty_roles_found']}\n"
+                          f"Stored: {stats['naughty_roles_stored']}\n"
+                          f"Removed: {stats['naughty_roles_removed']}",
+                    inline=True
                 )
 
-            await channel.send(embed=embed)
+            await channel.send(embed=summary_embed)
+
+            # 1. Nickname Changes - SHOW WHO AND WHAT CHANGED
+            if stats['nickname_changes']:
+                for i in range(0, len(stats['nickname_changes']), 5):
+                    chunk = stats['nickname_changes'][i:i + 5]
+
+                    embed = discord.Embed(
+                        title=f"🏷️ Nickname Updates ({i + 1}-{min(i + 5, len(stats['nickname_changes']))} of {len(stats['nickname_changes'])})",
+                        color=discord.Color.green()
+                    )
+
+                    for change in chunk:
+                        embed.add_field(
+                            name=f"{change['member'].mention} ({change['member'].display_name})",
+                            value=f"**Before:** `{change['old']}`\n**After:** `{change['new']}`",
+                            inline=False
+                        )
+
+                    await channel.send(embed=embed)
+
+            # 2. Rank Changes - SHOW WHO AND WHAT RANK CHANGED
+            if stats['rank_changes']:
+                for i in range(0, len(stats['rank_changes']), 5):
+                    chunk = stats['rank_changes'][i:i + 5]
+
+                    embed = discord.Embed(
+                        title=f"🎖️ Rank Changes ({i + 1}-{min(i + 5, len(stats['rank_changes']))} of {len(stats['rank_changes'])})",
+                        color=discord.Color.gold()
+                    )
+
+                    for change in chunk:
+                        embed.add_field(
+                            name=f"{change['member'].mention} ({change['member'].display_name})",
+                            value=f"**Type:** {change['type']}\n**{change['old_rank']}** → **{change['new_rank']}**",
+                            inline=False
+                        )
+
+                    await channel.send(embed=embed)
+
+            # 3. Callsigns Reset - SHOW WHO AND WHY
+            if stats['callsigns_reset']:
+                for i in range(0, len(stats['callsigns_reset']), 5):
+                    chunk = stats['callsigns_reset'][i:i + 5]
+
+                    embed = discord.Embed(
+                        title=f"🔄 Callsigns Reset ({i + 1}-{min(i + 5, len(stats['callsigns_reset']))} of {len(stats['callsigns_reset'])})",
+                        description="These callsigns were reset to ### due to rank changes",
+                        color=discord.Color.orange()
+                    )
+
+                    for reset in chunk:
+                        embed.add_field(
+                            name=f"{reset['member'].mention} ({reset['member'].display_name})",
+                            value=f"**Old:** {reset['old_callsign']}\n**New:** {reset['new_prefix']}-###\n**Reason:** {reset['reason']}",
+                            inline=False
+                        )
+
+                    await channel.send(embed=embed)
+
+            # 4. Added from Sheets - SHOW WHO WAS ADDED
+            if stats['added_users']:
+                for i in range(0, len(stats['added_users']), 10):
+                    chunk = stats['added_users'][i:i + 10]
+
+                    embed = discord.Embed(
+                        title=f"➕ Added from Sheets ({i + 1}-{min(i + 10, len(stats['added_users']))} of {len(stats['added_users'])})",
+                        description="Users found in sheets but not in database (now added)",
+                        color=discord.Color.teal()
+                    )
+
+                    for added in chunk:
+                        embed.add_field(
+                            name=f"{added['member'].mention} ({added['member'].display_name})",
+                            value=f"**Callsign:** {added['callsign']}",
+                            inline=True
+                        )
+
+                    await channel.send(embed=embed)
+
+            # 5. Removed Users - SHOW WHO WAS REMOVED AND WHY
+            if stats['removed_users']:
+                for i in range(0, len(stats['removed_users']), 5):
+                    chunk = stats['removed_users'][i:i + 5]
+
+                    embed = discord.Embed(
+                        title=f"🗑️ Removed (Inactive) ({i + 1}-{min(i + 5, len(stats['removed_users']))} of {len(stats['removed_users'])})",
+                        description="Users removed from database (not in server for 7+ days)",
+                        color=discord.Color.dark_red()
+                    )
+
+                    for removed in chunk:
+                        embed.add_field(
+                            name=f"{removed['username']} (ID: {removed['id']})",
+                            value=f"**Callsign:** {removed['callsign']}\n**Days Gone:** {removed['days_gone']}\n**Reason:** {removed['reason']}",
+                            inline=False
+                        )
+
+                    await channel.send(embed=embed)
+
+            # 6. Naughty Roles Added - SHOW WHO GOT NAUGHTY ROLES
+            if stats.get('naughty_role_details', {}).get('added'):
+                added_roles = stats['naughty_role_details']['added']
+                for i in range(0, len(added_roles), 10):
+                    chunk = added_roles[i:i + 10]
+
+                    embed = discord.Embed(
+                        title=f"🚨 Naughty Roles Added ({i + 1}-{min(i + 10, len(added_roles))} of {len(added_roles)})",
+                        description="These users received naughty roles during sync",
+                        color=discord.Color.red()
+                    )
+
+                    for item in chunk:
+                        embed.add_field(
+                            name=f"{item['member'].mention} ({item['member'].display_name})",
+                            value=f"**Role:** {item['role_name']}",
+                            inline=True
+                        )
+
+                    await channel.send(embed=embed)
+
+            # 7. Naughty Roles Removed - SHOW WHO LOST NAUGHTY ROLES
+            if stats.get('naughty_role_details', {}).get('removed'):
+                removed_roles = stats['naughty_role_details']['removed']
+                for i in range(0, len(removed_roles), 10):
+                    chunk = removed_roles[i:i + 10]
+
+                    embed = discord.Embed(
+                        title=f"✂️ Naughty Roles Removed ({i + 1}-{min(i + 10, len(removed_roles))} of {len(removed_roles)})",
+                        description="These users no longer have naughty roles",
+                        color=discord.Color.green()
+                    )
+
+                    for item in chunk:
+                        embed.add_field(
+                            name=f"{item['member'].mention} ({item['member'].display_name})",
+                            value=f"**Role:** {item['role_name']}",
+                            inline=True
+                        )
+
+                    await channel.send(embed=embed)
+
+            # 8. Errors - SHOW WHO HAD ERRORS
+            if stats['errors']:
+                for i in range(0, len(stats['errors']), 5):
+                    chunk = stats['errors'][i:i + 5]
+
+                    embed = discord.Embed(
+                        title=f"❌ Errors ({i + 1}-{min(i + 5, len(stats['errors']))} of {len(stats['errors'])})",
+                        description="Permission errors or other issues",
+                        color=discord.Color.red()
+                    )
+
+                    for error in chunk:
+                        member_mention = error['member'].mention if error.get('member') else f"`{error['username']}`"
+                        embed.add_field(
+                            name=member_mention,
+                            value=f"**Error:** {error['error']}",
+                            inline=False
+                        )
+
+                    await channel.send(embed=embed)
+
         except Exception as e:
-            print(f"<:Denied:1426930694633816248> Error sending sync log: {e}")
+            print(f"❌ Error sending detailed sync log: {e}")
+            import traceback
+            traceback.print_exc()
+
+    @commands.Cog.listener()
+    async def on_member_join(self, member: discord.Member):
+        """Restore naughty roles when a user rejoins"""
+        # Skip excluded guilds
+        if member.guild.id in EXCLUDED_GUILDS:
+            return
+
+        try:
+            async with db.pool.acquire() as conn:
+                # Get all active naughty roles for this user
+                stored_roles = await conn.fetch(
+                    '''SELECT role_id, role_name
+                       FROM naughty_roles
+                       WHERE discord_user_id = $1
+                         AND removed_at IS NULL''',
+                    member.id
+                )
+
+            if not stored_roles:
+                return
+
+            # Re-assign each naughty role
+            restored_roles = []
+            failed_roles = []
+
+            for record in stored_roles:
+                role_id = record['role_id']
+                role_name = record['role_name']
+
+                role = member.guild.get_role(role_id)
+                if role:
+                    try:
+                        await member.add_roles(role, reason="Auto-restored naughty role on rejoin")
+                        restored_roles.append(role_name)
+
+                        # Update last_seen_at
+                        async with db.pool.acquire() as conn:
+                            await conn.execute(
+                                '''UPDATE naughty_roles
+                                   SET last_seen_at = NOW()
+                                   WHERE discord_user_id = $1
+                                     AND role_id = $2''',
+                                member.id, role_id
+                            )
+                    except discord.Forbidden:
+                        failed_roles.append(role_name)
+                else:
+                    failed_roles.append(f"{role_name} (role not found)")
+
+            # Log the restoration
+            if restored_roles or failed_roles:
+                channel = self.bot.get_channel(SYNC_LOG_CHANNEL_ID)
+                if channel:
+                    embed = discord.Embed(
+                        title="🚨 Naughty Roles Restored on Rejoin",
+                        description=f"{member.mention} rejoined the server",
+                        color=discord.Color.red(),
+                        timestamp=datetime.utcnow()
+                    )
+
+                    if restored_roles:
+                        embed.add_field(
+                            name="✅ Restored Roles",
+                            value="\n".join(f"• {name}" for name in restored_roles),
+                            inline=False
+                        )
+
+                    if failed_roles:
+                        embed.add_field(
+                            name="❌ Failed to Restore",
+                            value="\n".join(f"• {name}" for name in failed_roles),
+                            inline=False
+                        )
+
+                    embed.set_footer(text=f"User ID: {member.id}")
+                    await channel.send(embed=embed)
+
+        except Exception as e:
+            print(f"Error restoring naughty roles for {member.id}: {e}")
+            import traceback
+            traceback.print_exc()
 
     @staticmethod
     async def send_callsign_request_log(bot, user: discord.Member, callsign: str, fenz_prefix: str,
@@ -1131,7 +1517,7 @@ class CallsignCog(commands.Cog):
                                         'UPDATE callsigns SET callsign = $1, fenz_prefix = $2 WHERE discord_user_id = $3',
                                         "###", correct_fenz_prefix, member.id
                                     )
-                                stats['callsigns_reset'].append({
+                                callsigns_reset.append({
                                     'member': member,
                                     'old_callsign': old_callsign,
                                     'new_prefix': correct_fenz_prefix,
@@ -1323,16 +1709,7 @@ class CallsignCog(commands.Cog):
                     )
                     return
 
-            # Check if callsign already exists (skip if blank)
-            if callsign not in ["BLANK", "###"]:
-                existing = await check_callsign_exists(callsign, fenz_prefix)
-                if existing and existing['discord_user_id'] != user.id:
-                    # Use the new formatted message
-                    error_message = format_duplicate_callsign_message(callsign, existing)
-                    await interaction.followup.send(error_message, ephemeral=True)
-                    return
-
-            # Get user's Roblox info
+            # Get user's Roblox info FIRST
             bloxlink_data = await self.get_bloxlink_data(user.id, interaction.guild.id)
             if not bloxlink_data:
                 await interaction.followup.send(
@@ -1352,16 +1729,14 @@ class CallsignCog(commands.Cog):
                 )
                 return
 
+            # Get FENZ prefix from user's roles
             fenz_prefix = None
             fenz_rank_name = None
-            for role_id, (rank_name, prefix) in FENZ_RANK_MAP.items():
+            for role_id, (rank_name, prefix_abbr) in FENZ_RANK_MAP.items():
                 if any(role.id == role_id for role in user.roles):
-                    fenz_prefix = prefix
+                    fenz_prefix = prefix_abbr
                     fenz_rank_name = rank_name
                     break
-
-            # Get HHStJ rank from user's roles
-            hhstj_prefix = get_hhstj_prefix_from_roles(user.roles)
 
             if not fenz_prefix:
                 await interaction.followup.send(
@@ -1370,18 +1745,22 @@ class CallsignCog(commands.Cog):
                 )
                 return
 
-            # Determine what to assign based on prefix parameter and rank
+            # Get HHStJ rank from user's roles
+            hhstj_prefix = get_hhstj_prefix_from_roles(user.roles)
+
+            # NOW check if callsign already exists (AFTER we have fenz_prefix)
             if callsign not in ["BLANK", "###"]:
                 existing = await check_callsign_exists(callsign, fenz_prefix)
                 if existing and existing['discord_user_id'] != user.id:
-                    # Use the new formatted message
                     error_message = format_duplicate_callsign_message(callsign, existing)
                     await interaction.followup.send(error_message, ephemeral=True)
                     return
-            elif is_high_command and not prefix:
+
+            # Determine what to assign based on prefix parameter and rank
+            if is_high_command and not prefix:
                 # High command without number: Just rank prefix, no callsign number
-                final_fenz_prefix = fenz_prefix  # Keep rank prefix
-                final_callsign = "BLANK"  # No number
+                final_fenz_prefix = fenz_prefix
+                final_callsign = "BLANK"
             else:
                 # Normal assignment: Rank prefix + number
                 final_fenz_prefix = fenz_prefix
@@ -1391,8 +1770,8 @@ class CallsignCog(commands.Cog):
             await add_callsign_to_database(
                 final_callsign, user.id, str(user), roblox_id, roblox_username,
                 final_fenz_prefix, hhstj_prefix or "",
-                interaction.user.id,  # ADD THIS - the admin who ran the command
-                interaction.user.display_name  # ADD THIS - admin's display name
+                interaction.user.id,
+                interaction.user.display_name
             )
 
             # Format nickname
@@ -2798,8 +3177,9 @@ class BulkAssignModal(discord.ui.Modal):
 
         try:
             callsign = self.callsign_input.value.strip()
+            member = self.user_data['member']
 
-            # Validate
+            # Validate callsign format
             if not callsign.isdigit() or len(callsign) > 3:
                 await interaction.followup.send(
                    "<:Denied:1426930694633816248> Invalid callsign! Must be 1-3 digits.",
@@ -2807,21 +3187,19 @@ class BulkAssignModal(discord.ui.Modal):
                 )
                 return
 
-            # Check if exists
+            # Get HHStJ prefix BEFORE checking if callsign exists
+            hhstj_prefix = get_hhstj_prefix_from_roles(member.roles)
+
+            # NOW check if callsign exists (with the correct prefix)
             existing = await check_callsign_exists(callsign, self.user_data['fenz_prefix'])
             if existing:
                 await interaction.followup.send(
-                    f"<:Denied:1426930694633816248> Callsign {callsign} is already taken by <@{existing['discord_user_id']}>!",
+                    f"<:Denied:1426930694633816248> Callsign {self.user_data['fenz_prefix']}-{callsign} is already taken by <@{existing['discord_user_id']}>!",
                     ephemeral=True
                 )
                 return
 
-            # Assign callsign
-            member = self.user_data['member']
-
-            # Get HHStJ prefix
-            hhstj_prefix = get_hhstj_prefix_from_roles(member.roles)
-
+            # Assign callsign to database
             await add_callsign_to_database(
                 callsign,
                 member.id,

@@ -26,6 +26,8 @@ IGNORED_STATS_MESSAGE_IDS = {
     1428968521735602246
 }
 
+IGNORED_WATCH_MESSAGE_IDS = IGNORED_STATS_MESSAGE_IDS
+
 
 # Configuration for multiple guilds
 GUILD_CONFIGS = {
@@ -602,7 +604,7 @@ class WatchCog(commands.Cog):
         try:
             completed_watches = await load_completed_watches()
 
-            print(f"📊 Stats Calculation: Found {len(completed_watches)} total records in database")
+            print(f"Stats Calculation: Found {len(completed_watches)} total records in database")
 
             if not completed_watches:
                 print("⚠️ Stats Calculation: No completed watches found")
@@ -615,13 +617,16 @@ class WatchCog(commands.Cog):
                     'average_duration': 'N/A'
                 }
 
+            # ✅ FILTER OUT BOTH IGNORED MESSAGE IDS AND LCS WATCHES
             filtered_watches = {
                 msg_id: watch_data
                 for msg_id, watch_data in completed_watches.items()
-                if watch_data.get('colour', '').upper() != 'LCS'
+                if (int(msg_id) not in IGNORED_STATS_MESSAGE_IDS and
+                    watch_data.get('colour', '').upper() != 'LCS')
             }
 
-            print(f"🔍 Filtered out {len(completed_watches) - len(filtered_watches)} watches from stats")
+            print(
+                f"🔍 Filtered out {len(completed_watches) - len(filtered_watches)} watches from stats (ignored IDs + LCS)")
 
             if not filtered_watches:
                 print("⚠️ All watches were filtered out")
@@ -676,26 +681,25 @@ class WatchCog(commands.Cog):
                 default=0
             )
 
-            # Most common colour - FIXED
-            # Most common colour - FIXED
+            # Most common colour
             colour_counts = {}
             for watch in successful_watches:
                 colour = watch.get('colour')
-                if colour and colour.strip():  # Ensure colour is not None or empty
+                if colour and colour.strip():
                     colour_counts[colour] = colour_counts.get(colour, 0) + 1
 
             most_common_colour = max(colour_counts.items(), key=lambda x: x[1])[0] if colour_counts else 'N/A'
-            print(f"🎨 Most common colour: {most_common_colour} (from {len(colour_counts)} unique colours)")
+            print(f"Most common colour: {most_common_colour} (from {len(colour_counts)} unique colours)")
 
-            # Most active station - FIXED
+            # Most active station
             station_counts = {}
             for watch in successful_watches:
                 station = watch.get('station')
-                if station and station.strip():  # Ensure station is not None or empty
+                if station and station.strip():
                     station_counts[station] = station_counts.get(station, 0) + 1
 
             most_active_station = max(station_counts.items(), key=lambda x: x[1])[0] if station_counts else 'N/A'
-            print(f"🏢 Most active station: {most_active_station} (from {len(station_counts)} unique stations)")
+            print(f"Most active station: {most_active_station} (from {len(station_counts)} unique stations)")
 
             # Average duration
             total_duration = sum(
@@ -2618,8 +2622,8 @@ class WatchCog(commands.Cog):
                     f"‎\n**Total Watches:** {stats['total_watches']}\n"
                     f"**Longest Watch:** {stats['longest_duration']}\n"
                     f"**Most Attendees:** {stats['most_attendees']}\n"
-                    f"**Most Common Watch Colour:** {stats['most_common_colour']}\n"
-                    f"**Most Active Station:** {stats['most_active_station']}\n"
+                    f"**Most Common Watch Colour:** {stats['most_common_colour']}"
+                    f"**Most Active Station:** {stats['most_active_station']}"
                     f"**Average Watch Duration:** {stats['average_duration']}"
                 ),
                 inline=True

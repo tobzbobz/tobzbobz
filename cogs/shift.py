@@ -2,7 +2,10 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from datetime import datetime, timedelta
-
+import pytz
+import time
+from discord.ext import commands, tasks
+from typing import Optional
 from database import db, ensure_database_connected
 
 import asyncio
@@ -13,6 +16,15 @@ import json
 FENZ_ROLE_ID = 1412790680991961149
 HHSTJ_ROLE_ID = 1414146295974727861
 CC_ROLE_ID = 1430108352377262090
+
+QUOTA_BYPASS_ROLE = 1431031672777740298  # QB - Full quota bypass
+REDUCED_ACTIVITY_ROLE = 1435755328749699275  # RA - 50% quota requirement
+LOA_ROLE = 1415423781161402468  # LOA - Full quota bypass
+
+FENZ_LEADERBOARD_ROLES = [1365536209681514636, 1285474077556998196, 1390867686170300456]
+HHSTJ_LEADERBOARD_ROLES = [1389113393511923863, 1389113460687765534, 1414146295974727861]
+CC_LEADERBOARD_ROLES = [1430108352377262090, 1430116569077383179]
+
 
 typeS = {
     FENZ_ROLE_ID: "Shift FENZ",
@@ -81,6 +93,247 @@ ADDITIONAL_SHIFT_ACCESS = {
 }
 
 
+class WeeklyShiftManager:
+    """Manages weekly shift resets and leaderboard generation"""
+
+    NZST = pytz.timezone('Pacific/Auckland')
+    SHIFT_LOGS_CHANNEL = 1411662121531609130
+    PING_ROLES = [1285474077556998196, 1389113393511923863, 1389550689113473024]
+
+    def __init__(self, cog):
+        self.cog = cog
+        self.bot = cog.bot
+
+    @staticmethod
+    def get_week_monday(dt: Optional[datetime] = None) -> datetime:
+        """Get the Monday (start) of the week for a given datetime in NZST"""
+        if dt is None:
+            dt = datetime.now(WeeklyShiftManager.NZST)
+        elif dt.tzinfo is None:
+            dt = WeeklyShiftManager.NZST.localize(dt)
+
+        # Get to Monday of this week
+        days_since_monday = dt.weekday()
+        monday = dt - timedelta(days=days_since_monday)
+        # Set to midnight
+        return monday.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    @staticmethod
+    def get_current_week_monday() -> datetime:
+        """Returns Monday of the current week in NZST"""
+        return WeeklyShiftManager.get_week_monday()
+
+    @staticmethod
+    def get_previous_week_monday() -> datetime:
+        """Returns Monday of last week in NZST"""
+        current = WeeklyShiftManager.get_current_week_monday()
+        return current - timedelta(days=7)
+
+    @staticmethod
+    def get_two_weeks_ago_monday() -> datetime:
+        """Returns Monday of two weeks ago in NZST"""
+        current = WeeklyShiftManager.get_current_week_monday()
+        return current - timedelta(days=14)
+
+    async def archive_current_week_to_wave(self):
+        """Archive current week shifts to next wave number"""
+        async with self.cog.db.pool.acquire() as conn:
+            current_week = self.get_current_week_monday()
+
+            # Get next wave number
+            max_wave = await conn.fetchval(
+                'SELECT MAX(wave_number) FROM shifts WHERE wave_number IS NOT NULL'
+            )
+            next_wave = (max_wave or 0) + 1
+
+            # Archive all current week shifts to wave number
+            archived = await conn.execute(
+                '''UPDATE shifts
+                   SET wave_number = $1
+                   WHERE week_identifier = $2
+                     AND wave_number IS NULL''',
+                next_wave, current_week
+            )
+
+            print(f"Weekly reset: Archived {archived} shifts to wave {next_wave}")
+
+    async def force_end_active_shifts(self, assign_to_wave: int):
+        """End all active shifts at the weekly reset and assign to wave"""
+        async with self.cog.db.pool.acquire() as conn:
+            active_shifts = await conn.fetch(
+                'SELECT * FROM shifts WHERE end_time IS NULL'
+            )
+
+            for shift in active_shifts:
+                # Calculate final pause duration
+                pause_duration = shift.get('pause_duration', 0)
+                if shift.get('pause_start'):
+                    pause_duration += (datetime.utcnow() - shift['pause_start']).total_seconds()
+
+                # End the shift and assign to current wave
+                await conn.execute(
+                    '''UPDATE shifts
+                       SET end_time        = $1,
+                           pause_duration  = $2,
+                           pause_start     = NULL,
+                           week_identifier = $3,
+                           wave_number     = $4
+                       WHERE id = $5''',
+                    datetime.utcnow(),
+                    pause_duration,
+                    self.get_current_week_monday(),
+                    assign_to_wave,
+                    shift['id']
+                )
+
+                # Clean up roles/nicknames
+                member = self.bot.get_guild(shift.get('guild_id')).get_member(shift['discord_user_id'])
+                if member:
+                    await self.cog.update_nickname_for_shift_status(member, 'off')
+                    await self.cog.update_duty_roles(member, shift['type'], 'off')
+
+            print(f"Force-ended {len(active_shifts)} active shifts for wave {assign_to_wave}")
+
+    async def generate_weekly_report(self, wave_number: int):
+        """Generate and send weekly leaderboard report for a specific wave"""
+
+        async with self.cog.db.pool.acquire() as conn:
+            # Get all users who had shifts in this wave
+            shifts = await conn.fetch(
+                '''SELECT discord_user_id,
+                          type,
+                          SUM(EXTRACT(EPOCH FROM (end_time - start_time)) -
+                              COALESCE(pause_duration, 0)) as total_seconds
+                   FROM shifts
+                   WHERE wave_number = $1
+                     AND end_time IS NOT NULL
+                   GROUP BY discord_user_id, type
+                   ORDER BY type, total_seconds DESC''',
+                wave_number
+            )
+
+            if not shifts:
+                print("No shifts to report for weekly reset")
+                return
+
+            # Get all role quotas
+            quotas = await conn.fetch(
+                'SELECT role_id, quota_seconds, shift_type FROM shift_quotas'
+            )
+            quota_map = {}
+            for q in quotas:
+                key = (q['role_id'], q['shift_type'])
+                quota_map[key] = q['quota_seconds']
+
+            # Get guild
+            guild = self.bot.get_guild(shifts[0]['guild_id']) if 'guild_id' in shifts[0] else None
+            if not guild:
+                # Try to find guild from bot's guilds
+                for g in self.bot.guilds:
+                    if g.get_member(shifts[0]['discord_user_id']):
+                        guild = g
+                        break
+
+            if not guild:
+                print("Could not find guild for weekly report")
+                return
+
+            # Organize by shift type
+            shift_types = {}
+            for shift in shifts:
+                shift_type = shift['type']
+                if shift_type not in shift_types:
+                    shift_types[shift_type] = []
+                shift_types[shift_type].append(shift)
+
+            # Build report embeds
+            embeds = []
+
+            for shift_type, type_shifts in shift_types.items():
+                lines = []
+
+                for shift_data in type_shifts:
+                    member = guild.get_member(shift_data['discord_user_id'])
+                    if not member:
+                        continue
+
+                    # Get user's highest quota for this shift type
+                    max_quota = 0
+                    for role in member.roles:
+                        quota = quota_map.get((role.id, shift_type), 0)
+                        if quota > max_quota:
+                            max_quota = quota
+
+                    # Skip users without quota requirements
+                    if max_quota == 0:
+                        continue
+
+                    active_seconds = shift_data['total_seconds']
+
+                    # Check bypass roles
+                    user_role_ids = {role.id for role in member.roles}
+                    bypass_type = None
+                    completed = False
+
+                    if QUOTA_BYPASS_ROLE in user_role_ids:
+                        bypass_type = 'QB'
+                        completed = True
+                        status = f"✅ {member.mention} - {self.cog.format_duration(timedelta(seconds=active_seconds))} / {self.cog.format_duration(timedelta(seconds=max_quota))} **(QB Bypass)**"
+                    elif LOA_ROLE in user_role_ids:
+                        bypass_type = 'LOA'
+                        completed = True
+                        status = f"✅ {member.mention} - {self.cog.format_duration(timedelta(seconds=active_seconds))} / {self.cog.format_duration(timedelta(seconds=max_quota))} **(LOA Exempt)**"
+                    elif REDUCED_ACTIVITY_ROLE in user_role_ids:
+                        bypass_type = 'RA'
+                        modified_quota = max_quota * 0.5
+                        percentage = (active_seconds / modified_quota * 100) if modified_quota > 0 else 0
+                        completed = percentage >= 100
+                        emoji = "✅" if completed else "❌"
+                        status = f"{emoji} {member.mention} - {self.cog.format_duration(timedelta(seconds=active_seconds))} / {self.cog.format_duration(timedelta(seconds=max_quota))} **({percentage:.1f}% - RA 50% Required)**"
+                    else:
+                        percentage = (active_seconds / max_quota * 100) if max_quota > 0 else 0
+                        completed = percentage >= 100
+                        emoji = "✅" if completed else "❌"
+                        status = f"{emoji} {member.mention} - {self.cog.format_duration(timedelta(seconds=active_seconds))} / {self.cog.format_duration(timedelta(seconds=max_quota))} **({percentage:.1f}%)**"
+
+                    lines.append(status)
+
+                if lines:
+                    embed = discord.Embed(
+                        title=f"**{shift_type.replace('Shift ', '')} Weekly Report**",
+                        description="\n".join(lines),
+                        color=discord.Color(0x000000)
+                    )
+
+                    # Get week dates from wave
+                    week_start = await conn.fetchval(
+                        'SELECT MIN(week_identifier) FROM shifts WHERE wave_number = $1',
+                        wave_number
+                    )
+
+                    if week_start:
+                        week_end = week_start + timedelta(days=6)
+                        embed.set_footer(
+                            text=f"Wave {wave_number} • {week_start.strftime('%d %b')} - {week_end.strftime('%d %b %Y')}"
+                        )
+                    else:
+                        embed.set_footer(text=f"Wave {wave_number}")
+
+                    embeds.append(embed)
+
+            # Send to channel
+            channel = self.bot.get_channel(self.SHIFT_LOGS_CHANNEL)
+            if channel and embeds:
+                # Create ping message
+                ping_mentions = " ".join([f"<@&{role_id}>" for role_id in self.PING_ROLES])
+
+                await channel.send(
+                    content=f"{ping_mentions}\n**Weekly Shift Report**",
+                    embeds=embeds
+                )
+
+                print(f"Sent weekly report with {len(embeds)} embeds")
+
 class ShiftManagementCog(commands.Cog):
     shift_group = app_commands.Group(name="shift", description="Shift management commands")
 
@@ -88,18 +341,58 @@ class ShiftManagementCog(commands.Cog):
         self.bot = bot
         self._role_cache = {}
         self._cache_cleanup_task = None
+        self.weekly_manager = WeeklyShiftManager(self)
         bot.loop.create_task(self.on_cog_load())
 
     async def on_cog_load(self):
         """Run initialization tasks when cog loads"""
         # Wait for bot to be ready
         await self.bot.wait_until_ready()
-
-        # Ensure database is connected
         await ensure_database_connected()
+
+        # Start weekly reset task
+        if not self.weekly_reset_task.is_running():
+            self.weekly_reset_task.start()
 
         # Clean up stale shifts
         await self.cleanup_stale_shifts(self.bot)
+
+    @tasks.loop(time=time(hour=0, minute=0, tzinfo=pytz.timezone('Pacific/Auckland')))
+    async def weekly_reset_task(self):
+        """Check if it's Monday midnight NZST and run weekly reset"""
+        now = datetime.now(WeeklyShiftManager.NZST)
+
+        if now.weekday() == 0:  # Monday
+            print(f"Running weekly shift reset at {now}")
+
+            try:
+                # Get next wave number ONCE
+                async with db.pool.acquire() as conn:
+                    max_wave = await conn.fetchval(
+                        'SELECT MAX(wave_number) FROM shifts WHERE wave_number IS NOT NULL'
+                    )
+                    next_wave = (max_wave or 0) + 1
+
+                # 1️⃣ Archive current week's completed shifts
+                await self.weekly_manager.archive_current_week_to_wave()
+
+                # 2️⃣ Force-end active shifts (they get archived by step 1)
+                await self.weekly_manager.force_end_active_shifts(next_wave)
+
+                # 3️⃣ Generate report for the completed wave
+                await self.weekly_manager.generate_weekly_report(next_wave)
+
+                print(f"Weekly reset completed successfully - Wave {next_wave} created")
+
+            except Exception as e:
+                print(f"Error during weekly reset: {e}")
+                import traceback
+                traceback.print_exc()
+
+    @weekly_reset_task.before_loop
+    async def before_weekly_reset(self):
+        """Wait until bot is ready before starting the task"""
+        await self.bot.wait_until_ready()
 
     def get_user_role_ids(self, member: discord.Member) -> set:
         """Cache user role IDs with TTL"""
@@ -138,18 +431,6 @@ class ShiftManagementCog(commands.Cog):
     def has_super_admin_permission(self, member: discord.Member) -> bool:
         """Check if user has super admin permissions (cached)"""
         return bool(self.get_user_role_ids(member) & set(SUPER_ADMIN_ROLES))
-
-    def has_admin_permission(self, member: discord.Member) -> bool:
-        """Check if user has admin permissions"""
-        return any(role.id in ADMIN_ROLES for role in member.roles)
-
-    def has_senior_admin_permission(self, member: discord.Member) -> bool:
-        """Check if user has senior admin permissions"""
-        return any(role.id in SENIOR_ADMIN_ROLES for role in member.roles)
-
-    def has_super_admin_permission(self, member: discord.Member) -> bool:
-        """Check if user has super admin permissions"""
-        return any(role.id in SUPER_ADMIN_ROLES for role in member.roles)
 
     async def get_duty_roles_for_type(self, type: str) -> tuple:
         """Get duty and break role IDs for a shift type"""
@@ -201,6 +482,8 @@ class ShiftManagementCog(commands.Cog):
 
     async def cleanup_stale_shifts(self, bot):
         """Clean up shifts that were active when bot went offline"""
+        current_week = WeeklyShiftManager.get_current_week_monday()
+
         async with db.pool.acquire() as conn:
             # Find all active shifts
             stale_shifts = await conn.fetch('''
@@ -219,11 +502,12 @@ class ShiftManagementCog(commands.Cog):
                 # End the shift at current time
                 await conn.execute('''
                                    UPDATE shifts
-                                   SET end_time       = $1,
-                                       pause_duration = $2,
-                                       pause_start    = NULL
-                                   WHERE id = $3
-                                   ''', datetime.utcnow(), pause_duration, shift['id'])
+                                   SET end_time        = $1,
+                                       pause_duration  = $2,
+                                       pause_start     = NULL,
+                                       week_identifier = $3
+                                   WHERE id = $4
+                                   ''', datetime.utcnow(), pause_duration, current_week, shift['id'])
 
                 # Clean up roles/nicknames
                 member = bot.get_guild(shift.get('guild_id')).get_member(shift['discord_user_id'])
@@ -264,16 +548,17 @@ class ShiftManagementCog(commands.Cog):
             return dict(shift) if shift else None
 
     async def get_shift_statistics(self, user_id: int):
-        """Calculate shift statistics for a user"""
+        """Calculate shift statistics for a user (current week only)"""
+        current_week = self.weekly_manager.get_current_week_monday()
+
         async with db.pool.acquire() as conn:
-            # Get all completed shifts
             shifts = await conn.fetch(
                 '''SELECT *
                    FROM shifts
                    WHERE discord_user_id = $1
                      AND end_time IS NOT NULL
-                     AND round_number IS NULL''',
-                user_id
+                     AND week_identifier = $2''',  # ✅ Correct - uses week_identifier
+                user_id, current_week
             )
 
             if not shifts:
@@ -286,7 +571,6 @@ class ShiftManagementCog(commands.Cog):
             total_duration = timedelta(0)
             for shift in shifts:
                 duration = shift['end_time'] - shift['start_time']
-                # Subtract pause time if any
                 if shift.get('pause_duration'):
                     duration -= timedelta(seconds=shift['pause_duration'])
                 total_duration += duration
@@ -297,17 +581,102 @@ class ShiftManagementCog(commands.Cog):
                 'average_duration': total_duration / len(shifts) if len(shifts) > 0 else timedelta(0)
             }
 
+    # Update get_bulk_quota_info to filter by current week
+    async def get_bulk_quota_info(self, user_ids: list, guild, shift_type: str = None) -> dict:
+        """Fetch quota info for multiple users at once (current week)"""
+        current_week = self.weekly_manager.get_current_week_monday()
+
+        async with db.pool.acquire() as conn:
+            if shift_type:
+                quotas = await conn.fetch(
+                    'SELECT role_id, quota_seconds FROM shift_quotas WHERE shift_type = $1',
+                    shift_type
+                )
+            else:
+                quotas = await conn.fetch('SELECT role_id, quota_seconds FROM shift_quotas')
+
+            quota_map = {q['role_id']: q['quota_seconds'] for q in quotas}
+
+            if shift_type:
+                shifts = await conn.fetch(
+                    '''SELECT discord_user_id,
+                              SUM(EXTRACT(EPOCH FROM (end_time - start_time)) -
+                                  COALESCE(pause_duration, 0)) as total_seconds
+                       FROM shifts
+                       WHERE discord_user_id = ANY ($1)
+                         AND end_time IS NOT NULL
+                         AND week_identifier = $2
+                         AND type = $3
+                       GROUP BY discord_user_id''',
+                    user_ids, current_week, shift_type
+                )
+            else:
+                shifts = await conn.fetch(
+                    '''SELECT discord_user_id,
+                              SUM(EXTRACT(EPOCH FROM (end_time - start_time)) -
+                                  COALESCE(pause_duration, 0)) as total_seconds
+                       FROM shifts
+                       WHERE discord_user_id = ANY ($1)
+                         AND end_time IS NOT NULL
+                         AND week_identifier = $2
+                       GROUP BY discord_user_id''',
+                    user_ids, current_week
+                )
+
+            user_data = {s['discord_user_id']: s['total_seconds'] for s in shifts}
+
+            results = {}
+            for user_id in user_ids:
+                member = guild.get_member(user_id)
+                if not member:
+                    results[user_id] = {'has_quota': False, 'completed': False, 'bypass_type': None}
+                    continue
+
+                max_quota = max((quota_map.get(role.id, 0) for role in member.roles), default=0)
+                active_seconds = user_data.get(user_id, 0)
+
+                user_role_ids = {role.id for role in member.roles}
+                bypass_type = None
+                completed = False
+
+                if max_quota > 0:
+                    if QUOTA_BYPASS_ROLE in user_role_ids:
+                        bypass_type = 'QB'
+                        completed = True
+                    elif LOA_ROLE in user_role_ids:
+                        bypass_type = 'LOA'
+                        completed = True
+                    elif REDUCED_ACTIVITY_ROLE in user_role_ids:
+                        bypass_type = 'RA'
+                        modified_quota = max_quota * 0.5
+                        completed = (active_seconds / modified_quota >= 1) if modified_quota > 0 else False
+                    else:
+                        completed = (active_seconds / max_quota >= 1) if max_quota > 0 else False
+
+                results[user_id] = {
+                    'has_quota': max_quota > 0,
+                    'quota_seconds': max_quota,
+                    'active_seconds': active_seconds,
+                    'percentage': (active_seconds / max_quota * 100) if max_quota > 0 else 0,
+                    'completed': completed,
+                    'bypass_type': bypass_type
+                }
+
+            return results
+
     async def get_user_summary(self, user_id: int, member: discord.Member = None):
         """Get all user data in a single database connection"""
+        current_week = self.weekly_manager.get_current_week_monday()  # ← ADD THIS
+
         async with db.pool.acquire() as conn:
-            # Get statistics
+            # Get statistics for CURRENT WEEK ONLY
             shifts = await conn.fetch(
                 '''SELECT *
                    FROM shifts
                    WHERE discord_user_id = $1
                      AND end_time IS NOT NULL
-                     AND round_number IS NULL''',
-                user_id
+                     AND week_identifier = $2''',  # ✅ Filter by current week
+                user_id, current_week
             )
 
             # Calculate stats
@@ -324,15 +693,15 @@ class ShiftManagementCog(commands.Cog):
                 'average_duration': total_duration / len(shifts) if len(shifts) > 0 else timedelta(0)
             }
 
-            # Get last shift
+            # Get last shift (current week only)
             last_shift = await conn.fetchrow(
                 '''SELECT *
                    FROM shifts
                    WHERE discord_user_id = $1
                      AND end_time IS NOT NULL
-                     AND round_number IS NULL
+                     AND week_identifier = $2
                    ORDER BY end_time DESC LIMIT 1''',
-                user_id
+                user_id, current_week
             )
 
             # Get quota info if member provided
@@ -378,56 +747,76 @@ class ShiftManagementCog(commands.Cog):
             }
 
     async def get_last_shift(self, user_id: int):
-        """Get the user's most recent completed shift"""
+        """Get the user's most recent completed shift (current week)"""
+        current_week = self.weekly_manager.get_current_week_monday()
+
         async with db.pool.acquire() as conn:
             shift = await conn.fetchrow(
                 '''SELECT *
                    FROM shifts
                    WHERE discord_user_id = $1
                      AND end_time IS NOT NULL
-                     AND round_number IS NULL
+                     AND week_identifier = $2
                    ORDER BY end_time DESC LIMIT 1''',
-                user_id
+                user_id, current_week
             )
             return dict(shift) if shift else None
 
-    async def get_quota_for_role(self, role_id: int) -> int:
+    async def get_quota_for_role(self, role_id: int, shift_type: str = None) -> int:
         """Get quota in seconds for a role, returns 0 if no quota set"""
         async with db.pool.acquire() as conn:
-            result = await conn.fetchrow(
-                'SELECT quota_seconds FROM shift_quotas WHERE role_id = $1',
-                role_id
-            )
+            if shift_type:
+                result = await conn.fetchrow(
+                    'SELECT quota_seconds FROM shift_quotas WHERE role_id = $1 AND shift_type = $2',
+                    role_id, shift_type
+                )
+            else:
+                result = await conn.fetchrow(
+                    'SELECT quota_seconds FROM shift_quotas WHERE role_id = $1',
+                    role_id
+                )
             return result['quota_seconds'] if result else 0
 
-    async def get_user_quota(self, member: discord.Member) -> int:
-        """Get the highest quota from all of a user's roles"""
-        max_quota = 0
-        for role in member.roles:
-            quota = await self.get_quota_for_role(role.id)
-            if quota > max_quota:
-                max_quota = quota
-        return max_quota
-
-    async def get_bulk_quota_info(self, user_ids: list, guild) -> dict:
+    async def get_bulk_quota_info(self, user_ids: list, guild, shift_type: str = None) -> dict:
         """Fetch quota info for multiple users at once"""
         async with db.pool.acquire() as conn:
-            # Get all role quotas once
-            quotas = await conn.fetch('SELECT role_id, quota_seconds FROM shift_quotas')
+            # Get all role quotas once (with optional shift_type filter)
+            if shift_type:
+                quotas = await conn.fetch(
+                    'SELECT role_id, quota_seconds FROM shift_quotas WHERE shift_type = $1',
+                    shift_type
+                )
+            else:
+                quotas = await conn.fetch('SELECT role_id, quota_seconds FROM shift_quotas')
+
             quota_map = {q['role_id']: q['quota_seconds'] for q in quotas}
 
             # Get shift data for all users in one query
-            shifts = await conn.fetch(
-                '''SELECT discord_user_id,
-                          SUM(EXTRACT(EPOCH FROM (end_time - start_time)) -
-                              COALESCE(pause_duration, 0)) as total_seconds
-                   FROM shifts
-                   WHERE discord_user_id = ANY ($1)
-                     AND end_time IS NOT NULL
-                     AND round_number IS NULL
-                   GROUP BY discord_user_id''',
-                user_ids
-            )
+            if shift_type:
+                shifts = await conn.fetch(
+                    '''SELECT discord_user_id,
+                              SUM(EXTRACT(EPOCH FROM (end_time - start_time)) -
+                                  COALESCE(pause_duration, 0)) as total_seconds
+                       FROM shifts
+                       WHERE discord_user_id = ANY ($1)
+                         AND end_time IS NOT NULL
+                         AND round_number IS NULL
+                         AND type = $2
+                       GROUP BY discord_user_id''',
+                    user_ids, shift_type
+                )
+            else:
+                shifts = await conn.fetch(
+                    '''SELECT discord_user_id,
+                              SUM(EXTRACT(EPOCH FROM (end_time - start_time)) -
+                                  COALESCE(pause_duration, 0)) as total_seconds
+                       FROM shifts
+                       WHERE discord_user_id = ANY ($1)
+                         AND end_time IS NOT NULL
+                         AND round_number IS NULL
+                       GROUP BY discord_user_id''',
+                    user_ids
+                )
 
             # Build result dict
             user_data = {s['discord_user_id']: s['total_seconds'] for s in shifts}
@@ -436,25 +825,54 @@ class ShiftManagementCog(commands.Cog):
             for user_id in user_ids:
                 member = guild.get_member(user_id)
                 if not member:
-                    results[user_id] = {'has_quota': False, 'completed': False}
+                    results[user_id] = {'has_quota': False, 'completed': False, 'bypass_type': None}
                     continue
 
                 max_quota = max((quota_map.get(role.id, 0) for role in member.roles), default=0)
                 active_seconds = user_data.get(user_id, 0)
+
+                # Check for bypass roles
+                user_role_ids = {role.id for role in member.roles}
+                bypass_type = None
+                completed = False
+
+                if max_quota > 0:
+                    if QUOTA_BYPASS_ROLE in user_role_ids:
+                        bypass_type = 'QB'
+                        completed = True
+                    elif LOA_ROLE in user_role_ids:
+                        bypass_type = 'LOA'
+                        completed = True
+                    elif REDUCED_ACTIVITY_ROLE in user_role_ids:
+                        bypass_type = 'RA'
+                        modified_quota = max_quota * 0.5
+                        completed = (active_seconds / modified_quota >= 1) if modified_quota > 0 else False
+                    else:
+                        completed = (active_seconds / max_quota >= 1) if max_quota > 0 else False
 
                 results[user_id] = {
                     'has_quota': max_quota > 0,
                     'quota_seconds': max_quota,
                     'active_seconds': active_seconds,
                     'percentage': (active_seconds / max_quota * 100) if max_quota > 0 else 0,
-                    'completed': (active_seconds / max_quota >= 1) if max_quota > 0 else False
+                    'completed': completed,
+                    'bypass_type': bypass_type
                 }
 
             return results
 
-    async def get_quota_info(self, member: discord.Member) -> dict:
-        """Get quota information for a user including percentage"""
-        quota_seconds = await self.get_user_quota(member)
+    async def get_user_quota(self, member: discord.Member, shift_type: str = None) -> int:
+        """Get the highest quota from all of a user's roles that have quotas set"""
+        max_quota = 0
+        for role in member.roles:
+            quota = await self.get_quota_for_role(role.id, shift_type)
+            if quota > max_quota:
+                max_quota = quota
+        return max_quota
+
+    async def get_quota_info(self, member: discord.Member, shift_type: str = None) -> dict:
+        """Get quota information for a user including percentage and bypass status"""
+        quota_seconds = await self.get_user_quota(member, shift_type)
 
         if quota_seconds == 0:
             return {
@@ -462,22 +880,49 @@ class ShiftManagementCog(commands.Cog):
                 'quota_seconds': 0,
                 'active_seconds': 0,
                 'percentage': 0,
-                'completed': False
+                'completed': False,
+                'bypass_type': None
             }
 
-        active_seconds = await self.get_total_active_time(member.id)
-        percentage = (active_seconds / quota_seconds) * 100
+        active_seconds = await self.get_total_active_time(member.id, shift_type)
+
+        # Check for quota bypass roles
+        user_role_ids = {role.id for role in member.roles}
+        bypass_type = None
+        modified_quota = quota_seconds
+
+        if QUOTA_BYPASS_ROLE in user_role_ids:
+            bypass_type = 'QB'
+            completed = True
+        elif LOA_ROLE in user_role_ids:
+            bypass_type = 'LOA'
+            completed = True
+        elif REDUCED_ACTIVITY_ROLE in user_role_ids:
+            bypass_type = 'RA'
+            modified_quota = quota_seconds * 0.5  # 50% of quota
+            percentage = (active_seconds / modified_quota) * 100 if modified_quota > 0 else 0
+            completed = percentage >= 100
+        else:
+            percentage = (active_seconds / quota_seconds) * 100
+            completed = percentage >= 100
+
+        # Calculate percentage based on original quota for display
+        display_percentage = (active_seconds / quota_seconds) * 100 if quota_seconds > 0 else 0
 
         return {
             'has_quota': True,
             'quota_seconds': quota_seconds,
+            'modified_quota_seconds': modified_quota if bypass_type == 'RA' else quota_seconds,
             'active_seconds': active_seconds,
-            'percentage': percentage,
-            'completed': percentage >= 100
+            'percentage': display_percentage,
+            'completed': completed,
+            'bypass_type': bypass_type
         }
 
     async def get_total_active_time(self, user_id: int, type: str = None) -> int:
-        """Get total active shift time in seconds for current round"""
+        """Get total active shift time in seconds for current week"""
+        current_week = self.weekly_manager.get_current_week_monday()
+
         async with db.pool.acquire() as conn:
             if type:
                 shifts = await conn.fetch(
@@ -486,8 +931,8 @@ class ShiftManagementCog(commands.Cog):
                        WHERE discord_user_id = $1
                          AND type = $2
                          AND end_time IS NOT NULL
-                         AND round_number IS NULL''',
-                    user_id, type
+                         AND week_identifier = $3''',
+                    user_id, type, current_week
                 )
             else:
                 shifts = await conn.fetch(
@@ -495,8 +940,8 @@ class ShiftManagementCog(commands.Cog):
                        FROM shifts
                        WHERE discord_user_id = $1
                          AND end_time IS NOT NULL
-                         AND round_number IS NULL''',
-                    user_id
+                         AND week_identifier = $3''',
+                    user_id, current_week
                 )
 
             total_seconds = 0
@@ -566,56 +1011,67 @@ class ShiftManagementCog(commands.Cog):
 
         return ", ".join(parts)
 
+    @shift_group.command(name="test_weekly_reset", description="[ADMIN] Test weekly reset (dev only)")
+    async def test_weekly_reset(self, interaction: discord.Interaction):
+        """Test command to manually trigger weekly reset"""
+        await interaction.response.defer(ephemeral=True)
+
+        if not self.has_super_admin_permission(interaction.user):
+            await interaction.followup.send(
+                "<:Denied:1426930694633816248> You don't have permission for this command.",
+                ephemeral=True
+            )
+            return
+
+        try:
+            await self.weekly_manager.generate_weekly_report()
+            await self.weekly_manager.force_end_active_shifts()
+            await self.weekly_manager.archive_and_cleanup_shifts()
+
+            await interaction.followup.send(
+                "<:Accepted:1426930333789585509> Weekly reset test completed!",
+                ephemeral=True
+            )
+        except Exception as e:
+            await interaction.followup.send(
+                f"<:Denied:1426930694633816248> Error: {str(e)}",
+                ephemeral=True
+            )
+            import traceback
+            traceback.print_exc()
+
     @shift_group.command(name="quota", description="View or set shift quotas")
     @app_commands.describe(
         action="View your quota or set quota for roles",
         role="The role to set quota for (admin only)",
         hours="Hours for the quota",
-        minutes="Minutes for the quota"
+        minutes="Minutes for the quota",
+        shift_type = "The shift type to set quota for"
     )
     @app_commands.choices(action=[
         app_commands.Choice(name="View My Quota", value="view"),
-        app_commands.Choice(name="Set Role Quota", value="set")
-    ])
+        app_commands.Choice(name="Set Role Quota", value="set"),
+        app_commands.Choice(name="Remove Role Quota", value="remove"),
+        app_commands.Choice(name="View All Quotas", value="view_all")
+    ],
+        shift_type=[
+            app_commands.Choice(name="Shift FENZ", value="Shift FENZ"),
+            app_commands.Choice(name="Shift HHStJ", value="Shift HHStJ"),
+            app_commands.Choice(name="Shift CC", value="Shift CC")
+        ]
+    )
     async def shift_quota(
             self,
             interaction: discord.Interaction,
             action: app_commands.Choice[str],
-            role: discord.Role = None,
+            roles: str = None,
             hours: int = 0,
-            minutes: int = 0
+            minutes: int = 0,
+            shift_type: app_commands.Choice[str] = None
     ):
         await interaction.response.defer()
 
         if action.value == "view":
-            # Show user's quota
-            quota_info = await self.get_quota_info(interaction.user)
-
-            if not quota_info['has_quota']:
-                await interaction.edit_original_response(
-                    content="You don't have a shift quota assigned.",
-                    ephemeral=True
-                )
-                return
-
-            embed = discord.Embed(
-                title="",
-                color=discord.Color.green() if quota_info['completed'] else discord.Color.orange()
-            )
-            embed.set_author(
-                name="<:Search:1434957367505719457> Your Shift Quota",
-                icon_url=interaction.user.display_avatar.url
-            )
-
-            status_emoji = "<:Accepted:1426930333789585509>" if quota_info['completed'] else "<:Denied:1426930694633816248>"
-            embed.add_field(
-                name=f"{status_emoji} **{quota_info['percentage']:.1f}%** Complete",
-                value=f"**Required:** {self.format_duration(timedelta(seconds=quota_info['quota_seconds']))}\n"
-                      f"**Completed:** {self.format_duration(timedelta(seconds=quota_info['active_seconds']))}\n"
-                      f"**Remaining:** {self.format_duration(timedelta(seconds=remaining))}",
-                inline=False
-            )
-            await interaction.edit_original_response(embed=embed)
 
         elif action.value == "set":
             # Check admin permission
@@ -625,12 +1081,40 @@ class ShiftManagementCog(commands.Cog):
                     ephemeral=True
                 )
                 return
-            if not role:
+
+            if not roles:
                 await interaction.followup.send(
-                    "<:Denied:1426930694633816248> Please specify a role to set quota for.",
+                    "<:Denied:1426930694633816248> Please specify role(s) to set quota for.",
                     ephemeral=True
                 )
                 return
+
+            if not shift_type:
+                await interaction.followup.send(
+                    "<:Denied:1426930694633816248> Please specify a shift type.",
+                    ephemeral=True
+                )
+                return
+
+            # Parse roles (like shift_reset does)
+            role_ids = []
+            for role_str in roles.split(','):
+                role_str = role_str.strip().replace('<@&', '').replace('>', '')
+                try:
+                    role_id = int(role_str)
+                    role = interaction.guild.get_role(role_id)
+                    if role:
+                        role_ids.append(role_id)
+                except ValueError:
+                    continue
+
+            if not role_ids:
+                await interaction.followup.send(
+                    "<:Denied:1426930694633816248> No valid roles provided.",
+                    ephemeral=True
+                )
+                return
+
             # Calculate total seconds
             total_seconds = (hours * 3600) + (minutes * 60)
 
@@ -640,123 +1124,252 @@ class ShiftManagementCog(commands.Cog):
                     ephemeral=True
                 )
                 return
-            # Save to database
+
+            # Check for conflicts and save to database
             async with db.pool.acquire() as conn:
-                await conn.execute(
-                    '''INSERT INTO shift_quotas (role_id, quota_seconds)
-                       VALUES ($1, $2) ON CONFLICT (role_id) DO
-                    UPDATE SET quota_seconds = $2''',
-                    role.id, total_seconds
+                conflicts = []
+                for role_id in role_ids:
+                    # Check if quota already exists
+                    existing = await conn.fetchrow(
+                        'SELECT quota_seconds FROM shift_quotas WHERE role_id = $1 AND shift_type = $2',
+                        role_id, shift_type.value
+                    )
+
+                    if existing:
+                        role = interaction.guild.get_role(role_id)
+                        conflicts.append(
+                            f"{role.mention} (currently: {self.format_duration(timedelta(seconds=existing['quota_seconds']))})")
+
+                if conflicts:
+                    # Show confirmation for overwriting
+                    confirm_view = QuotaConflictView(
+                        self, interaction.user, role_ids, total_seconds, shift_type.value
+                    )
+                    await interaction.followup.send(
+                        f"**The following roles already have quotas set for {shift_type.value}:**\n" +
+                        "\n".join(conflicts) +
+                        f"\n\nOverwrite with **{self.format_duration(timedelta(seconds=total_seconds))}**?",
+                        view=confirm_view,
+                        ephemeral=True
+                    )
+                    return
+
+                # No conflicts, set quotas
+                role_mentions = []
+                for role_id in role_ids:
+                    await conn.execute(
+                        '''INSERT INTO shift_quotas (role_id, quota_seconds, shift_type)
+                           VALUES ($1, $2, $3) ON CONFLICT (role_id, shift_type) DO
+                        UPDATE SET quota_seconds = $2''',
+                        role_id, total_seconds, shift_type.value
+                    )
+                    role = interaction.guild.get_role(role_id)
+                    if role:
+                        role_mentions.append(role.mention)
+
+                await interaction.edit_original_response(
+                    content=f"<:Accepted:1426930333789585509> Set quota for {', '.join(role_mentions)} to {self.format_duration(timedelta(seconds=total_seconds))} ({shift_type.value})",
+                    ephemeral=True
                 )
 
-            await interaction.edit_original_response(
-                content=f"<:Accepted:1426930333789585509> Set quota for {role.mention} to {self.format_duration(timedelta(seconds=total_seconds))}",
-                ephemeral=True
+        elif action.value == "remove":
+            # Check admin permission
+            if not any(role_check.id in QUOTA_ADMIN_ROLES for role_check in interaction.user.roles):
+                await interaction.followup.send(
+                    "<:Denied:1426930694633816248> You don't have permission to remove quotas.",
+                    ephemeral=True
+                )
+                return
+
+            if not role:
+                await interaction.followup.send(
+                    "<:Denied:1426930694633816248> Please specify a role to remove quota from.",
+                    ephemeral=True
+                )
+                return
+
+            # Delete from database
+            async with db.pool.acquire() as conn:
+                result = await conn.execute(
+                    'DELETE FROM shift_quotas WHERE role_id = $1',
+                    role.id
+                )
+
+            if result == "DELETE 0":
+                await interaction.edit_original_response(
+                    content=f"<:Denied:1426930694633816248> {role.mention} doesn't have a quota set.",
+                    ephemeral=True
+                )
+            else:
+                await interaction.edit_original_response(
+                    content=f"<:Accepted:1426930333789585509> Removed quota for {role.mention}",
+                    ephemeral=True
+                )
+
+        elif action.value == "view_all":
+            # Check admin permission
+            if not any(role_check.id in QUOTA_ADMIN_ROLES for role_check in interaction.user.roles):
+                await interaction.followup.send(
+                    "<:Denied:1426930694633816248> You don't have permission to view quotas.",
+                    ephemeral=True
+                )
+                return
+
+            # Fetch all quotas
+            async with db.pool.acquire() as conn:
+                quotas = await conn.fetch('SELECT role_id, quota_seconds FROM shift_quotas ORDER BY quota_seconds DESC')
+
+            if not quotas:
+                await interaction.edit_original_response(
+                    content="No shift quotas have been set.",
+                    ephemeral=True
+                )
+                return
+
+            # Create embed
+            embed = discord.Embed(
+                title="<:Search:1434957367505719457> Role Quotas",
+                color=discord.Color(0x000000)
             )
+
+            quota_lines = []
+            for quota in quotas:
+                role = interaction.guild.get_role(quota['role_id'])
+                if role:
+                    quota_lines.append(
+                        f"{role.mention} • {self.format_duration(timedelta(seconds=quota['quota_seconds']))}"
+                    )
+
+            if quota_lines:
+                embed.description = "\n".join(quota_lines)
+            else:
+                embed.description = "No valid roles found."
+
+            await interaction.edit_original_response(embed=embed)
 
     @shift_group.command(name="leaderboard", description="View shift leaderboard")
     @app_commands.describe(
-        role="Filter by role (optional)",
-        wave="Filter by wave number (optional)"
+        shift_type="Filter by shift type (REQUIRED)",
+        wave="View current week or specific wave number (e.g., 1, 2, 3)"  # ← Changed description
+    )
+    @app_commands.choices(
+        shift_type=[
+            app_commands.Choice(name="Shift FENZ", value="Shift FENZ"),
+            app_commands.Choice(name="Shift HHStJ", value="Shift HHStJ"),
+            app_commands.Choice(name="Shift CC", value="Shift CC")
+        ]
+        # ← REMOVED the week choices completely
     )
     async def shift_leaderboard(
             self,
             interaction: discord.Interaction,
-            role: discord.Role = None,
-            wave: int = None
+            shift_type: app_commands.Choice[str],
+            wave: int = None  # ← Changed to integer parameter
     ):
         await interaction.response.defer()
 
-        # Check permission
-        if not any(role.id in LEADERBOARD_ROLES for role in interaction.user.roles):
+        # Check permission (keep existing code)
+        required_roles = {
+            "Shift FENZ": [FENZ_ROLE_ID] + ADMIN_ROLES,
+            "Shift HHStJ": [HHSTJ_ROLE_ID] + ADMIN_ROLES,
+            "Shift CC": [CC_ROLE_ID] + ADMIN_ROLES
+        }
+
+        user_role_ids = {role.id for role in interaction.user.roles}
+        if not user_role_ids & set(required_roles.get(shift_type.value, [])):
             await interaction.followup.send(
-                "<:Denied:1426930694633816248> You don't have permission to view the leaderboard.",
+                f"<:Denied:1426930694633816248> You don't have permission to view the {shift_type.value} leaderboard.",
                 ephemeral=True
             )
             return
 
         try:
-            # Build query based on filters
             async with db.pool.acquire() as conn:
                 if wave is not None:
-                    # Filter by wave
-                    query = '''SELECT discord_user_id, \
+                    # View specific wave (historical data)
+                    query = '''SELECT discord_user_id,
                                       discord_username,
-                                      SUM(EXTRACT(EPOCH FROM (end_time - start_time)) - \
+                                      SUM(EXTRACT(EPOCH FROM (end_time - start_time)) -
                                           COALESCE(pause_duration, 0)) as total_seconds
                                FROM shifts
-                               WHERE end_time IS NOT NULL \
-                                 AND round_number = $1
+                               WHERE end_time IS NOT NULL
+                                 AND wave_number = $1
+                                 AND type = $2
                                GROUP BY discord_user_id, discord_username
                                ORDER BY total_seconds DESC LIMIT 25'''
-                    results = await conn.fetch(query, wave)
+                    results = await conn.fetch(query, wave, shift_type.value)
+
+                    # Get week dates for this wave
+                    week_start = await conn.fetchval(
+                        'SELECT MIN(week_identifier) FROM shifts WHERE wave_number = $1',
+                        wave
+                    )
+
+                    if week_start:
+                        week_end = week_start + timedelta(days=6)
+                        wave_label = f"Wave {wave} ({week_start.strftime('%d %b')} - {week_end.strftime('%d %b %Y')})"
+                    else:
+                        wave_label = f"Wave {wave}"
                 else:
-                    # Current round (no wave)
-                    query = '''SELECT discord_user_id, \
+                    # View current week (no wave assigned yet)
+                    current_week = self.weekly_manager.get_current_week_monday()
+                    query = '''SELECT discord_user_id,
                                       discord_username,
-                                      SUM(EXTRACT(EPOCH FROM (end_time - start_time)) - \
+                                      SUM(EXTRACT(EPOCH FROM (end_time - start_time)) -
                                           COALESCE(pause_duration, 0)) as total_seconds
                                FROM shifts
-                               WHERE end_time IS NOT NULL \
-                                 AND round_number IS NULL
+                               WHERE end_time IS NOT NULL
+                                 AND week_identifier = $1
+                                 AND wave_number IS NULL
+                                 AND type = $2
                                GROUP BY discord_user_id, discord_username
                                ORDER BY total_seconds DESC LIMIT 25'''
-                    results = await conn.fetch(query)
+                    results = await conn.fetch(query, current_week, shift_type.value)
+                    wave_label = "Current Week"
 
             if not results:
                 await interaction.edit_original_response(
-                    content="No shift data available."
+                    content=f"No shift data available for {wave_label}."
                 )
                 return
 
             user_ids = [row['discord_user_id'] for row in results]
-            quota_infos = await self.get_bulk_quota_info(user_ids, interaction.guild)
+            quota_infos = await self.get_bulk_quota_info(user_ids, interaction.guild, shift_type.value)
 
             embed = discord.Embed(
                 title="Shift Leaderboard",
-                description="",  # Remove wave info from description
+                description="",
                 color=discord.Color(0x000000)
             )
             embed.set_author(
-                name=f"{interaction.guild.name}: Activity Wave {wave if wave else 'Current'}",
+                name=f"{interaction.guild.name}: {wave_label}",
                 icon_url=interaction.guild.icon.url if interaction.guild.icon else None
             )
 
             leaderboard_lines = []
-            user_position = None
 
             for idx, row in enumerate(results, 1):
                 member = interaction.guild.get_member(row['discord_user_id'])
                 if not member:
                     continue
 
-                # Check if role is set and user has it
-                if role and role not in member.roles:
-                    continue
-
-                # Get quota info
-                quota_info = quota_infos.get(row['discord_user_id'], {'has_quota': False})
+                quota_info = quota_infos.get(row['discord_user_id'], {'has_quota': False, 'bypass_type': None})
                 quota_status = ""
                 if quota_info['has_quota']:
-                    quota_status = " <:Accepted:1426930333789585509>" if quota_info['completed'] else " <:Denied:1426930694633816248>"
+                    if quota_info['bypass_type']:
+                        quota_status = f" • <:Accepted:1426930333789585509> ({quota_info['bypass_type']})"
+                    elif quota_info['completed']:
+                        quota_status = f" • <:Accepted:1426930333789585509>"
+                    else:
+                        quota_status = f" • <:Denied:1426930694633816248>"
 
-                # Format time
                 time_str = self.format_duration(timedelta(seconds=int(row['total_seconds'])))
-
-                # Check if this is the requesting user
-                if row['discord_user_id'] == interaction.user.id:
-                    user_position = idx
-                    leaderboard_lines.append(f"`{idx}.` {member.mention} • {time_str} - {quota_status}")
-                else:
-                    leaderboard_lines.append(f"`{idx}.` {member.mention} • {time_str} - {quota_status}")
+                leaderboard_lines.append(f"`{idx}.` {member.mention} • {time_str}{quota_status}")
 
             if leaderboard_lines:
-                embed.description += "\n\n" + "\n".join(leaderboard_lines)
+                embed.description = "\n".join(leaderboard_lines)
 
-            if role:
-                embed.set_footer(text=f"Filtered by: {role.name}")
-            else:
-                embed.set_footer(text=f"Showing All Shift Types")
+            embed.set_footer(text=f"Shift Type: {shift_type.value}")
 
             await interaction.edit_original_response(embed=embed)
 
@@ -768,7 +1381,7 @@ class ShiftManagementCog(commands.Cog):
             import traceback
             traceback.print_exc()
 
-    @shift_group.command(name="reset", description="[ADMIN] Reset shifts for a wave")
+    '''@shift_group.command(name="reset", description="[ADMIN] Reset shifts for a wave")
     @app_commands.describe(
         roles="Roles to reset shifts for (comma-separated role IDs or @mentions)",
         confirm="Type CONFIRM to proceed"
@@ -776,8 +1389,7 @@ class ShiftManagementCog(commands.Cog):
     async def shift_reset(
             self,
             interaction: discord.Interaction,
-            roles: str,
-            confirm: str
+            roles: str
     ):
         await interaction.response.defer()
 
@@ -785,13 +1397,6 @@ class ShiftManagementCog(commands.Cog):
         if not any(role.id in RESET_ROLES for role in interaction.user.roles):
             await interaction.followup.send(
                 "<:Denied:1426930694633816248> You don't have permission to reset shifts.",
-                ephemeral=True
-            )
-            return
-
-        if confirm.upper() != "CONFIRM":
-            await interaction.followup.send(
-                "<:Denied:1426930694633816248> Please type CONFIRM to proceed with reset.",
                 ephemeral=True
             )
             return
@@ -814,41 +1419,27 @@ class ShiftManagementCog(commands.Cog):
                 )
                 return
 
-            # Get next wave number
-            async with db.pool.acquire() as conn:
-                max_wave = await conn.fetchval(
-                    'SELECT MAX(round_number) FROM shifts WHERE round_number IS NOT NULL'
-                )
-                next_wave = (max_wave or 0) + 1
+            # Get affected user count
+            affected_users = set()
+            role_names = []
+            for role_id in role_ids:
+                role = interaction.guild.get_role(role_id)
+                if role:
+                    affected_users.update([member.id for member in role.members])
+                    role_names.append(role.name)
 
-                # Get all users with these roles and current shifts
-                affected_users = set()
-                for role_id in role_ids:
-                    role = interaction.guild.get_role(role_id)
-                    if role:
-                        affected_users.update([member.id for member in role.members])
-
-                # Archive current shifts to wave
-                archived_count = 0
-                for user_id in affected_users:
-                    result = await conn.execute(
-                        '''UPDATE shifts
-                           SET round_number = $1
-                           WHERE discord_user_id = $2
-                             AND round_number IS NULL''',
-                        next_wave, user_id
-                    )
-                    if result != 'UPDATE 0':
-                        archived_count += 1
-
-            role_names = [interaction.guild.get_role(rid).name for rid in role_ids if interaction.guild.get_role(rid)]
-
-            await interaction.edit_original_response(
-                content=f"<:Accepted:1426930333789585509> **Wave {next_wave} Created**\n"
-                        f"• Archived shifts for {len(affected_users)} users\n"
-                        f"• Affected roles: {', '.join(role_names)}\n"
-                        f"• Users can now start fresh shifts for the new wave"
+            # Show confirmation view
+            embed = discord.Embed(
+                title="**Reset Shifts**",
+                description=f"Are you sure you want to archive all current shifts and create a new wave?\n\n"
+                            f"**Affected Roles:** {', '.join(role_names)}\n"
+                            f"**Affected Users:** {len(affected_users)}\n\n"
+                            f"This cannot be undone.",
+                color=discord.Color.red()
             )
+
+            view = ResetConfirmView(self, interaction.user, role_ids, role_names, len(affected_users))
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
         except Exception as e:
             await interaction.followup.send(
@@ -856,7 +1447,7 @@ class ShiftManagementCog(commands.Cog):
                 ephemeral=True
             )
             import traceback
-            traceback.print_exc()
+            traceback.print_exc()'''
 
     @shift_group.command(name="manage", description="Manage your shifts")
     @app_commands.describe(type="Select your shift type")
@@ -1136,11 +1727,19 @@ class ShiftManagementCog(commands.Cog):
 
         # Add quota info if available
         if quota_info and quota_info['has_quota']:
-            status_emoji = "<:Accepted:1426930333789585509>" if quota_info[
-                'completed'] else "<:Denied:1426930694633816248>"
+            if quota_info['bypass_type']:
+                if quota_info['bypass_type'] == 'RA':
+                    status_text = f"<:Accepted:1426930333789585509> **{quota_info['percentage']:.1f}%** (RA - 50% Required)"
+                else:
+                    status_text = f"<:Accepted:1426930333789585509> **100%** ({quota_info['bypass_type']} Bypass)"
+            else:
+                status_emoji = "<:Accepted:1426930333789585509>" if quota_info[
+                    'completed'] else "<:Denied:1426930694633816248>"
+                status_text = f"{status_emoji} **{quota_info['percentage']:.1f}%**"
+
             embed.add_field(
                 name="Quota Progress",
-                value=f"> {status_emoji} **{quota_info['percentage']:.1f}%** of {self.format_duration(timedelta(seconds=quota_info['quota_seconds']))}",
+                value=f"> {status_text} of {self.format_duration(timedelta(seconds=quota_info['quota_seconds']))}",
                 inline=False
             )
 
@@ -1249,20 +1848,22 @@ class ShiftManagementCog(commands.Cog):
             if quota_info['has_quota']:
                 status_emoji = "<:Accepted:1426930333789585509>" if quota_info[
                     'completed'] else "<:Denied:1426930694633816248>"
-                embed.add_field(
-                    name="Quota Progress",
-                    value=f"> {status_emoji} **{quota_info['percentage']:.1f}%** of {self.format_duration(timedelta(seconds=quota_info['quota_seconds']))}",
-                    inline=False
-                )
+                if quota_info and quota_info['has_quota']:
+                    if quota_info['bypass_type']:
+                        if quota_info['bypass_type'] == 'RA':
+                            status_text = f"<:Accepted:1426930333789585509> **{quota_info['percentage']:.1f}%** (RA - 50% Required)"
+                        else:
+                            status_text = f"<:Accepted:1426930333789585509> **100%** ({quota_info['bypass_type']} Bypass)"
+                    else:
+                        status_emoji = "<:Accepted:1426930333789585509>" if quota_info[
+                            'completed'] else "<:Denied:1426930694633816248>"
+                        status_text = f"{status_emoji} **{quota_info['percentage']:.1f}%**"
 
-        # Last shift (the one we just ended)
-        embed.add_field(
-            name="<:Clock:1434949269554597978> Last Shift",
-            value=f"**Status:** <:Offline:1434951694319620197> Ended\n"
-                  f"**Total Time:** {self.format_duration(active_duration)}\n"
-                  f"**Break Time:** {self.format_duration(timedelta(seconds=pause_duration))}",
-            inline=False
-        )
+                    embed.add_field(
+                        name="Quota Progress",
+                        value=f"> {status_text} of {self.format_duration(timedelta(seconds=quota_info['quota_seconds']))}",
+                        inline=False
+                    )
 
         embed.set_footer(text=f"Shift Type: {shift['type']}")
 
@@ -1296,11 +1897,22 @@ class ShiftManagementCog(commands.Cog):
             if quota_info['has_quota']:
                 status_emoji = "<:Accepted:1426930333789585509>" if quota_info[
                     'completed'] else "<:Denied:1426930694633816248>"
-                embed.add_field(
-                    name="Quota Progress",
-                    value=f"> {status_emoji} **{quota_info['percentage']:.1f}%** of {self.format_duration(timedelta(seconds=quota_info['quota_seconds']))}",
-                    inline=False
-                )
+                if quota_info and quota_info['has_quota']:
+                    if quota_info['bypass_type']:
+                        if quota_info['bypass_type'] == 'RA':
+                            status_text = f"<:Accepted:1426930333789585509> **{quota_info['percentage']:.1f}%** (RA - 50% Required)"
+                        else:
+                            status_text = f"<:Accepted:1426930333789585509> **100%** ({quota_info['bypass_type']} Bypass)"
+                    else:
+                        status_emoji = "<:Accepted:1426930333789585509>" if quota_info[
+                            'completed'] else "<:Denied:1426930694633816248>"
+                        status_text = f"{status_emoji} **{quota_info['percentage']:.1f}%**"
+
+                    embed.add_field(
+                        name="Quota Progress",
+                        value=f"> {status_text} of {self.format_duration(timedelta(seconds=quota_info['quota_seconds']))}",
+                        inline=False
+                    )
 
         # Last shift (the one we just ended)
         embed.add_field(
@@ -1311,7 +1923,7 @@ class ShiftManagementCog(commands.Cog):
             inline=False
         )
 
-        embed.set_footer(text=f"Shift Type: {type}")
+        embed.set_footer(text=f"Shift Type: {shift['type']}")
 
         # Show shift status
         if active_shift:
@@ -1376,15 +1988,17 @@ class ShiftStartView(discord.ui.View):
                 ephemeral=True
             )
 
-
     async def start_shift(self, interaction: discord.Interaction, type: str):
         """Start a new shift"""
+        current_week = WeeklyShiftManager.get_current_week_monday()  # ← ADD THIS
+
         async with db.pool.acquire() as conn:
             await conn.execute(
                 '''INSERT INTO shifts
-                   (discord_user_id, discord_username, type, start_time, pause_duration)
-                   VALUES ($1, $2, $3, $4, 0)''',
-                self.user.id, str(self.user), type, datetime.utcnow()
+                   (discord_user_id, discord_username, type, start_time, pause_duration, week_identifier, guild_id)
+                   VALUES ($1, $2, $3, $4, 0, $5, $6)''',
+                self.user.id, str(self.user), type, datetime.utcnow(),
+                current_week, interaction.guild.id  # ← ADD THESE TWO
             )
 
         # Update nickname to DUTY
@@ -1570,6 +2184,7 @@ class ShiftActiveView(discord.ui.View):
                 ]
 
             # Only add break info if there was actually break time
+            total_break = timedelta(seconds=pause_duration)
             if total_break.total_seconds() > 0:
                 value_parts.append(f"**Break Time:** {self.cog.format_duration(total_break)}")
 
@@ -1814,13 +2429,16 @@ class ShiftTypeSelectView(discord.ui.View):
                 )
                 return
 
+            current_week = WeeklyShiftManager.get_current_week_monday()  # ← ADD THIS
+
             # Start the shift
             async with db.pool.acquire() as conn:
                 await conn.execute(
                     '''INSERT INTO shifts
-                       (discord_user_id, discord_username, type, start_time, pause_duration)
-                       VALUES ($1, $2, $3, $4, 0)''',
-                    self.user.id, str(self.user), type, datetime.utcnow()
+                       (discord_user_id, discord_username, type, start_time, pause_duration, week_identifier, guild_id)
+                       VALUES ($1, $2, $3, $4, 0, $5, $6)''',
+                    self.user.id, str(self.user), type, datetime.utcnow(),
+                    current_week, interaction.guild.id  # ← ADD THESE TWO
                 )
 
             # Update nickname to DUTY
@@ -1979,13 +2597,16 @@ class AdminShiftControlView(discord.ui.View):
         await interaction.response.defer()
 
         try:
+            current_week = WeeklyShiftManager.get_current_week_monday()  # ← ADD THIS
+
             # Start shift
             async with db.pool.acquire() as conn:
                 await conn.execute(
                     '''INSERT INTO shifts
-                       (discord_user_id, discord_username, type, start_time, pause_duration)
-                       VALUES ($1, $2, $3, $4, 0)''',
-                    self.target_user.id, str(self.target_user), self.type, datetime.utcnow()
+                       (discord_user_id, discord_username, type, start_time, pause_duration, week_identifier, guild_id)
+                       VALUES ($1, $2, $3, $4, 0, $5, $6)''',
+                    self.target_user.id, str(self.target_user), self.type, datetime.utcnow(),
+                    current_week, interaction.guild.id  # ← ADD THESE TWO
                 )
 
             # Update nickname and roles
@@ -2235,7 +2856,9 @@ class ShiftListView(discord.ui.View):
                 pass
 
     async def get_shifts(self):
-        """Fetch all completed shifts"""
+        """Fetch all completed shifts for current week"""
+        current_week = WeeklyShiftManager.get_current_week_monday()
+
         async with db.pool.acquire() as conn:
             self.shifts = await conn.fetch(
                 '''SELECT *
@@ -2243,8 +2866,9 @@ class ShiftListView(discord.ui.View):
                    WHERE discord_user_id = $1
                      AND type = $2
                      AND end_time IS NOT NULL
+                     AND week_identifier = $3
                    ORDER BY end_time DESC''',
-                self.target_user.id, self.type
+                self.target_user.id, self.type, current_week
             )
         self.total_pages = max(1, math.ceil(len(self.shifts) / self.ITEMS_PER_PAGE))
 
@@ -3059,6 +3683,211 @@ class ShiftIDModal(discord.ui.Modal):
                 ephemeral=True
             )
 
+
+class QuotaConflictView(discord.ui.View):
+    """Confirmation view for overwriting existing quotas"""
+
+    def __init__(self, cog: ShiftManagementCog, admin: discord.Member, role_ids: list,
+                 quota_seconds: int, shift_type: str):
+        super().__init__(timeout=60)
+        self.cog = cog
+        self.admin = admin
+        self.role_ids = role_ids
+        self.quota_seconds = quota_seconds
+        self.shift_type = shift_type
+        self.message = None
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except:
+                pass
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.admin.id:
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> This is not your confirmation!",
+                ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Confirm Overwrite", style=discord.ButtonStyle.danger)
+    async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+
+        try:
+            async with db.pool.acquire() as conn:
+                role_mentions = []
+                for role_id in self.role_ids:
+                    await conn.execute(
+                        '''INSERT INTO shift_quotas (role_id, quota_seconds, shift_type)
+                           VALUES ($1, $2, $3) ON CONFLICT (role_id, shift_type) DO
+                        UPDATE SET quota_seconds = $2''',
+                        role_id, self.quota_seconds, self.shift_type
+                    )
+                    role = interaction.guild.get_role(role_id)
+                    if role:
+                        role_mentions.append(role.mention)
+
+            await interaction.followup.send(
+                f"<:Accepted:1426930333789585509> Updated quota for {', '.join(role_mentions)} to {self.cog.format_duration(timedelta(seconds=self.quota_seconds))} ({self.shift_type})",
+                ephemeral=True
+            )
+
+            # Disable buttons
+            for item in self.children:
+                item.disabled = True
+            await interaction.message.edit(view=self)
+            self.stop()
+
+        except Exception as e:
+            await interaction.followup.send(
+                f"<:Denied:1426930694633816248> Error: {str(e)}",
+                ephemeral=True
+            )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        await interaction.followup.send("Cancelled.", ephemeral=True)
+
+        for item in self.children:
+            item.disabled = True
+        await interaction.message.edit(view=self)
+        self.stop()
+
+
+class ResetConfirmView(discord.ui.View):
+    """Confirmation view for resetting shifts"""
+
+    def __init__(self, cog: ShiftManagementCog, admin: discord.Member, role_ids: list,
+                 role_names: list, affected_count: int):
+        super().__init__(timeout=60)
+        self.cog = cog
+        self.admin = admin
+        self.role_ids = role_ids
+        self.role_names = role_names
+        self.affected_count = affected_count
+        self.armed = False
+        self.message = None
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except:
+                pass
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.admin.id:
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> This is not your confirmation!",
+                ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="ARM", emoji="<:ARM:1435117432791633921>", style=discord.ButtonStyle.secondary)
+    async def arm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+
+        self.armed = not self.armed
+
+        if self.armed:
+            button.label = "DISARM"
+            button.emoji = discord.PartialEmoji(name="DISARM", id=1435117667097772116)
+            button.style = discord.ButtonStyle.danger
+
+            # Enable reset button
+            for item in self.children:
+                if isinstance(item, discord.ui.Button) and item.custom_id == "reset":
+                    item.disabled = False
+        else:
+            button.label = "ARM"
+            button.emoji = discord.PartialEmoji(name="ARM", id=1435117432791633921)
+            button.style = discord.ButtonStyle.secondary
+
+            # Disable reset button
+            for item in self.children:
+                if isinstance(item, discord.ui.Button) and item.custom_id == "reset":
+                    item.disabled = True
+
+        await interaction.message.edit(view=self)
+
+    @discord.ui.button(label="Execute Reset", style=discord.ButtonStyle.danger, disabled=True, custom_id="reset")
+    async def reset_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+
+        if not self.armed:
+            await interaction.followup.send(
+                "<:Denied:1426930694633816248> Please ARM first!",
+                ephemeral=True
+            )
+            return
+
+        try:
+            # Get next wave number
+            async with db.pool.acquire() as conn:
+                max_wave = await conn.fetchval(
+                    'SELECT MAX(round_number) FROM shifts WHERE round_number IS NOT NULL'
+                )
+                next_wave = (max_wave or 0) + 1
+
+                # Get all users with these roles and current shifts
+                affected_users = set()
+                for role_id in self.role_ids:
+                    role = interaction.guild.get_role(role_id)
+                    if role:
+                        affected_users.update([member.id for member in role.members])
+
+                # Archive current shifts to wave
+                archived_count = 0
+                for user_id in affected_users:
+                    result = await conn.execute(
+                        '''UPDATE shifts
+                           SET round_number = $1
+                           WHERE discord_user_id = $2
+                             AND round_number IS NULL''',
+                        next_wave, user_id
+                    )
+                    if result != 'UPDATE 0':
+                        archived_count += 1
+
+            await interaction.followup.send(
+                f"<:Accepted:1426930333789585509> **Wave {next_wave} Created**\n"
+                f"• Archived shifts for {len(affected_users)} users\n"
+                f"• Affected roles: {', '.join(self.role_names)}\n"
+                f"• Users can now start fresh shifts for the new wave",
+                ephemeral=True
+            )
+
+            # Disable all buttons
+            for item in self.children:
+                item.disabled = True
+            await interaction.message.edit(view=self)
+            self.stop()
+
+        except Exception as e:
+            await interaction.followup.send(
+                f"<:Denied:1426930694633816248> Error: {str(e)}",
+                ephemeral=True
+            )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        await interaction.followup.send("Cancelled.", ephemeral=True)
+
+        for item in self.children:
+            item.disabled = True
+        await interaction.message.edit(view=self)
+        self.stop()
 
 async def setup(bot):
     await bot.add_cog(ShiftManagementCog(bot))
