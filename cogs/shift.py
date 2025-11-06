@@ -1519,8 +1519,8 @@ class ShiftManagementCog(commands.Cog):
             for type_name, type_quotas in quotas_by_type.items():
                 quota_lines = []
                 for quota in type_quotas:
-                    role = interaction.guild.get_role(quota['role_id'])
-                    if role:
+                    quota_role = interaction.guild.get_role(quota['role_id'])
+                    if quota_role:
                         quota_lines.append(
                             f"{role.mention} • {self.format_duration(timedelta(seconds=quota['quota_seconds']))}"
                         )

@@ -206,9 +206,11 @@ class StatusCog(commands.Cog):
     @app_commands.describe(suggestion="Your status suggestion (e.g., 'Emergency response')")
     async def submit_status(self, interaction: discord.Interaction, suggestion: str):
         """Submit a status suggestion"""
+        await interaction.response.defer(ephemeral=True)
+
         # Check if status is too long
         if len(suggestion) > 128:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "Status suggestion is too long! Must be 128 characters or less <:Denied:1426930694633816248>",
                 ephemeral=True
             )
@@ -216,7 +218,7 @@ class StatusCog(commands.Cog):
 
         # Check for duplicates (case-insensitive)
         if self.is_duplicate_status(suggestion):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "This status (or a very similar one) already exists or is pending review <:Denied:1426930694633816248>",
                 ephemeral=True
             )
@@ -238,7 +240,7 @@ class StatusCog(commands.Cog):
             description=f"Your status suggestion has been submitted for review!\n\n**Suggestion:** {suggestion}",
             color=discord.Color.green()
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="status-view", description="Review pending status submissions (Owner only)")
     @app_commands.default_permissions(administrator=True)
