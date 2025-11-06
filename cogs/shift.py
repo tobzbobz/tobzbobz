@@ -1,9 +1,8 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 import pytz
-import time
 from discord.ext import commands, tasks
 from typing import Optional
 from database import db, ensure_database_connected
@@ -1043,11 +1042,12 @@ class ShiftManagementCog(commands.Cog):
     @shift_group.command(name="quota", description="View or set shift quotas")
     @app_commands.describe(
         action="View your quota or set quota for roles",
-        role="The role to set quota for (admin only)",
+        roles="The role(s) to set quota for (admin only)",
         hours="Hours for the quota",
         minutes="Minutes for the quota",
-        shift_type = "The shift type to set quota for"
+        shift_type="The shift type to set quota for"
     )
+
     @app_commands.choices(action=[
         app_commands.Choice(name="View My Quota", value="view"),
         app_commands.Choice(name="Set Role Quota", value="set"),
@@ -1072,6 +1072,41 @@ class ShiftManagementCog(commands.Cog):
         await interaction.response.defer()
 
         if action.value == "view":
+            # View user's own quota
+            quota_info = await self.get_quota_info(interaction.user, shift_type.value if shift_type else None)
+
+            if not quota_info['has_quota']:
+                await interaction.followup.send(
+                    "You don't have any shift quotas set.",
+                    ephemeral=True
+                )
+                return
+
+            embed = discord.Embed(
+                title="<:Search:1434957367505719457> Your Quota",
+                color=discord.Color(0x000000)
+            )
+
+            if quota_info['bypass_type']:
+                if quota_info['bypass_type'] == 'RA':
+                    status_text = f"<:Accepted:1426930333789585509> **{quota_info['percentage']:.1f}%** (RA - 50% Required)"
+                else:
+                    status_text = f"<:Accepted:1426930333789585509> **100%** ({quota_info['bypass_type']} Bypass)"
+            else:
+                status_emoji = "<:Accepted:1426930333789585509>" if quota_info[
+                    'completed'] else "<:Denied:1426930694633816248>"
+                status_text = f"{status_emoji} **{quota_info['percentage']:.1f}%**"
+
+            embed.description = (
+                f"{status_text}\n"
+                f"**Required:** {self.format_duration(timedelta(seconds=quota_info['quota_seconds']))}\n"
+                f"**Completed:** {self.format_duration(timedelta(seconds=quota_info['active_seconds']))}"
+            )
+
+            if shift_type:
+                embed.set_footer(text=f"Shift Type: {shift_type.value}")
+
+            await interaction.followup.send(embed=embed, ephemeral=True)
 
         elif action.value == "set":
             # Check admin permission
