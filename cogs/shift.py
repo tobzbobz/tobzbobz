@@ -3494,7 +3494,7 @@ class ShiftListView(discord.ui.View):
 
             value = f"- **Duration:** {self.cog.format_duration(duration)}\n"
             value += f"- **Started:** <t:{int(shift['start_time'].timestamp())}:f>\n"
-            value += f"- **Ended:** <t:{int(shift['end_time'].timestamp())}:f>"
+            value += f"- **Ended:** <t:{int(shift['end_time'].timestamp())}:f>\n"
             value += f"- **Break:** {self.cog.format_duration(break_duration)}\n"
 
             embed.add_field(
@@ -4163,7 +4163,7 @@ class ClearShiftsConfirmView(discord.ui.View):
             # Switch to DISARM
             button.label = "DISARM"
             button.emoji = discord.PartialEmoji(name="DISARM", id=1435117667097772116)  # Replace with your disarm emoji
-            button.style = discord.ButtonStyle.danger
+            button.style = discord.ButtonStyle.secondary
 
             # Enable the clear button
             for item in self.children:
@@ -4186,7 +4186,7 @@ class ClearShiftsConfirmView(discord.ui.View):
 
             await interaction.message.edit(view=self)
 
-    @discord.ui.button(label="Clear User Shifts", style=discord.ButtonStyle.danger, disabled=True,
+    @discord.ui.button(label="Clear User Shifts", style=discord.ButtonStyle.secondary, disabled=True,
                        custom_id="clear_shifts")
     async def clear_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
@@ -4433,7 +4433,7 @@ class ResetConfirmView(discord.ui.View):
         else:
             button.label = "ARM"
             button.emoji = discord.PartialEmoji(name="ARM", id=1435117432791633921)
-            button.style = discord.ButtonStyle.secondary
+            button.style = discord.ButtonStyle.danger
 
             # Disable reset button
             for item in self.children:

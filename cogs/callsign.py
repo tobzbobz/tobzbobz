@@ -1591,6 +1591,11 @@ class CallsignCog(commands.Cog):
                                 nickname_parts.append(record['roblox_username'])
                             new_nickname = " | ".join(nickname_parts) if nickname_parts else record['roblox_username']
                         else:
+
+                            # After fetching user roles
+                            is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in user.roles)
+                            is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in user.roles)
+
                             new_nickname = format_nickname(
                                 current_fenz_prefix,
                                 record['callsign'],
@@ -1809,6 +1814,11 @@ class CallsignCog(commands.Cog):
                     nickname_parts.append(roblox_username)
                 new_nickname = " | ".join(nickname_parts)
             else:
+
+                # After fetching user roles
+                is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in user.roles)
+                is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in user.roles)
+
                 new_nickname = format_nickname(
                     final_fenz_prefix,
                     final_callsign,
