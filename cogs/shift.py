@@ -91,46 +91,52 @@ ADDITIONAL_SHIFT_ACCESS = {
     1365536209681514636: ["Shift FENZ", "Shift CC"]
 }
 
+NZST = pytz.timezone('Pacific/Auckland')
+SHIFT_LOGS_CHANNEL = 1435798856687161467
+PING_ROLES = [1285474077556998196, 1389113393511923863, 1389550689113473024]
+
 
 class WeeklyShiftManager:
     """Manages weekly shift resets and leaderboard generation"""
 
-    NZST = pytz.timezone('Pacific/Auckland')
-    SHIFT_LOGS_CHANNEL = 1411662121531609130
-    PING_ROLES = [1285474077556998196, 1389113393511923863, 1389550689113473024]
-
     def __init__(self, cog):
         self.cog = cog
         self.bot = cog.bot
+        self.SHIFT_LOGS_CHANNEL = SHIFT_LOGS_CHANNEL
 
     @staticmethod
     def get_week_monday(dt: Optional[datetime] = None) -> datetime:
-        """Get the Monday (start) of the week for a given datetime in NZST"""
+        """Get the Monday (start) of the week for a given datetime in NZST, returned as naive UTC"""
         if dt is None:
             dt = datetime.now(WeeklyShiftManager.NZST)
         elif dt.tzinfo is None:
             dt = WeeklyShiftManager.NZST.localize(dt)
+        else:
+            dt = dt.astimezone(WeeklyShiftManager.NZST)
 
-        # Get to Monday of this week
+        # Get to Monday of this week in NZST
         days_since_monday = dt.weekday()
         monday = dt - timedelta(days=days_since_monday)
-        # Set to midnight
-        return monday.replace(hour=0, minute=0, second=0, microsecond=0)
+        monday = monday.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # Convert to UTC and return as naive datetime for database storage
+        monday_utc = monday.astimezone(pytz.UTC)
+        return monday_utc.replace(tzinfo=None)
 
     @staticmethod
     def get_current_week_monday() -> datetime:
-        """Returns Monday of the current week in NZST"""
+        """Returns Monday of the current week as naive UTC"""
         return WeeklyShiftManager.get_week_monday()
 
     @staticmethod
     def get_previous_week_monday() -> datetime:
-        """Returns Monday of last week in NZST"""
+        """Returns Monday of last week as naive UTC"""
         current = WeeklyShiftManager.get_current_week_monday()
         return current - timedelta(days=7)
 
     @staticmethod
     def get_two_weeks_ago_monday() -> datetime:
-        """Returns Monday of two weeks ago in NZST"""
+        """Returns Monday of two weeks ago as naive UTC"""
         current = WeeklyShiftManager.get_current_week_monday()
         return current - timedelta(days=14)
 
@@ -321,7 +327,7 @@ class WeeklyShiftManager:
                     embeds.append(embed)
 
             # Send to channel
-            channel = self.bot.get_channel(self.SHIFT_LOGS_CHANNEL)
+            channel = self.bot.get_channel(SHIFT_LOGS_CHANNEL)
             if channel and embeds:
                 # Create ping message
                 ping_mentions = " ".join([f"<@&{role_id}>" for role_id in self.PING_ROLES])
@@ -339,6 +345,7 @@ class ShiftManagementCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self._role_cache = {}
+        self.SHIFT_LOGS_CHANNEL = SHIFT_LOGS_CHANNEL
         self._cache_cleanup_task = None
         self.weekly_manager = WeeklyShiftManager(self)
         bot.loop.create_task(self.on_cog_load())
@@ -430,6 +437,196 @@ class ShiftManagementCog(commands.Cog):
     def has_super_admin_permission(self, member: discord.Member) -> bool:
         """Check if user has super admin permissions (cached)"""
         return bool(self.get_user_role_ids(member) & set(SUPER_ADMIN_ROLES))
+
+    async def log_shift_event(self, guild: discord.Guild, event_type: str, member: discord.Member,
+                              shift_data: dict, admin: discord.Member = None, details: str = None):
+        """
+        Send shift event logs to the logging channel
+
+        event_type: 'start', 'end', 'pause', 'resume', 'modify', 'delete', 'clear'
+        """
+        channel = self.bot.get_channel(SHIFT_LOGS_CHANNEL)  # ← Remove 'self.'
+        if not channel:
+            print(f"Warning: Shift logs channel {SHIFT_LOGS_CHANNEL} not found")  # ← Remove 'self.'
+            return
+
+        try:
+            # Get callsign if available
+            async with db.pool.acquire() as conn:
+                callsign_row = await conn.fetchrow(
+                    'SELECT callsign, fenz_prefix FROM callsigns WHERE discord_user_id = $1',
+                    member.id
+                )
+
+            display_name = member.display_name
+            if callsign_row:
+                if callsign_row['fenz_prefix']:
+                    display_name = f"@{callsign_row['fenz_prefix']}-{callsign_row['callsign']}"
+                else:
+                    display_name = f"@{callsign_row['callsign']}"
+
+            shift_type = shift_data.get('type', 'Unknown')
+            shift_id = shift_data.get('id', 'N/A')
+
+            # Build embed based on event type
+            if event_type == 'start':
+                embed = discord.Embed(
+                    title=f"Shift Started • {shift_type.replace('Shift ', '')}",
+                    color=discord.Color(0x57f288)  # Green
+                )
+                embed.add_field(
+                    name="Staff Member",
+                    value=f"{member.mention} • {display_name}",
+                    inline=False
+                )
+                embed.add_field(
+                    name="Started",
+                    value=f"<t:{int(shift_data['start_time'].timestamp())}:F> (<t:{int(shift_data['start_time'].timestamp())}:R>)",
+                    inline=False
+                )
+                embed.set_footer(
+                    text=f"{'Started by ' + admin.display_name if admin else 'Started by ' + display_name} • Shift ID: {shift_id}")
+
+            elif event_type == 'end':
+                duration = shift_data['end_time'] - shift_data['start_time']
+                active_duration = duration - timedelta(seconds=shift_data.get('pause_duration', 0))
+                break_duration = timedelta(seconds=shift_data.get('pause_duration', 0))
+
+                embed = discord.Embed(
+                    title=f"Shift Ended • {shift_type.replace('Shift ', '')}",
+                    color=discord.Color(0xed4245)  # Red
+                )
+                embed.add_field(
+                    name="Staff Member",
+                    value=f"{member.mention} • {display_name}",
+                    inline=False
+                )
+                embed.add_field(
+                    name="Total Time",
+                    value=self.format_duration(active_duration),
+                    inline=True
+                )
+
+                if break_duration.total_seconds() > 0:
+                    embed.add_field(
+                        name="Break Time",
+                        value=self.format_duration(break_duration),
+                        inline=True
+                    )
+
+                embed.set_footer(
+                    text=f"{'Ended by ' + admin.display_name if admin else 'Ended by ' + display_name} • Shift ID: {shift_id}")
+
+            elif event_type == 'pause':
+                embed = discord.Embed(
+                    title=f"Shift Paused • {shift_type.replace('Shift ', '')}",
+                    color=discord.Color(0xfee75c)  # Yellow
+                )
+                embed.add_field(
+                    name="Staff Member",
+                    value=f"{member.mention} • {display_name}",
+                    inline=False
+                )
+                embed.add_field(
+                    name="Break Started",
+                    value=f"<t:{int(shift_data['pause_start'].timestamp())}:R>",
+                    inline=False
+                )
+                embed.set_footer(
+                    text=f"{'Paused by ' + admin.display_name if admin else 'Paused by ' + display_name} • Shift ID: {shift_id}")
+
+            elif event_type == 'resume':
+                last_break = timedelta(seconds=details) if details else timedelta(0)
+
+                embed = discord.Embed(
+                    title=f"Shift Resumed • {shift_type.replace('Shift ', '')}",
+                    color=discord.Color(0x57f288)  # Green
+                )
+                embed.add_field(
+                    name="Staff Member",
+                    value=f"{member.mention} • {display_name}",
+                    inline=False
+                )
+                if last_break.total_seconds() > 0:
+                    embed.add_field(
+                        name="Break Duration",
+                        value=self.format_duration(last_break),
+                        inline=False
+                    )
+                embed.set_footer(
+                    text=f"{'Resumed by ' + admin.display_name if admin else 'Resumed by ' + display_name} • Shift ID: {shift_id}")
+
+            elif event_type == 'modify':
+                embed = discord.Embed(
+                    title=f"Shift Modified • {shift_type.replace('Shift ', '')}",
+                    color=discord.Color(0x5865f2)  # Blurple
+                )
+                embed.add_field(
+                    name="Staff Member",
+                    value=f"{member.mention} • {display_name}",
+                    inline=False
+                )
+                if details:
+                    embed.add_field(
+                        name="Modification",
+                        value=details,
+                        inline=False
+                    )
+                embed.set_footer(text=f"Modified by {admin.display_name if admin else 'System'} • Shift ID: {shift_id}")
+
+            elif event_type == 'delete':
+                duration = shift_data['end_time'] - shift_data['start_time']
+                active_duration = duration - timedelta(seconds=shift_data.get('pause_duration', 0))
+
+                embed = discord.Embed(
+                    title=f"Shift Deleted • {shift_type.replace('Shift ', '')}",
+                    color=discord.Color(0xed4245)  # Red
+                )
+                embed.add_field(
+                    name="Staff Member",
+                    value=f"{member.mention} • {display_name}",
+                    inline=False
+                )
+                embed.add_field(
+                    name="Duration (Deleted)",
+                    value=self.format_duration(active_duration),
+                    inline=True
+                )
+                embed.add_field(
+                    name="Started",
+                    value=f"<t:{int(shift_data['start_time'].timestamp())}:f>",
+                    inline=True
+                )
+                embed.set_footer(text=f"Deleted by {admin.display_name if admin else 'System'} • Shift ID: {shift_id}")
+
+            elif event_type == 'clear':
+                embed = discord.Embed(
+                    title=f"Shifts Cleared • {shift_type.replace('Shift ', '')}",
+                    color=discord.Color(0xed4245)  # Red
+                )
+                embed.add_field(
+                    name="Staff Member",
+                    value=f"{member.mention} • {display_name}",
+                    inline=False
+                )
+                if details:
+                    embed.add_field(
+                        name="Shifts Cleared",
+                        value=details,
+                        inline=False
+                    )
+                embed.set_footer(text=f"Cleared by {admin.display_name if admin else 'System'}")
+
+            # Set thumbnail to user avatar
+            embed.set_thumbnail(url=member.display_avatar.url)
+            embed.timestamp = datetime.utcnow()
+
+            await channel.send(embed=embed)
+
+        except Exception as e:
+            print(f"Error logging shift event: {e}")
+            import traceback
+            traceback.print_exc()
 
     async def get_duty_roles_for_type(self, type: str) -> tuple:
         """Get duty and break role IDs for a shift type"""
@@ -2025,7 +2222,7 @@ class ShiftStartView(discord.ui.View):
 
     async def start_shift(self, interaction: discord.Interaction, type: str):
         """Start a new shift"""
-        current_week = WeeklyShiftManager.get_current_week_monday()  # ← ADD THIS
+        current_week = WeeklyShiftManager.get_current_week_monday()
 
         async with db.pool.acquire() as conn:
             await conn.execute(
@@ -2033,17 +2230,21 @@ class ShiftStartView(discord.ui.View):
                    (discord_user_id, discord_username, type, start_time, pause_duration, week_identifier, guild_id)
                    VALUES ($1, $2, $3, $4, 0, $5, $6)''',
                 self.user.id, str(self.user), type, datetime.utcnow(),
-                current_week, interaction.guild.id  # ← ADD THESE TWO
+                current_week, interaction.guild.id
             )
 
-        # Update nickname to DUTY
         await self.cog.update_nickname_for_shift_status(self.user, 'duty')
-
-        # Update duty roles
         await self.cog.update_duty_roles(self.user, type, 'duty')
 
-        # Get the newly created shift
         shift = await self.cog.get_active_shift(self.user.id)
+
+        # 🆕 LOG THE SHIFT START
+        await self.cog.log_shift_event(
+            interaction.guild,
+            'start',
+            self.user,
+            shift
+        )
 
         # Build the embed directly instead of calling show_active_shift_panel
         embed = discord.Embed(
@@ -2099,16 +2300,9 @@ class ShiftActiveView(discord.ui.View):
 
     @discord.ui.button(label="Pause", style=discord.ButtonStyle.primary, emoji="<:Pause:1434982402593390632>")
     async def pause_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-
-        if button.disabled:
-            button.disabled = False
-            await interaction.response.edit_message(view=self)
-            return
-
         await interaction.response.defer()
 
         try:
-            # Pause the shift
             async with db.pool.acquire() as conn:
                 await conn.execute(
                     '''UPDATE shifts
@@ -2117,14 +2311,18 @@ class ShiftActiveView(discord.ui.View):
                     datetime.utcnow(), self.shift['id']
                 )
 
-            # Update nickname to BRK
             await self.cog.update_nickname_for_shift_status(self.user, 'break')
-
-            # Update duty roles
             await self.cog.update_duty_roles(self.user, self.shift['type'], 'break')
 
-            # Get updated shift
             updated_shift = await self.cog.get_active_shift(self.user.id)
+
+            # 🆕 LOG THE PAUSE
+            await self.cog.log_shift_event(
+                interaction.guild,
+                'pause',
+                self.user,
+                updated_shift
+            )
 
             # Build break panel embed directly
             embed = discord.Embed(
@@ -2274,7 +2472,6 @@ class ShiftBreakView(discord.ui.View):
         await interaction.response.defer()
 
         try:
-            # Calculate pause duration and resume
             pause_duration = (datetime.utcnow() - self.shift['pause_start']).total_seconds()
             total_pause = self.shift.get('pause_duration', 0) + pause_duration
 
@@ -2287,14 +2484,19 @@ class ShiftBreakView(discord.ui.View):
                     total_pause, self.shift['id']
                 )
 
-            # Update nickname back to DUTY
             await self.cog.update_nickname_for_shift_status(self.user, 'duty')
-
-            # Update duty roles
             await self.cog.update_duty_roles(self.user, self.shift['type'], 'duty')
 
-            # Get updated shift
             updated_shift = await self.cog.get_active_shift(self.user.id)
+
+            # 🆕 LOG THE RESUME WITH BREAK DURATION
+            await self.cog.log_shift_event(
+                interaction.guild,
+                'resume',
+                self.user,
+                updated_shift,
+                details=pause_duration  # Pass break duration
+            )
             total_break = timedelta(seconds=updated_shift.get('pause_duration', 0))
             last_break = timedelta(seconds=pause_duration)  # Use the pause_duration we calculated
 
@@ -2346,18 +2548,15 @@ class ShiftBreakView(discord.ui.View):
         await interaction.response.defer()
 
         try:
-            # Update nickname back to normal (remove prefix)
-            await self.cog.update_nickname_for_shift_status(self.user, 'off')
+            await asyncio.gather(
+                self.cog.update_nickname_for_shift_status(self.user, 'off'),
+                self.cog.update_duty_roles(self.user, self.shift['type'], 'off')
+            )
 
-            # Update duty roles
-            await self.cog.update_duty_roles(self.user, self.shift['type'], 'off')
-
-            # Calculate final pause duration
             pause_duration = self.shift.get('pause_duration', 0)
             if self.shift.get('pause_start'):
                 pause_duration += (datetime.utcnow() - self.shift['pause_start']).total_seconds()
 
-            # End the shift
             async with db.pool.acquire() as conn:
                 await conn.execute(
                     '''UPDATE shifts
@@ -2368,6 +2567,18 @@ class ShiftBreakView(discord.ui.View):
                     datetime.utcnow(), pause_duration, self.shift['id']
                 )
 
+            # Get the completed shift for logging
+            completed_shift = dict(self.shift)
+            completed_shift['end_time'] = datetime.utcnow()
+            completed_shift['pause_duration'] = pause_duration
+
+            # 🆕 LOG THE SHIFT END
+            await self.cog.log_shift_event(
+                interaction.guild,
+                'end',
+                self.user,
+                completed_shift
+            )
             # Get updated statistics
             stats = await self.cog.get_shift_statistics(self.user.id)
 
@@ -2632,28 +2843,37 @@ class AdminShiftControlView(discord.ui.View):
         await interaction.response.defer()
 
         try:
-            current_week = WeeklyShiftManager.get_current_week_monday()  # ← ADD THIS
+            current_week = WeeklyShiftManager.get_current_week_monday()
 
-            # Start shift
             async with db.pool.acquire() as conn:
                 await conn.execute(
                     '''INSERT INTO shifts
                        (discord_user_id, discord_username, type, start_time, pause_duration, week_identifier, guild_id)
                        VALUES ($1, $2, $3, $4, 0, $5, $6)''',
                     self.target_user.id, str(self.target_user), self.type, datetime.utcnow(),
-                    current_week, interaction.guild.id  # ← ADD THESE TWO
+                    current_week, interaction.guild.id
                 )
 
-            # Update nickname and roles
             await self.cog.update_nickname_for_shift_status(self.target_user, 'duty')
             await self.cog.update_duty_roles(self.target_user, self.type, 'duty')
+
+            # Get the newly created shift
+            shift = await self.cog.get_active_shift(self.target_user.id)
+
+            # 🆕 LOG THE ADMIN START
+            await self.cog.log_shift_event(
+                interaction.guild,
+                'start',
+                self.target_user,
+                shift,
+                admin=self.admin
+            )
 
             await interaction.followup.send(
                 f"<:Accepted:1426930333789585509> Started shift for {self.target_user.mention}",
                 ephemeral=True
             )
 
-            # Refresh panel
             await self.cog.show_admin_shift_panel(interaction, self.target_user, self.type)
         except Exception as e:
             await interaction.followup.send(
@@ -2676,12 +2896,23 @@ class AdminShiftControlView(discord.ui.View):
             await self.cog.update_nickname_for_shift_status(self.target_user, 'break')
             await self.cog.update_duty_roles(self.target_user, self.type, 'break')
 
+            # Get updated shift
+            updated_shift = await self.cog.get_active_shift(self.target_user.id)
+
+            # 🆕 LOG THE ADMIN PAUSE
+            await self.cog.log_shift_event(
+                interaction.guild,
+                'pause',
+                self.target_user,
+                updated_shift,
+                admin=self.admin
+            )
+
             await interaction.followup.send(
                 f"⏸️ Paused shift for {self.target_user.mention}",
                 ephemeral=True
             )
 
-            # Refresh panel
             await self.cog.show_admin_shift_panel(interaction, self.target_user, self.type)
         except Exception as e:
             await interaction.followup.send(
@@ -2708,12 +2939,24 @@ class AdminShiftControlView(discord.ui.View):
             await self.cog.update_nickname_for_shift_status(self.target_user, 'duty')
             await self.cog.update_duty_roles(self.target_user, self.type, 'duty')
 
+            # Get updated shift
+            updated_shift = await self.cog.get_active_shift(self.target_user.id)
+
+            # 🆕 LOG THE ADMIN RESUME
+            await self.cog.log_shift_event(
+                interaction.guild,
+                'resume',
+                self.target_user,
+                updated_shift,
+                admin=self.admin,
+                details=pause_duration
+            )
+
             await interaction.followup.send(
                 f"▶️ Resumed shift for {self.target_user.mention}",
                 ephemeral=True
             )
 
-            # Refresh panel
             await self.cog.show_admin_shift_panel(interaction, self.target_user, self.type)
         except Exception as e:
             await interaction.followup.send(
@@ -2742,19 +2985,31 @@ class AdminShiftControlView(discord.ui.View):
             await self.cog.update_nickname_for_shift_status(self.target_user, 'off')
             await self.cog.update_duty_roles(self.target_user, self.type, 'off')
 
+            # Create completed shift dict for logging
+            completed_shift = dict(self.active_shift)
+            completed_shift['end_time'] = datetime.utcnow()
+            completed_shift['pause_duration'] = pause_duration
+
+            # 🆕 LOG THE ADMIN STOP
+            await self.cog.log_shift_event(
+                interaction.guild,
+                'end',
+                self.target_user,
+                completed_shift,
+                admin=self.admin
+            )
+
             await interaction.followup.send(
                 f"⏹️ Stopped shift for {self.target_user.mention}",
                 ephemeral=True
             )
 
-            # Refresh panel
             await self.cog.show_admin_shift_panel(interaction, self.target_user, self.type)
         except Exception as e:
             await interaction.followup.send(
                 f"<:Denied:1426930694633816248> Error: {str(e)}",
                 ephemeral=True
             )
-
 
 class AdminActionsSelect(discord.ui.Select):
     """Dropdown menu for admin actions"""
@@ -3257,7 +3512,6 @@ class TimeModifyModal(discord.ui.Modal):
         await interaction.response.defer()
 
         try:
-            # Parse time inputs
             hours = int(self.children[0].value or 0)
             minutes = int(self.children[1].value or 0)
             seconds = int(self.children[2].value or 0) if len(self.children) > 2 else 0
@@ -3265,7 +3519,6 @@ class TimeModifyModal(discord.ui.Modal):
             time_delta = timedelta(hours=hours, minutes=minutes, seconds=seconds)
 
             if self.action == "set":
-                # Set the shift duration by adjusting start time
                 new_start_time = self.shift['end_time'] - time_delta
 
                 async with db.pool.acquire() as conn:
@@ -3276,10 +3529,21 @@ class TimeModifyModal(discord.ui.Modal):
                         new_start_time, self.shift['id']
                     )
 
+                # 🆕 LOG THE MODIFICATION
+                await self.cog.log_shift_event(
+                    interaction.guild,
+                    'modify',
+                    self.target_user,
+                    self.shift,
+                    admin=self.admin,
+                    details=f"Set duration to {self.cog.format_duration(time_delta)}"
+                )
+
                 await interaction.followup.send(
                     f"<:Accepted:1426930333789585509> Set shift duration to {self.cog.format_duration(time_delta)} for {self.target_user.mention}",
                     ephemeral=True
                 )
+
 
             elif self.action == "add":
                 # Subtract time from pause_duration (which increases active time)
@@ -3293,6 +3557,16 @@ class TimeModifyModal(discord.ui.Modal):
                            WHERE id = $2''',
                         new_pause, self.shift['id']
                     )
+
+                    # 🆕 LOG THE MODIFICATION
+                await self.cog.log_shift_event(
+                    interaction.guild,
+                    'modify',
+                    self.target_user,
+                    self.shift,
+                    admin=self.admin,
+                    details=f"Added {self.cog.format_duration(time_delta)} to shift"
+                )
 
                 await interaction.followup.send(
                     f"<:Accepted:1426930333789585509> Added {self.cog.format_duration(time_delta)} to shift for {self.target_user.mention}",
@@ -3311,6 +3585,16 @@ class TimeModifyModal(discord.ui.Modal):
                            WHERE id = $2''',
                         new_pause, self.shift['id']
                     )
+
+                # 🆕 LOG THE MODIFICATION
+                await self.cog.log_shift_event(
+                    interaction.guild,
+                    'modify',
+                    self.target_user,
+                    self.shift,
+                    admin=self.admin,
+                    details=f"Removed {self.cog.format_duration(time_delta)} from shift"
+                )
 
                 await interaction.followup.send(
                     f"<:Accepted:1426930333789585509> Removed {self.cog.format_duration(time_delta)} from shift for {self.target_user.mention}",
@@ -3434,28 +3718,24 @@ class DeleteShiftConfirmView(discord.ui.View):
         await interaction.response.defer()
 
         try:
+            # 🆕 LOG BEFORE DELETING
+            await self.cog.log_shift_event(
+                interaction.guild,
+                'delete',
+                self.target_user,
+                self.shift,
+                admin=self.admin
+            )
+
             async with db.pool.acquire() as conn:
-                await conn.execute(
-                    'DELETE FROM shifts WHERE id = $1',
-                    self.shift['id']
-                )
+                await conn.execute('DELETE FROM shifts WHERE id = $1', self.shift['id'])
 
             await interaction.followup.send(
                 f"<:Accepted:1426930333789585509> Deleted shift (ID: {self.shift['id']}) for {self.target_user.mention}",
                 ephemeral=True
             )
-
-            # Disable buttons
-            for item in self.children:
-                item.disabled = True
-            await interaction.message.edit(view=self)
-            self.stop()
-
-        except Exception as e:
-            await interaction.followup.send(
-                f"<:Denied:1426930694633816248> Error: {str(e)}",
-                ephemeral=True
-            )
+        except:
+            pass
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -3612,13 +3892,20 @@ class ClearShiftsConfirmView(discord.ui.View):
         await interaction.response.defer()
 
         if not self.armed:
-            await interaction.followup.send(
-                "<:Denied:1426930694633816248> Please ARM first!",
-                ephemeral=True
-            )
+            await interaction.followup.send("<:Denied:1426930694633816248> Please ARM first!", ephemeral=True)
             return
 
         try:
+            # 🆕 LOG THE CLEAR
+            await self.cog.log_shift_event(
+                interaction.guild,
+                'clear',
+                self.target_user,
+                {'type': self.type, 'id': 'N/A'},
+                admin=self.admin,
+                details=f"{self.count} shifts cleared"
+            )
+
             async with db.pool.acquire() as conn:
                 await conn.execute(
                     '''DELETE
