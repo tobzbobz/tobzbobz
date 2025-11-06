@@ -108,9 +108,9 @@ class WeeklyShiftManager:
     def get_week_monday(dt: Optional[datetime] = None) -> datetime:
         """Get the Monday (start) of the week for a given datetime in NZST, returned as naive UTC"""
         if dt is None:
-            dt = datetime.now(WeeklyShiftManager.NZST)
+            dt = datetime.now(NZST)  # ✅ CORRECT
         elif dt.tzinfo is None:
-            dt = WeeklyShiftManager.NZST.localize(dt)
+            dt = NZST.localize(dt)  # ✅ CORRECT
         else:
             dt = dt.astimezone(WeeklyShiftManager.NZST)
 
