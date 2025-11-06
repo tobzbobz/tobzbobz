@@ -223,11 +223,11 @@ class WeeklyShiftManager:
 
             # Get all role quotas
             quotas = await conn.fetch(
-                'SELECT role_id, quota_seconds, shift_type FROM shift_quotas'
+                'SELECT role_id, quota_seconds, type FROM shift_quotas'
             )
             quota_map = {}
             for q in quotas:
-                key = (q['role_id'], q['shift_type'])
+                key = (q['role_id'], q['type'])
                 quota_map[key] = q['quota_seconds']
 
             # Get guild
@@ -244,17 +244,17 @@ class WeeklyShiftManager:
                 return
 
             # Organize by shift type
-            shift_types = {}
+            types = {}
             for shift in shifts:
-                shift_type = shift['type']
-                if shift_type not in shift_types:
-                    shift_types[shift_type] = []
-                shift_types[shift_type].append(shift)
+                type = shift['type']
+                if type not in types:
+                    types[type] = []
+                types[type].append(shift)
 
             # Build report embeds
             embeds = []
 
-            for shift_type, type_shifts in shift_types.items():
+            for type, type_shifts in types.items():
                 lines = []
 
                 for shift_data in type_shifts:
@@ -265,7 +265,7 @@ class WeeklyShiftManager:
                     # Get user's highest quota for this shift type
                     max_quota = 0
                     for role in member.roles:
-                        quota = quota_map.get((role.id, shift_type), 0)
+                        quota = quota_map.get((role.id, type), 0)
                         if quota > max_quota:
                             max_quota = quota
 
@@ -305,7 +305,7 @@ class WeeklyShiftManager:
 
                 if lines:
                     embed = discord.Embed(
-                        title=f"**{shift_type.replace('Shift ', '')} Weekly Report**",
+                        title=f"**{type.replace('Shift ', '')} Weekly Report**",
                         description="\n".join(lines),
                         color=discord.Color(0x000000)
                     )
@@ -465,13 +465,13 @@ class ShiftManagementCog(commands.Cog):
                 else:
                     display_name = f"@{callsign_row['callsign']}"
 
-            shift_type = shift_data.get('type', 'Unknown')
+            type = shift_data.get('type', 'Unknown')
             shift_id = shift_data.get('id', 'N/A')
 
             # Build embed based on event type
             if event_type == 'start':
                 embed = discord.Embed(
-                    title=f"Shift Started • {shift_type.replace('Shift ', '')}",
+                    title=f"Shift Started • {type.replace('Shift ', '')}",
                     color=discord.Color(0x57f288)  # Green
                 )
                 embed.add_field(
@@ -493,7 +493,7 @@ class ShiftManagementCog(commands.Cog):
                 break_duration = timedelta(seconds=shift_data.get('pause_duration', 0))
 
                 embed = discord.Embed(
-                    title=f"Shift Ended • {shift_type.replace('Shift ', '')}",
+                    title=f"Shift Ended • {type.replace('Shift ', '')}",
                     color=discord.Color(0xed4245)  # Red
                 )
                 embed.add_field(
@@ -519,7 +519,7 @@ class ShiftManagementCog(commands.Cog):
 
             elif event_type == 'pause':
                 embed = discord.Embed(
-                    title=f"Shift Paused • {shift_type.replace('Shift ', '')}",
+                    title=f"Shift Paused • {type.replace('Shift ', '')}",
                     color=discord.Color(0xfee75c)  # Yellow
                 )
                 embed.add_field(
@@ -539,7 +539,7 @@ class ShiftManagementCog(commands.Cog):
                 last_break = timedelta(seconds=details) if details else timedelta(0)
 
                 embed = discord.Embed(
-                    title=f"Shift Resumed • {shift_type.replace('Shift ', '')}",
+                    title=f"Shift Resumed • {type.replace('Shift ', '')}",
                     color=discord.Color(0x57f288)  # Green
                 )
                 embed.add_field(
@@ -558,7 +558,7 @@ class ShiftManagementCog(commands.Cog):
 
             elif event_type == 'modify':
                 embed = discord.Embed(
-                    title=f"Shift Modified • {shift_type.replace('Shift ', '')}",
+                    title=f"Shift Modified • {type.replace('Shift ', '')}",
                     color=discord.Color(0x5865f2)  # Blurple
                 )
                 embed.add_field(
@@ -579,7 +579,7 @@ class ShiftManagementCog(commands.Cog):
                 active_duration = duration - timedelta(seconds=shift_data.get('pause_duration', 0))
 
                 embed = discord.Embed(
-                    title=f"Shift Deleted • {shift_type.replace('Shift ', '')}",
+                    title=f"Shift Deleted • {type.replace('Shift ', '')}",
                     color=discord.Color(0xed4245)  # Red
                 )
                 embed.add_field(
@@ -601,7 +601,7 @@ class ShiftManagementCog(commands.Cog):
 
             elif event_type == 'clear':
                 embed = discord.Embed(
-                    title=f"Shifts Cleared • {shift_type.replace('Shift ', '')}",
+                    title=f"Shifts Cleared • {type.replace('Shift ', '')}",
                     color=discord.Color(0xed4245)  # Red
                 )
                 embed.add_field(
@@ -778,22 +778,22 @@ class ShiftManagementCog(commands.Cog):
             }
 
     # Update get_bulk_quota_info to filter by current week
-    async def get_bulk_quota_info(self, user_ids: list, guild, shift_type: str = None) -> dict:
+    async def get_bulk_quota_info(self, user_ids: list, guild, type: str = None) -> dict:
         """Fetch quota info for multiple users at once (current week)"""
         current_week = self.weekly_manager.get_current_week_monday()
 
         async with db.pool.acquire() as conn:
-            if shift_type:
+            if type:
                 quotas = await conn.fetch(
-                    'SELECT role_id, quota_seconds FROM shift_quotas WHERE shift_type = $1',
-                    shift_type
+                    'SELECT role_id, quota_seconds FROM shift_quotas WHERE type = $1',
+                    type
                 )
             else:
                 quotas = await conn.fetch('SELECT role_id, quota_seconds FROM shift_quotas')
 
             quota_map = {q['role_id']: q['quota_seconds'] for q in quotas}
 
-            if shift_type:
+            if type:
                 shifts = await conn.fetch(
                     '''SELECT discord_user_id,
                               SUM(EXTRACT(EPOCH FROM (end_time - start_time)) -
@@ -804,7 +804,7 @@ class ShiftManagementCog(commands.Cog):
                          AND week_identifier = $2
                          AND type = $3
                        GROUP BY discord_user_id''',
-                    user_ids, current_week, shift_type
+                    user_ids, current_week, type
                 )
             else:
                 shifts = await conn.fetch(
@@ -958,13 +958,13 @@ class ShiftManagementCog(commands.Cog):
             )
             return dict(shift) if shift else None
 
-    async def get_quota_for_role(self, role_id: int, shift_type: str = None) -> int:
+    async def get_quota_for_role(self, role_id: int, type: str = None) -> int:
         """Get quota in seconds for a role, returns 0 if no quota set"""
         async with db.pool.acquire() as conn:
-            if shift_type:
+            if type:
                 result = await conn.fetchrow(
-                    'SELECT quota_seconds FROM shift_quotas WHERE role_id = $1 AND shift_type = $2',
-                    role_id, shift_type
+                    'SELECT quota_seconds FROM shift_quotas WHERE role_id = $1 AND type = $2',
+                    role_id, type
                 )
             else:
                 result = await conn.fetchrow(
@@ -973,14 +973,14 @@ class ShiftManagementCog(commands.Cog):
                 )
             return result['quota_seconds'] if result else 0
 
-    async def get_bulk_quota_info(self, user_ids: list, guild, shift_type: str = None) -> dict:
+    async def get_bulk_quota_info(self, user_ids: list, guild, type: str = None) -> dict:
         """Fetch quota info for multiple users at once"""
         async with db.pool.acquire() as conn:
-            # Get all role quotas once (with optional shift_type filter)
-            if shift_type:
+            # Get all role quotas once (with optional type filter)
+            if type:
                 quotas = await conn.fetch(
-                    'SELECT role_id, quota_seconds FROM shift_quotas WHERE shift_type = $1',
-                    shift_type
+                    'SELECT role_id, quota_seconds FROM shift_quotas WHERE type = $1',
+                    type
                 )
             else:
                 quotas = await conn.fetch('SELECT role_id, quota_seconds FROM shift_quotas')
@@ -988,7 +988,7 @@ class ShiftManagementCog(commands.Cog):
             quota_map = {q['role_id']: q['quota_seconds'] for q in quotas}
 
             # Get shift data for all users in one query
-            if shift_type:
+            if type:
                 shifts = await conn.fetch(
                     '''SELECT discord_user_id,
                               SUM(EXTRACT(EPOCH FROM (end_time - start_time)) -
@@ -999,7 +999,7 @@ class ShiftManagementCog(commands.Cog):
                          AND round_number IS NULL
                          AND type = $2
                        GROUP BY discord_user_id''',
-                    user_ids, shift_type
+                    user_ids, type
                 )
             else:
                 shifts = await conn.fetch(
@@ -1057,18 +1057,18 @@ class ShiftManagementCog(commands.Cog):
 
             return results
 
-    async def get_user_quota(self, member: discord.Member, shift_type: str = None) -> int:
+    async def get_user_quota(self, member: discord.Member, type: str = None) -> int:
         """Get the highest quota from all of a user's roles that have quotas set"""
         max_quota = 0
         for role in member.roles:
-            quota = await self.get_quota_for_role(role.id, shift_type)
+            quota = await self.get_quota_for_role(role.id, type)
             if quota > max_quota:
                 max_quota = quota
         return max_quota
 
-    async def get_quota_info(self, member: discord.Member, shift_type: str = None) -> dict:
+    async def get_quota_info(self, member: discord.Member, type: str = None) -> dict:
         """Get quota information for a user including percentage and bypass status"""
-        quota_seconds = await self.get_user_quota(member, shift_type)
+        quota_seconds = await self.get_user_quota(member, type)
 
         if quota_seconds == 0:
             return {
@@ -1080,7 +1080,7 @@ class ShiftManagementCog(commands.Cog):
                 'bypass_type': None
             }
 
-        active_seconds = await self.get_total_active_time(member.id, shift_type)
+        active_seconds = await self.get_total_active_time(member.id, type)
 
         # Check for quota bypass roles
         user_role_ids = {role.id for role in member.roles}
@@ -1242,16 +1242,15 @@ class ShiftManagementCog(commands.Cog):
         roles="The role(s) to set quota for (admin only)",
         hours="Hours for the quota",
         minutes="Minutes for the quota",
-        shift_type="The shift type to set quota for"
+        type="The shift type to set quota for"
     )
-
     @app_commands.choices(action=[
         app_commands.Choice(name="View My Quota", value="view"),
         app_commands.Choice(name="Set Role Quota", value="set"),
         app_commands.Choice(name="Remove Role Quota", value="remove"),
         app_commands.Choice(name="View All Quotas", value="view_all")
     ],
-        shift_type=[
+        type=[
             app_commands.Choice(name="Shift FENZ", value="Shift FENZ"),
             app_commands.Choice(name="Shift HHStJ", value="Shift HHStJ"),
             app_commands.Choice(name="Shift CC", value="Shift CC")
@@ -1264,13 +1263,13 @@ class ShiftManagementCog(commands.Cog):
             roles: str = None,
             hours: int = 0,
             minutes: int = 0,
-            shift_type: app_commands.Choice[str] = None
+            type: app_commands.Choice[str] = None
     ):
         await interaction.response.defer()
 
         if action.value == "view":
             # View user's own quota
-            quota_info = await self.get_quota_info(interaction.user, shift_type.value if shift_type else None)
+            quota_info = await self.get_quota_info(interaction.user, type.value if type else None)
 
             if not quota_info['has_quota']:
                 await interaction.followup.send(
@@ -1300,8 +1299,8 @@ class ShiftManagementCog(commands.Cog):
                 f"**Completed:** {self.format_duration(timedelta(seconds=quota_info['active_seconds']))}"
             )
 
-            if shift_type:
-                embed.set_footer(text=f"Shift Type: {shift_type.value}")
+            if type:
+                embed.set_footer(text=f"Shift Type: {type.value}")
 
             await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -1321,7 +1320,7 @@ class ShiftManagementCog(commands.Cog):
                 )
                 return
 
-            if not shift_type:
+            if not type:
                 await interaction.followup.send(
                     "<:Denied:1426930694633816248> Please specify a shift type.",
                     ephemeral=True
@@ -1363,8 +1362,8 @@ class ShiftManagementCog(commands.Cog):
                 for role_id in role_ids:
                     # Check if quota already exists
                     existing = await conn.fetchrow(
-                        'SELECT quota_seconds FROM shift_quotas WHERE role_id = $1 AND shift_type = $2',
-                        role_id, shift_type.value
+                        'SELECT quota_seconds FROM shift_quotas WHERE role_id = $1 AND type = $2',
+                        role_id, type.value
                     )
 
                     if existing:
@@ -1375,10 +1374,10 @@ class ShiftManagementCog(commands.Cog):
                 if conflicts:
                     # Show confirmation for overwriting
                     confirm_view = QuotaConflictView(
-                        self, interaction.user, role_ids, total_seconds, shift_type.value
+                        self, interaction.user, role_ids, total_seconds, type.value
                     )
                     await interaction.followup.send(
-                        f"**The following roles already have quotas set for {shift_type.value}:**\n" +
+                        f"**The following roles already have quotas set for {type.value}:**\n" +
                         "\n".join(conflicts) +
                         f"\n\nOverwrite with **{self.format_duration(timedelta(seconds=total_seconds))}**?",
                         view=confirm_view,
@@ -1390,17 +1389,17 @@ class ShiftManagementCog(commands.Cog):
                 role_mentions = []
                 for role_id in role_ids:
                     await conn.execute(
-                        '''INSERT INTO shift_quotas (role_id, quota_seconds, shift_type)
-                           VALUES ($1, $2, $3) ON CONFLICT (role_id, shift_type) DO
+                        '''INSERT INTO shift_quotas (role_id, quota_seconds, type)
+                           VALUES ($1, $2, $3) ON CONFLICT (role_id, type) DO
                         UPDATE SET quota_seconds = $2''',
-                        role_id, total_seconds, shift_type.value
+                        role_id, total_seconds, type.value
                     )
                     role = interaction.guild.get_role(role_id)
                     if role:
                         role_mentions.append(role.mention)
 
-                await interaction.edit_original_response(
-                    content=f"<:Accepted:1426930333789585509> Set quota for {', '.join(role_mentions)} to {self.format_duration(timedelta(seconds=total_seconds))} ({shift_type.value})",
+                await interaction.followup.send(
+                    f"<:Accepted:1426930333789585509> Set quota for {', '.join(role_mentions)} to {self.format_duration(timedelta(seconds=total_seconds))} ({type.value})",
                     ephemeral=True
                 )
 
@@ -1413,28 +1412,64 @@ class ShiftManagementCog(commands.Cog):
                 )
                 return
 
-            if not role:
+            if not roles:
                 await interaction.followup.send(
-                    "<:Denied:1426930694633816248> Please specify a role to remove quota from.",
+                    "<:Denied:1426930694633816248> Please specify role(s) to remove quota from.",
+                    ephemeral=True
+                )
+                return
+
+            if not type:
+                await interaction.followup.send(
+                    "<:Denied:1426930694633816248> Please specify a shift type.",
+                    ephemeral=True
+                )
+                return
+
+            # Parse roles
+            role_ids = []
+            for role_str in roles.split(','):
+                role_str = role_str.strip().replace('<@&', '').replace('>', '')
+                try:
+                    role_id = int(role_str)
+                    role = interaction.guild.get_role(role_id)
+                    if role:
+                        role_ids.append(role_id)
+                except ValueError:
+                    continue
+
+            if not role_ids:
+                await interaction.followup.send(
+                    "<:Denied:1426930694633816248> No valid roles provided.",
                     ephemeral=True
                 )
                 return
 
             # Delete from database
             async with db.pool.acquire() as conn:
-                result = await conn.execute(
-                    'DELETE FROM shift_quotas WHERE role_id = $1',
-                    role.id
-                )
+                role_mentions = []
+                removed_count = 0
 
-            if result == "DELETE 0":
-                await interaction.edit_original_response(
-                    content=f"<:Denied:1426930694633816248> {role.mention} doesn't have a quota set.",
+                for role_id in role_ids:
+                    result = await conn.execute(
+                        'DELETE FROM shift_quotas WHERE role_id = $1 AND type = $2',
+                        role_id, type.value
+                    )
+
+                    if result != "DELETE 0":
+                        removed_count += 1
+                        role = interaction.guild.get_role(role_id)
+                        if role:
+                            role_mentions.append(role.mention)
+
+            if removed_count == 0:
+                await interaction.followup.send(
+                    f"<:Denied:1426930694633816248> No quotas found for the specified roles in {type.value}.",
                     ephemeral=True
                 )
             else:
-                await interaction.edit_original_response(
-                    content=f"<:Accepted:1426930333789585509> Removed quota for {role.mention}",
+                await interaction.followup.send(
+                    f"<:Accepted:1426930333789585509> Removed quota for {', '.join(role_mentions)} from {type.value}",
                     ephemeral=True
                 )
 
@@ -1449,11 +1484,19 @@ class ShiftManagementCog(commands.Cog):
 
             # Fetch all quotas
             async with db.pool.acquire() as conn:
-                quotas = await conn.fetch('SELECT role_id, quota_seconds FROM shift_quotas ORDER BY quota_seconds DESC')
+                if type:
+                    quotas = await conn.fetch(
+                        'SELECT role_id, quota_seconds, type FROM shift_quotas WHERE type = $1 ORDER BY type, quota_seconds DESC',
+                        type.value
+                    )
+                else:
+                    quotas = await conn.fetch(
+                        'SELECT role_id, quota_seconds, type FROM shift_quotas ORDER BY type, quota_seconds DESC'
+                    )
 
             if not quotas:
-                await interaction.edit_original_response(
-                    content="No shift quotas have been set.",
+                await interaction.followup.send(
+                    "No shift quotas have been set.",
                     ephemeral=True
                 )
                 return
@@ -1464,28 +1507,43 @@ class ShiftManagementCog(commands.Cog):
                 color=discord.Color(0x000000)
             )
 
-            quota_lines = []
+            # Group by shift type
+            quotas_by_type = {}
             for quota in quotas:
-                role = interaction.guild.get_role(quota['role_id'])
-                if role:
-                    quota_lines.append(
-                        f"{role.mention} • {self.format_duration(timedelta(seconds=quota['quota_seconds']))}"
+                type_name = quota['type']
+                if type_name not in quotas_by_type:
+                    quotas_by_type[type_name] = []
+                quotas_by_type[type_name].append(quota)
+
+            # Add fields for each shift type
+            for type_name, type_quotas in quotas_by_type.items():
+                quota_lines = []
+                for quota in type_quotas:
+                    role = interaction.guild.get_role(quota['role_id'])
+                    if role:
+                        quota_lines.append(
+                            f"{role.mention} • {self.format_duration(timedelta(seconds=quota['quota_seconds']))}"
+                        )
+
+                if quota_lines:
+                    embed.add_field(
+                        name=f"**{type_name}**",
+                        value="\n".join(quota_lines),
+                        inline=False
                     )
 
-            if quota_lines:
-                embed.description = "\n".join(quota_lines)
-            else:
+            if not embed.fields:
                 embed.description = "No valid roles found."
 
-            await interaction.edit_original_response(embed=embed)
+            await interaction.followup.send(embed=embed, ephemeral=True)
 
     @shift_group.command(name="leaderboard", description="View shift leaderboard")
     @app_commands.describe(
-        shift_type="Filter by shift type (REQUIRED)",
+        type="Filter by shift type (REQUIRED)",
         wave="View current week or specific wave number (e.g., 1, 2, 3)"  # ← Changed description
     )
     @app_commands.choices(
-        shift_type=[
+        type=[
             app_commands.Choice(name="Shift FENZ", value="Shift FENZ"),
             app_commands.Choice(name="Shift HHStJ", value="Shift HHStJ"),
             app_commands.Choice(name="Shift CC", value="Shift CC")
@@ -1495,7 +1553,7 @@ class ShiftManagementCog(commands.Cog):
     async def shift_leaderboard(
             self,
             interaction: discord.Interaction,
-            shift_type: app_commands.Choice[str],
+            type: app_commands.Choice[str],
             wave: int = None  # ← Changed to integer parameter
     ):
         await interaction.response.defer()
@@ -1508,9 +1566,9 @@ class ShiftManagementCog(commands.Cog):
         }
 
         user_role_ids = {role.id for role in interaction.user.roles}
-        if not user_role_ids & set(required_roles.get(shift_type.value, [])):
+        if not user_role_ids & set(required_roles.get(type.value, [])):
             await interaction.followup.send(
-                f"<:Denied:1426930694633816248> You don't have permission to view the {shift_type.value} leaderboard.",
+                f"<:Denied:1426930694633816248> You don't have permission to view the {type.value} leaderboard.",
                 ephemeral=True
             )
             return
@@ -1529,7 +1587,7 @@ class ShiftManagementCog(commands.Cog):
                                  AND type = $2
                                GROUP BY discord_user_id, discord_username
                                ORDER BY total_seconds DESC LIMIT 25'''
-                    results = await conn.fetch(query, wave, shift_type.value)
+                    results = await conn.fetch(query, wave, type.value)
 
                     # Get week dates for this wave
                     week_start = await conn.fetchval(
@@ -1556,17 +1614,31 @@ class ShiftManagementCog(commands.Cog):
                                  AND type = $2
                                GROUP BY discord_user_id, discord_username
                                ORDER BY total_seconds DESC LIMIT 25'''
-                    results = await conn.fetch(query, current_week, shift_type.value)
-                    wave_label = "Current Week"
+                    results = await conn.fetch(query, current_week, type.value)
+                    wave_label = "Current Wave"
 
             if not results:
-                await interaction.edit_original_response(
-                    content=f"No shift data available for {wave_label}."
-                )
-                return
+                if wave is not None:
+                    embed = discord.Embed(
+                        title="Shift Leaderboard",
+                        description=f"No shift data is available for {wave_label}",
+                        color=discord.Color(0x000000)
+                    )
+                    embed.set_author(
+                        name=f"{interaction.guild.name}: {wave_label}",
+                        icon_url=interaction.guild.icon.url if interaction.guild.icon else None
+                    )
+                    await interaction.edit_original_response(embed=embed)
+
+                if not wave_exists:
+                    await interaction.followup.send(
+                        f"<:Denied:1426930694633816248> Wave {wave} does not exist.",
+                        ephemeral=True
+                    )
+                    return
 
             user_ids = [row['discord_user_id'] for row in results]
-            quota_infos = await self.get_bulk_quota_info(user_ids, interaction.guild, shift_type.value)
+            quota_infos = await self.get_bulk_quota_info(user_ids, interaction.guild, type.value)
 
             embed = discord.Embed(
                 title="Shift Leaderboard",
@@ -1601,7 +1673,7 @@ class ShiftManagementCog(commands.Cog):
             if leaderboard_lines:
                 embed.description = "\n".join(leaderboard_lines)
 
-            embed.set_footer(text=f"Shift Type: {shift_type.value}")
+            embed.set_footer(text=f"Shift Type: {type.value}")
 
             await interaction.edit_original_response(embed=embed)
 
@@ -1762,11 +1834,20 @@ class ShiftManagementCog(commands.Cog):
                     callsign_map = {}
 
             if not active_shifts:
-                await interaction.followup.send(
-                    "🔭 No active shifts at the moment.",
-                    ephemeral=True
+
+                embed = discord.Embed(
+                    title="**<:Clock:1434949269554597978> Active Shifts**",
+                    description='No active shfts.',
+                    color=discord.Color(0xffffff)
                 )
-                return
+
+                embed.set_author(
+                    name=interaction.guild.name,  # Use guild name instead
+                    icon_url=interaction.guild.icon.url if interaction.guild.icon else None
+                )
+
+                await interaction.followup.send(embed=embed)
+
 
             # Categorize by shift type
             shifts_by_type = {}
@@ -2123,7 +2204,7 @@ class ShiftManagementCog(commands.Cog):
         )
 
         # Add quota info if available
-        member = interaction.guild.get_member(self.user.id)
+        member = interaction.guild.get_member(user.id)  # use the parameter 'user', not 'self.user'
         if member:
             quota_info = await self.get_quota_info(user)
             if quota_info['has_quota']:
@@ -4010,13 +4091,13 @@ class QuotaConflictView(discord.ui.View):
     """Confirmation view for overwriting existing quotas"""
 
     def __init__(self, cog: ShiftManagementCog, admin: discord.Member, role_ids: list,
-                 quota_seconds: int, shift_type: str):
+                 quota_seconds: int, type: str):
         super().__init__(timeout=60)
         self.cog = cog
         self.admin = admin
         self.role_ids = role_ids
         self.quota_seconds = quota_seconds
-        self.shift_type = shift_type
+        self.type = type
         self.message = None
 
     async def on_timeout(self):
@@ -4046,17 +4127,17 @@ class QuotaConflictView(discord.ui.View):
                 role_mentions = []
                 for role_id in self.role_ids:
                     await conn.execute(
-                        '''INSERT INTO shift_quotas (role_id, quota_seconds, shift_type)
-                           VALUES ($1, $2, $3) ON CONFLICT (role_id, shift_type) DO
+                        '''INSERT INTO shift_quotas (role_id, quota_seconds, type)
+                           VALUES ($1, $2, $3) ON CONFLICT (role_id, type) DO
                         UPDATE SET quota_seconds = $2''',
-                        role_id, self.quota_seconds, self.shift_type
+                        role_id, self.quota_seconds, self.type
                     )
                     role = interaction.guild.get_role(role_id)
                     if role:
                         role_mentions.append(role.mention)
 
             await interaction.followup.send(
-                f"<:Accepted:1426930333789585509> Updated quota for {', '.join(role_mentions)} to {self.cog.format_duration(timedelta(seconds=self.quota_seconds))} ({self.shift_type})",
+                f"<:Accepted:1426930333789585509> Updated quota for {', '.join(role_mentions)} to {self.cog.format_duration(timedelta(seconds=self.quota_seconds))} ({self.type})",
                 ephemeral=True
             )
 

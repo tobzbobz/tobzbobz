@@ -760,7 +760,8 @@ class WatchCog(commands.Cog):
             stats_message = None
             async for message in channel.history(limit=100):
                 if message.author.bot and message.embeds:
-                    if any(embed.title and ("Watch Statistics" in embed.title or "FENZ Watches" in embed.title) for embed in message.embeds):
+                    if any(embed.title and ("Watch Statistics" in embed.title or "FENZ Watches" in embed.title) for
+                           embed in message.embeds):
                         stats_message = message
                         break
 
@@ -773,10 +774,24 @@ class WatchCog(commands.Cog):
 
             stats_embed = discord.Embed(
                 title="<:FENZ:1389200656090533970> | FENZ Watches",
-                description="FENZ watches are a system of organising large player activity sessions on FENZ. These can be hosted by FENZ Supervisors and Leadership and we encourage you to click the Watch Ping button to get notified when we host watches!\n",
+                description="FENZ watches are a system of organising large player activity sessions on FENZ. These can be hosted by FENZ Supervisors and Leadership and we encourage you to click the Watch Ping button to get notified when we host watches!\n‎ ",
                 colour=discord.Colour(0xffffff)
             )
 
+            # Add Watch Status field
+            stats_embed.add_field(
+                name="🔄️ | Watch Status",
+                value=(
+                    "‎\n⚫ - **No watch is active**, make sure it is SSU and wait for a FENZ Supervisor or Leadership member to start a watch!\n"
+                    "🗳️¸ - **A watch vote is occurring**, vote up if you want to participate in the watch!\n"
+                    "🟠  - **A watch will be active soon**, as a watch vote has succeeded, and is waiting its designated start time!\n"
+                    "🔴 / 🟡 / 🔵 / 🟤 - **Watch Colour**, a watch of this colour has been started!\n"
+                    "1️⃣ / 2️⃣ - **Watch Station**, a watch at this station has been started!\n‎\n\n"
+                ),
+                inline=False
+            )
+
+            # Add Watch Records field
             stats_embed.add_field(
                 name="🏆 | Watch Records",
                 value=(
@@ -790,6 +805,11 @@ class WatchCog(commands.Cog):
                 inline=True
             )
 
+            # Add image
+            stats_embed.set_image(
+                url="https://cdn.discordapp.com/attachments/1425358898831036507/1434782301031501958/image.png?ex=690994a5&is=69084325&hm=39fb6a254591d565c210a63738f5c83b9283680353c5d16dd654dd8bdc9022f3&")
+
+            # Set footer and thumbnail
             stats_embed.set_footer(text="Use the dropdown below for watch regulations")
             stats_embed.set_thumbnail(url='https://cdn.discordapp.com/emojis/1389200656090533970.webp?size=128')
 
@@ -2634,8 +2654,8 @@ class WatchCog(commands.Cog):
                     f"‎\n**Total Watches:** {stats['total_watches']}\n"
                     f"**Longest Watch:** {stats['longest_duration']}\n"
                     f"**Most Attendees:** {stats['most_attendees']}\n"
-                    f"**Most Common Watch Colour:** {stats['most_common_colour']}"
-                    f"**Most Active Station:** {stats['most_active_station']}"
+                    f"**Most Common Watch Colour:** {stats['most_common_colour']}\n"
+                    f"**Most Active Station:** {stats['most_active_station']}\n"
                     f"**Average Watch Duration:** {stats['average_duration']}"
                 ),
                 inline=True
