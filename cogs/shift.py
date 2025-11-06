@@ -3318,7 +3318,7 @@ class AdminActionsSelect(discord.ui.Select):
         self.cog = cog
         self.admin = admin
         self.target_user = target_user
-        self.type = type
+        self.shift_type = type
 
         options = [
             discord.SelectOption(label="Shift List", description="View shift history", emoji="<:List:1434953240155525201>"),
@@ -3377,12 +3377,12 @@ class AdminActionsSelect(discord.ui.Select):
 
     async def show_shift_list(self, interaction: discord.Interaction):
         """Show paginated shift list"""
-        view = ShiftListView(self.cog, self.admin, self.target_user, self.type)
+        view = ShiftListView(self.cog, self.admin, self.target_user, self.shift_type)
         await view.show_page(interaction, 0)
 
     async def show_modify_shift(self, interaction: discord.Interaction):
         """Show modify shift interface"""
-        view = ModifyShiftSelectView(self.cog, self.admin, self.target_user, self.type)
+        view = ModifyShiftSelectView(self.cog, self.admin, self.target_user, self.shift_type)
         await view.populate_shift_dropdown()  # Add this line
         await interaction.edit_original_response(
             content=f"Select a shift to modify for {self.target_user.mention}:",
@@ -3391,7 +3391,7 @@ class AdminActionsSelect(discord.ui.Select):
 
     async def show_delete_shift(self, interaction: discord.Interaction):
         """Show delete shift interface"""
-        view = DeleteShiftSelectView(self.cog, self.admin, self.target_user, self.type)
+        view = DeleteShiftSelectView(self.cog, self.admin, self.target_user, self.shift_type)
         await view.populate_shift_dropdown()  # Add this line
         await interaction.edit_original_response(
             content=f"Select a shift to delete for {self.target_user.mention}:",
@@ -3407,16 +3407,16 @@ class AdminActionsSelect(discord.ui.Select):
                    FROM shifts
                    WHERE discord_user_id = $1
                      AND type = $2''',
-                self.target_user.id, self.type
+                self.target_user.id, self.shift_type
             )
 
         embed = discord.Embed(
             title=f"**Clear User Shifts**",
-            description=f"Are you sure you want to clear **{count}** shifts for this user under the `**{self.type}**` shift type?\n\nThis cannot be undone.",
+            description=f"Are you sure you want to clear **{count}** shifts for this user under the `**{self.shift_type}**` shift type?\n\nThis cannot be undone.",
             color=discord.Color.red()
         )
 
-        view = ClearShiftsConfirmView(self.cog, self.admin, self.target_user, self.type, count)
+        view = ClearShiftsConfirmView(self.cog, self.admin, self.target_user, self.shift_type, count)
         await interaction.followup.send(embed=embed, view=view)
 
 

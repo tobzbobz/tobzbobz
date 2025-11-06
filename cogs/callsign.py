@@ -384,7 +384,8 @@ def format_duplicate_callsign_message(callsign: str, existing_data: dict) -> str
 
 async def add_callsign_to_database(callsign: str, discord_user_id: int, discord_username: str,
                                    roblox_user_id: str, roblox_username: str, fenz_prefix: str,
-                                   hhstj_prefix: str, approved_by_id: int, approved_by_name: str):
+                                   hhstj_prefix: str, approved_by_id: int, approved_by_name: str,
+                                   is_fenz_high_command: bool = False, is_hhstj_high_command: bool = False):
     """Add a new callsign to the database"""
     async with db.pool.acquire() as conn:
         async with conn.transaction():  # ✅ Proper transaction
