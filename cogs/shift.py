@@ -2435,12 +2435,6 @@ class ShiftActiveView(discord.ui.View):
 
     @discord.ui.button(label="End", style=discord.ButtonStyle.danger, emoji="<:Reset:1434959478796714074>")
     async def end_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-
-        if button.disabled:
-            button.disabled = False
-            await interaction.response.edit_message(view=self)
-            return
-
         await interaction.response.defer()
 
         try:
@@ -2449,12 +2443,10 @@ class ShiftActiveView(discord.ui.View):
                 self.cog.update_duty_roles(self.user, self.shift['type'], 'off')
             )
 
-            # Calculate final pause duration
             pause_duration = self.shift.get('pause_duration', 0)
             if self.shift.get('pause_start'):
                 pause_duration += (datetime.utcnow() - self.shift['pause_start']).total_seconds()
 
-            # End the shift
             async with db.pool.acquire() as conn:
                 await conn.execute(
                     '''UPDATE shifts
@@ -2465,11 +2457,26 @@ class ShiftActiveView(discord.ui.View):
                     datetime.utcnow(), pause_duration, self.shift['id']
                 )
 
-            # Get updated statistics
-            stats = await self.cog.get_shift_statistics(self.user.id)
+            # Get the completed shift for logging
+            completed_shift = dict(self.shift)
+            completed_shift['end_time'] = datetime.utcnow()
+            completed_shift['pause_duration'] = pause_duration
 
+            # ðŸ†• LOG THE SHIFT END
+            await self.cog.log_shift_event(
+                interaction.guild,
+                'end',
+                self.user,
+                completed_shift
+            )
+
+            # **ADD THESE LINES TO CALCULATE active_duration and total_break:**
             total_duration = datetime.utcnow() - self.shift['start_time']
             active_duration = total_duration - timedelta(seconds=pause_duration)
+            total_break = timedelta(seconds=pause_duration)
+
+            # Get updated statistics
+            stats = await self.cog.get_shift_statistics(self.user.id)
 
             # Create summary embed
             embed = discord.Embed(
@@ -2477,7 +2484,8 @@ class ShiftActiveView(discord.ui.View):
                 description=f"**Shift Count:** {str(stats['count'])}\n**Total Duration:** {self.cog.format_duration(stats['total_duration'])}\n**Average Duration:** {self.cog.format_duration(stats['average_duration'])}",
                 color=discord.Color(0x000000)
             )
-            embed.set_author(name="Shift Management", icon_url=interaction.user.display_avatar.url)
+
+            embed.set_footer(text=f"Shift Type: {self.shift['type']}")
 
             # Add quota info if available
             member = interaction.guild.get_member(self.user.id)
@@ -2492,13 +2500,12 @@ class ShiftActiveView(discord.ui.View):
                         inline=False
                     )
 
-                value_parts = [
-                    f"**Status:** <:Offline:1434951694319620197> Ended\n"
-                    f"**Total Time:** {self.cog.format_duration(active_duration)}",
-                ]
+            value_parts = [
+                f"**Status:** <:Offline:1434951694319620197> Ended\n"
+                f"**Total Time:** {self.cog.format_duration(active_duration)}"
+            ]
 
             # Only add break info if there was actually break time
-            total_break = timedelta(seconds=pause_duration)
             if total_break.total_seconds() > 0:
                 value_parts.append(f"**Break Time:** {self.cog.format_duration(total_break)}")
 
@@ -2517,7 +2524,6 @@ class ShiftActiveView(discord.ui.View):
                 f"<:Denied:1426930694633816248> Error: {str(e)}",
                 ephemeral=True
             )
-
 
 class ShiftBreakView(discord.ui.View):
     """View shown when on break - Resume and End buttons"""

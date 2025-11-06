@@ -31,6 +31,8 @@ STRIKES_ROLES = {
     1365536207726973060: "Strike 3!!",
     1365536206892437545: "Strike 2!",
     1365536206083067927: "Strike 1",
+    1435787285995196468: "Rank Lock",
+    1412792728630202378: "Terminated Member",
 }
 
 # Qualifications Mapping (Column I for Non-Command, Column C for Command)
