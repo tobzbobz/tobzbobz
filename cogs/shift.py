@@ -1265,7 +1265,6 @@ class ShiftManagementCog(commands.Cog):
             minutes: int = 0,
             type: app_commands.Choice[str] = None
     ):
-        # Always defer with ephemeral=True for all actions
         await interaction.response.defer(ephemeral=True)
 
         try:
@@ -1334,10 +1333,9 @@ class ShiftManagementCog(commands.Cog):
                     )
                     return
 
-                # Parse roles (like shift_reset does)
+                # Parse roles
                 role_ids = []
                 for role_str in roles.split(','):
-                    # Strip whitespace and remove mention formatting
                     role_str = role_str.strip().replace('<@&', '').replace('>', '').replace('@', '')
                     if not role_str:
                         continue
@@ -1373,7 +1371,6 @@ class ShiftManagementCog(commands.Cog):
                 async with db.pool.acquire() as conn:
                     conflicts = []
                     for role_id in role_ids:
-                        # Check if quota already exists
                         existing = await conn.fetchrow(
                             'SELECT quota_seconds FROM shift_quotas WHERE role_id = $1 AND type = $2',
                             role_id, type.value
@@ -1386,24 +1383,25 @@ class ShiftManagementCog(commands.Cog):
 
                     if conflicts:
                         # Show confirmation for overwriting
-                        confirm_view = QuotaConflictView(
+                        view = QuotaConflictView(
                             self, interaction.user, role_ids, total_seconds, type.value
                         )
                         await interaction.followup.send(
                             f"**The following roles already have quotas set for {type.value}:**\n" +
                             "\n".join(conflicts) +
                             f"\n\nOverwrite with **{self.format_duration(timedelta(seconds=total_seconds))}**?",
-                            view=confirm_view,
+                            view=view,
                             ephemeral=True
                         )
                         return
 
-                    # No conflicts, set quotas
+                    # No conflicts, set quotas directly
                     role_mentions = []
                     for role_id in role_ids:
                         await conn.execute(
                             '''INSERT INTO shift_quotas (role_id, quota_seconds, type)
-                               VALUES ($1, $2, $3) ON CONFLICT (role_id, type) DO
+                               VALUES ($1, $2, $3) ON CONFLICT (role_id, type) 
+                               DO
                             UPDATE SET quota_seconds = $2''',
                             role_id, total_seconds, type.value
                         )
@@ -1442,7 +1440,6 @@ class ShiftManagementCog(commands.Cog):
                 # Parse roles
                 role_ids = []
                 for role_str in roles.split(','):
-                    # Strip whitespace and remove mention formatting
                     role_str = role_str.strip().replace('<@&', '').replace('>', '').replace('@', '')
                     if not role_str:
                         continue
@@ -1451,10 +1448,7 @@ class ShiftManagementCog(commands.Cog):
                         role = interaction.guild.get_role(role_id)
                         if role:
                             role_ids.append(role_id)
-                        else:
-                            print(f"Warning: Role ID {role_id} not found in guild")
                     except ValueError:
-                        print(f"Warning: Could not parse role ID from: {role_str}")
                         continue
 
                 if not role_ids:
@@ -1557,12 +1551,10 @@ class ShiftManagementCog(commands.Cog):
                 await interaction.followup.send(embed=embed, ephemeral=True)
 
         except Exception as e:
-            # Add comprehensive error logging
             print(f"Error in shift_quota command: {e}")
             import traceback
             traceback.print_exc()
 
-            # Try to send error message
             try:
                 await interaction.followup.send(
                     f"<:Denied:1426930694633816248> An error occurred: {str(e)}",
@@ -2291,6 +2283,160 @@ class ShiftManagementCog(commands.Cog):
 
         view = AdminShiftControlView(self, interaction.user, user, type, active_shift)
         await interaction.edit_original_response(embed=embed, view=view)
+
+class QuotaConflictView(discord.ui.View):
+    """Confirmation view for overwriting existing quotas"""
+
+    def __init__(self, cog: ShiftManagementCog, admin: discord.Member, role_ids: list,
+                 quota_seconds: int, type: str):
+        super().__init__(timeout=60)
+        self.cog = cog
+        self.admin = admin
+        self.role_ids = role_ids
+        self.quota_seconds = quota_seconds
+        self.type = type
+        self.message = None
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except:
+                pass
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.admin.id:
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> This is not your confirmation!",
+                ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Confirm Overwrite", style=discord.ButtonStyle.danger)
+    async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            async with db.pool.acquire() as conn:
+                role_mentions = []
+                for role_id in self.role_ids:
+                    await conn.execute(
+                        '''INSERT INTO shift_quotas (role_id, quota_seconds, type)
+                           VALUES ($1, $2, $3) ON CONFLICT (role_id, type) 
+                           DO
+                        UPDATE SET quota_seconds = $2''',
+                        role_id, self.quota_seconds, self.type
+                    )
+                    role = interaction.guild.get_role(role_id)
+                    if role:
+                        role_mentions.append(role.mention)
+
+            await interaction.followup.send(
+                f"<:Accepted:1426930333789585509> Updated quota for {', '.join(role_mentions)} to {self.cog.format_duration(timedelta(seconds=self.quota_seconds))} ({self.type})",
+                ephemeral=True
+            )
+
+            # Disable buttons
+            for item in self.children:
+                item.disabled = True
+            await interaction.message.edit(view=self)
+            self.stop()
+
+        except Exception as e:
+            await interaction.followup.send(
+                f"<:Denied:1426930694633816248> Error: {str(e)}",
+                ephemeral=True
+            )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        await interaction.followup.send("Cancelled.", ephemeral=True)
+
+        for item in self.children:
+            item.disabled = True
+        await interaction.message.edit(view=self)
+        self.stop()
+
+class QuotaConflictView(discord.ui.View):
+    """Confirmation view for overwriting existing quotas"""
+
+    def __init__(self, cog: ShiftManagementCog, admin: discord.Member, role_ids: list,
+                 quota_seconds: int, type: str):
+        super().__init__(timeout=60)
+        self.cog = cog
+        self.admin = admin
+        self.role_ids = role_ids
+        self.quota_seconds = quota_seconds
+        self.type = type
+        self.message = None
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except:
+                pass
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.admin.id:
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> This is not your confirmation!",
+                ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Confirm Overwrite", style=discord.ButtonStyle.danger)
+    async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            async with db.pool.acquire() as conn:
+                role_mentions = []
+                for role_id in self.role_ids:
+                    await conn.execute(
+                        '''INSERT INTO shift_quotas (role_id, quota_seconds, type)
+                           VALUES ($1, $2, $3) 
+                           ON CONFLICT (role_id, type) 
+                           DO UPDATE SET quota_seconds = $2''',
+                        role_id, self.quota_seconds, self.type
+                    )
+                    role = interaction.guild.get_role(role_id)
+                    if role:
+                        role_mentions.append(role.mention)
+
+            await interaction.followup.send(
+                f"<:Accepted:1426930333789585509> Updated quota for {', '.join(role_mentions)} to {self.cog.format_duration(timedelta(seconds=self.quota_seconds))} ({self.type})",
+                ephemeral=True
+            )
+
+            # Disable buttons
+            for item in self.children:
+                item.disabled = True
+            await interaction.message.edit(view=self)
+            self.stop()
+
+        except Exception as e:
+            await interaction.followup.send(
+                f"<:Denied:1426930694633816248> Error: {str(e)}",
+                ephemeral=True
+            )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        await interaction.followup.send("Cancelled.", ephemeral=True)
+
+        for item in self.children:
+            item.disabled = True
+        await interaction.message.edit(view=self)
+        self.stop()
 
 
 class ShiftStartView(discord.ui.View):
@@ -4160,7 +4306,7 @@ class QuotaConflictView(discord.ui.View):
 
     @discord.ui.button(label="Confirm Overwrite", style=discord.ButtonStyle.danger)
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)  # ← ADD THIS LINE
 
         try:
             async with db.pool.acquire() as conn:
@@ -4168,7 +4314,8 @@ class QuotaConflictView(discord.ui.View):
                 for role_id in self.role_ids:
                     await conn.execute(
                         '''INSERT INTO shift_quotas (role_id, quota_seconds, type)
-                           VALUES ($1, $2, $3) ON CONFLICT (role_id, type) DO
+                           VALUES ($1, $2, $3) ON CONFLICT (role_id, type) 
+                           DO
                         UPDATE SET quota_seconds = $2''',
                         role_id, self.quota_seconds, self.type
                     )
@@ -4176,7 +4323,7 @@ class QuotaConflictView(discord.ui.View):
                     if role:
                         role_mentions.append(role.mention)
 
-            await interaction.followup.send(
+            await interaction.followup.send(  # ← Already correct
                 f"<:Accepted:1426930333789585509> Updated quota for {', '.join(role_mentions)} to {self.cog.format_duration(timedelta(seconds=self.quota_seconds))} ({self.type})",
                 ephemeral=True
             )
@@ -4195,14 +4342,13 @@ class QuotaConflictView(discord.ui.View):
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)  # ← ADD THIS LINE
         await interaction.followup.send("Cancelled.", ephemeral=True)
 
         for item in self.children:
             item.disabled = True
         await interaction.message.edit(view=self)
         self.stop()
-
 
 class ResetConfirmView(discord.ui.View):
     """Confirmation view for resetting shifts"""
