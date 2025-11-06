@@ -1265,289 +1265,311 @@ class ShiftManagementCog(commands.Cog):
             minutes: int = 0,
             type: app_commands.Choice[str] = None
     ):
-        await interaction.response.defer()
+        # Always defer with ephemeral=True for all actions
+        await interaction.response.defer(ephemeral=True)
 
-        if action.value == "view":
-            # View user's own quota
-            quota_info = await self.get_quota_info(interaction.user, type.value if type else None)
+        try:
+            if action.value == "view":
+                # View user's own quota
+                quota_info = await self.get_quota_info(interaction.user, type.value if type else None)
 
-            if not quota_info['has_quota']:
-                await interaction.followup.send(
-                    "You don't have any shift quotas set.",
-                    ephemeral=True
-                )
-                return
-
-            embed = discord.Embed(
-                title="<:Search:1434957367505719457> Your Quota",
-                color=discord.Color(0x000000)
-            )
-
-            if quota_info['bypass_type']:
-                if quota_info['bypass_type'] == 'RA':
-                    status_text = f"<:Accepted:1426930333789585509> **{quota_info['percentage']:.1f}%** (RA - 50% Required)"
-                else:
-                    status_text = f"<:Accepted:1426930333789585509> **100%** ({quota_info['bypass_type']} Bypass)"
-            else:
-                status_emoji = "<:Accepted:1426930333789585509>" if quota_info[
-                    'completed'] else "<:Denied:1426930694633816248>"
-                status_text = f"{status_emoji} **{quota_info['percentage']:.1f}%**"
-
-            embed.description = (
-                f"{status_text}\n"
-                f"**Required:** {self.format_duration(timedelta(seconds=quota_info['quota_seconds']))}\n"
-                f"**Completed:** {self.format_duration(timedelta(seconds=quota_info['active_seconds']))}"
-            )
-
-            if type:
-                embed.set_footer(text=f"Shift Type: {type.value}")
-
-            await interaction.followup.send(embed=embed, ephemeral=True)
-
-        elif action.value == "set":
-            # Check admin permission
-            if not any(role_check.id in QUOTA_ADMIN_ROLES for role_check in interaction.user.roles):
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> You don't have permission to set quotas.",
-                    ephemeral=True
-                )
-                return
-
-            if not roles:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> Please specify role(s) to set quota for.",
-                    ephemeral=True
-                )
-                return
-
-            if not type:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> Please specify a shift type.",
-                    ephemeral=True
-                )
-                return
-
-            # Parse roles (like shift_reset does)
-            role_ids = []
-            for role_str in roles.split(','):
-                # Strip whitespace and remove mention formatting
-                role_str = role_str.strip().replace('<@&', '').replace('>', '').replace('@', '')
-                if not role_str:
-                    continue
-                try:
-                    role_id = int(role_str)
-                    role = interaction.guild.get_role(role_id)
-                    if role:
-                        role_ids.append(role_id)
-                    else:
-                        print(f"Warning: Role ID {role_id} not found in guild")
-                except ValueError:
-                    print(f"Warning: Could not parse role ID from: {role_str}")
-                    continue
-
-            if not role_ids:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> No valid roles provided.",
-                    ephemeral=True
-                )
-                return
-
-            # Calculate total seconds
-            total_seconds = (hours * 3600) + (minutes * 60)
-
-            if total_seconds <= 0:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> Quota must be greater than 0.",
-                    ephemeral=True
-                )
-                return
-
-            # Check for conflicts and save to database
-            async with db.pool.acquire() as conn:
-                conflicts = []
-                for role_id in role_ids:
-                    # Check if quota already exists
-                    existing = await conn.fetchrow(
-                        'SELECT quota_seconds FROM shift_quotas WHERE role_id = $1 AND type = $2',
-                        role_id, type.value
-                    )
-
-                    if existing:
-                        role = interaction.guild.get_role(role_id)
-                        conflicts.append(
-                            f"{role.mention} (currently: {self.format_duration(timedelta(seconds=existing['quota_seconds']))})")
-
-                if conflicts:
-                    # Show confirmation for overwriting
-                    confirm_view = QuotaConflictView(
-                        self, interaction.user, role_ids, total_seconds, type.value
-                    )
+                if not quota_info['has_quota']:
                     await interaction.followup.send(
-                        f"**The following roles already have quotas set for {type.value}:**\n" +
-                        "\n".join(conflicts) +
-                        f"\n\nOverwrite with **{self.format_duration(timedelta(seconds=total_seconds))}**?",
-                        view=confirm_view,
+                        "You don't have any shift quotas set.",
                         ephemeral=True
                     )
                     return
 
-                # No conflicts, set quotas
-                role_mentions = []
-                for role_id in role_ids:
-                    await conn.execute(
-                        '''INSERT INTO shift_quotas (role_id, quota_seconds, type)
-                           VALUES ($1, $2, $3) ON CONFLICT (role_id, type) DO
-                        UPDATE SET quota_seconds = $2''',
-                        role_id, total_seconds, type.value
-                    )
-                    role = interaction.guild.get_role(role_id)
-                    if role:
-                        role_mentions.append(role.mention)
-
-                await interaction.followup.send(
-                    f"<:Accepted:1426930333789585509> Set quota for {', '.join(role_mentions)} to {self.format_duration(timedelta(seconds=total_seconds))} ({type.value})",
-                    ephemeral=True
+                embed = discord.Embed(
+                    title="<:Search:1434957367505719457> Your Quota",
+                    color=discord.Color(0x000000)
                 )
 
-        elif action.value == "remove":
-            # Check admin permission
-            if not any(role_check.id in QUOTA_ADMIN_ROLES for role_check in interaction.user.roles):
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> You don't have permission to remove quotas.",
-                    ephemeral=True
+                embed.set_author(
+                    name="Shift Management",
+                    icon_url=interaction.user.display_avatar.url
                 )
-                return
 
-            if not roles:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> Please specify role(s) to remove quota from.",
-                    ephemeral=True
-                )
-                return
-
-            if not type:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> Please specify a shift type.",
-                    ephemeral=True
-                )
-                return
-
-            # Parse roles
-            role_ids = []
-            for role_str in roles.split(','):
-                # Strip whitespace and remove mention formatting
-                role_str = role_str.strip().replace('<@&', '').replace('>', '').replace('@', '')
-                if not role_str:
-                    continue
-                try:
-                    role_id = int(role_str)
-                    role = interaction.guild.get_role(role_id)
-                    if role:
-                        role_ids.append(role_id)
+                if quota_info['bypass_type']:
+                    if quota_info['bypass_type'] == 'RA':
+                        status_text = f"<:Accepted:1426930333789585509> **{quota_info['percentage']:.1f}%** (RA - 50% Required)"
                     else:
-                        print(f"Warning: Role ID {role_id} not found in guild")
-                except ValueError:
-                    print(f"Warning: Could not parse role ID from: {role_str}")
-                    continue
+                        status_text = f"<:Accepted:1426930333789585509> **100%** ({quota_info['bypass_type']} Bypass)"
+                else:
+                    status_emoji = "<:Accepted:1426930333789585509>" if quota_info[
+                        'completed'] else "<:Denied:1426930694633816248>"
+                    status_text = f"{status_emoji} **{quota_info['percentage']:.1f}%**"
 
-            if not role_ids:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> No valid roles provided.",
-                    ephemeral=True
+                embed.description = (
+                    f"{status_text}\n"
+                    f"**Required:** {self.format_duration(timedelta(seconds=quota_info['quota_seconds']))}\n"
+                    f"**Completed:** {self.format_duration(timedelta(seconds=quota_info['active_seconds']))}"
                 )
-                return
 
-            # Delete from database
-            async with db.pool.acquire() as conn:
-                role_mentions = []
-                removed_count = 0
+                if type:
+                    embed.set_footer(text=f"Shift Type: {type.value}")
 
-                for role_id in role_ids:
-                    result = await conn.execute(
-                        'DELETE FROM shift_quotas WHERE role_id = $1 AND type = $2',
-                        role_id, type.value
+                await interaction.followup.send(embed=embed, ephemeral=True)
+
+            elif action.value == "set":
+                # Check admin permission
+                if not any(role_check.id in QUOTA_ADMIN_ROLES for role_check in interaction.user.roles):
+                    await interaction.followup.send(
+                        "<:Denied:1426930694633816248> You don't have permission to set quotas.",
+                        ephemeral=True
                     )
+                    return
 
-                    if result != "DELETE 0":
-                        removed_count += 1
+                if not roles:
+                    await interaction.followup.send(
+                        "<:Denied:1426930694633816248> Please specify role(s) to set quota for.",
+                        ephemeral=True
+                    )
+                    return
+
+                if not type:
+                    await interaction.followup.send(
+                        "<:Denied:1426930694633816248> Please specify a shift type.",
+                        ephemeral=True
+                    )
+                    return
+
+                # Parse roles (like shift_reset does)
+                role_ids = []
+                for role_str in roles.split(','):
+                    # Strip whitespace and remove mention formatting
+                    role_str = role_str.strip().replace('<@&', '').replace('>', '').replace('@', '')
+                    if not role_str:
+                        continue
+                    try:
+                        role_id = int(role_str)
+                        role = interaction.guild.get_role(role_id)
+                        if role:
+                            role_ids.append(role_id)
+                        else:
+                            print(f"Warning: Role ID {role_id} not found in guild")
+                    except ValueError:
+                        print(f"Warning: Could not parse role ID from: {role_str}")
+                        continue
+
+                if not role_ids:
+                    await interaction.followup.send(
+                        "<:Denied:1426930694633816248> No valid roles provided.",
+                        ephemeral=True
+                    )
+                    return
+
+                # Calculate total seconds
+                total_seconds = (hours * 3600) + (minutes * 60)
+
+                if total_seconds <= 0:
+                    await interaction.followup.send(
+                        "<:Denied:1426930694633816248> Quota must be greater than 0.",
+                        ephemeral=True
+                    )
+                    return
+
+                # Check for conflicts and save to database
+                async with db.pool.acquire() as conn:
+                    conflicts = []
+                    for role_id in role_ids:
+                        # Check if quota already exists
+                        existing = await conn.fetchrow(
+                            'SELECT quota_seconds FROM shift_quotas WHERE role_id = $1 AND type = $2',
+                            role_id, type.value
+                        )
+
+                        if existing:
+                            role = interaction.guild.get_role(role_id)
+                            conflicts.append(
+                                f"{role.mention} (currently: {self.format_duration(timedelta(seconds=existing['quota_seconds']))})")
+
+                    if conflicts:
+                        # Show confirmation for overwriting
+                        confirm_view = QuotaConflictView(
+                            self, interaction.user, role_ids, total_seconds, type.value
+                        )
+                        await interaction.followup.send(
+                            f"**The following roles already have quotas set for {type.value}:**\n" +
+                            "\n".join(conflicts) +
+                            f"\n\nOverwrite with **{self.format_duration(timedelta(seconds=total_seconds))}**?",
+                            view=confirm_view,
+                            ephemeral=True
+                        )
+                        return
+
+                    # No conflicts, set quotas
+                    role_mentions = []
+                    for role_id in role_ids:
+                        await conn.execute(
+                            '''INSERT INTO shift_quotas (role_id, quota_seconds, type)
+                               VALUES ($1, $2, $3) ON CONFLICT (role_id, type) DO
+                            UPDATE SET quota_seconds = $2''',
+                            role_id, total_seconds, type.value
+                        )
                         role = interaction.guild.get_role(role_id)
                         if role:
                             role_mentions.append(role.mention)
 
-            if removed_count == 0:
-                await interaction.followup.send(
-                    f"<:Denied:1426930694633816248> No quotas found for the specified roles in {type.value}.",
-                    ephemeral=True
-                )
-            else:
-                await interaction.followup.send(
-                    f"<:Accepted:1426930333789585509> Removed quota for {', '.join(role_mentions)} from {type.value}",
-                    ephemeral=True
-                )
-
-        elif action.value == "view_all":
-            # Check admin permission
-            if not any(role_check.id in QUOTA_ADMIN_ROLES for role_check in interaction.user.roles):
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> You don't have permission to view quotas.",
-                    ephemeral=True
-                )
-                return
-
-            # Fetch all quotas
-            async with db.pool.acquire() as conn:
-                if type:
-                    quotas = await conn.fetch(
-                        'SELECT role_id, quota_seconds, type FROM shift_quotas WHERE type = $1 ORDER BY type, quota_seconds DESC',
-                        type.value
-                    )
-                else:
-                    quotas = await conn.fetch(
-                        'SELECT role_id, quota_seconds, type FROM shift_quotas ORDER BY type, quota_seconds DESC'
+                    await interaction.followup.send(
+                        f"<:Accepted:1426930333789585509> Set quota for {', '.join(role_mentions)} to {self.format_duration(timedelta(seconds=total_seconds))} ({type.value})",
+                        ephemeral=True
                     )
 
-            if not quotas:
-                await interaction.followup.send(
-                    "No shift quotas have been set.",
-                    ephemeral=True
-                )
-                return
+            elif action.value == "remove":
+                # Check admin permission
+                if not any(role_check.id in QUOTA_ADMIN_ROLES for role_check in interaction.user.roles):
+                    await interaction.followup.send(
+                        "<:Denied:1426930694633816248> You don't have permission to remove quotas.",
+                        ephemeral=True
+                    )
+                    return
 
-            # Create embed
-            embed = discord.Embed(
-                title="<:Search:1434957367505719457> Role Quotas",
-                color=discord.Color(0x000000)
-            )
+                if not roles:
+                    await interaction.followup.send(
+                        "<:Denied:1426930694633816248> Please specify role(s) to remove quota from.",
+                        ephemeral=True
+                    )
+                    return
 
-            # Group by shift type
-            quotas_by_type = {}
-            for quota in quotas:
-                type_name = quota['type']
-                if type_name not in quotas_by_type:
-                    quotas_by_type[type_name] = []
-                quotas_by_type[type_name].append(quota)
+                if not type:
+                    await interaction.followup.send(
+                        "<:Denied:1426930694633816248> Please specify a shift type.",
+                        ephemeral=True
+                    )
+                    return
 
-            # Add fields for each shift type
-            for type_name, type_quotas in quotas_by_type.items():
-                quota_lines = []
-                for quota in type_quotas:
-                    quota_role = interaction.guild.get_role(quota['role_id'])
-                    if quota_role:
-                        quota_lines.append(
-                            f"{quota_role.mention} • {self.format_duration(timedelta(seconds=quota['quota_seconds']))}"
+                # Parse roles
+                role_ids = []
+                for role_str in roles.split(','):
+                    # Strip whitespace and remove mention formatting
+                    role_str = role_str.strip().replace('<@&', '').replace('>', '').replace('@', '')
+                    if not role_str:
+                        continue
+                    try:
+                        role_id = int(role_str)
+                        role = interaction.guild.get_role(role_id)
+                        if role:
+                            role_ids.append(role_id)
+                        else:
+                            print(f"Warning: Role ID {role_id} not found in guild")
+                    except ValueError:
+                        print(f"Warning: Could not parse role ID from: {role_str}")
+                        continue
+
+                if not role_ids:
+                    await interaction.followup.send(
+                        "<:Denied:1426930694633816248> No valid roles provided.",
+                        ephemeral=True
+                    )
+                    return
+
+                # Delete from database
+                async with db.pool.acquire() as conn:
+                    role_mentions = []
+                    removed_count = 0
+
+                    for role_id in role_ids:
+                        result = await conn.execute(
+                            'DELETE FROM shift_quotas WHERE role_id = $1 AND type = $2',
+                            role_id, type.value
                         )
 
-                if quota_lines:
-                    embed.add_field(
-                        name=f"**{type_name}**",
-                        value="\n".join(quota_lines),
-                        inline=False
+                        if result != "DELETE 0":
+                            removed_count += 1
+                            role = interaction.guild.get_role(role_id)
+                            if role:
+                                role_mentions.append(role.mention)
+
+                if removed_count == 0:
+                    await interaction.followup.send(
+                        f"<:Denied:1426930694633816248> No quotas found for the specified roles in {type.value}.",
+                        ephemeral=True
+                    )
+                else:
+                    await interaction.followup.send(
+                        f"<:Accepted:1426930333789585509> Removed quota for {', '.join(role_mentions)} from {type.value}",
+                        ephemeral=True
                     )
 
-            if not embed.fields:
-                embed.description = "No valid roles found."
+            elif action.value == "view_all":
+                # Check admin permission
+                if not any(role_check.id in QUOTA_ADMIN_ROLES for role_check in interaction.user.roles):
+                    await interaction.followup.send(
+                        "<:Denied:1426930694633816248> You don't have permission to view quotas.",
+                        ephemeral=True
+                    )
+                    return
 
-            await interaction.followup.send(embed=embed, ephemeral=True)
+                # Fetch all quotas
+                async with db.pool.acquire() as conn:
+                    if type:
+                        quotas = await conn.fetch(
+                            'SELECT role_id, quota_seconds, type FROM shift_quotas WHERE type = $1 ORDER BY type, quota_seconds DESC',
+                            type.value
+                        )
+                    else:
+                        quotas = await conn.fetch(
+                            'SELECT role_id, quota_seconds, type FROM shift_quotas ORDER BY type, quota_seconds DESC'
+                        )
+
+                if not quotas:
+                    await interaction.followup.send(
+                        "No shift quotas have been set.",
+                        ephemeral=True
+                    )
+                    return
+
+                # Create embed
+                embed = discord.Embed(
+                    title="<:Search:1434957367505719457> Role Quotas",
+                    color=discord.Color(0x000000)
+                )
+
+                # Group by shift type
+                quotas_by_type = {}
+                for quota in quotas:
+                    type_name = quota['type']
+                    if type_name not in quotas_by_type:
+                        quotas_by_type[type_name] = []
+                    quotas_by_type[type_name].append(quota)
+
+                # Add fields for each shift type
+                for type_name, type_quotas in quotas_by_type.items():
+                    quota_lines = []
+                    for quota in type_quotas:
+                        quota_role = interaction.guild.get_role(quota['role_id'])
+                        if quota_role:
+                            quota_lines.append(
+                                f"{quota_role.mention} • {self.format_duration(timedelta(seconds=quota['quota_seconds']))}"
+                            )
+
+                    if quota_lines:
+                        embed.add_field(
+                            name=f"**{type_name}**",
+                            value="\n".join(quota_lines),
+                            inline=False
+                        )
+
+                if not embed.fields:
+                    embed.description = "No valid roles found."
+
+                await interaction.followup.send(embed=embed, ephemeral=True)
+
+        except Exception as e:
+            # Add comprehensive error logging
+            print(f"Error in shift_quota command: {e}")
+            import traceback
+            traceback.print_exc()
+
+            # Try to send error message
+            try:
+                await interaction.followup.send(
+                    f"<:Denied:1426930694633816248> An error occurred: {str(e)}",
+                    ephemeral=True
+                )
+            except:
+                print("Could not send error message to user")
 
     @shift_group.command(name="leaderboard", description="View shift leaderboard")
     @app_commands.describe(
