@@ -1330,13 +1330,19 @@ class ShiftManagementCog(commands.Cog):
             # Parse roles (like shift_reset does)
             role_ids = []
             for role_str in roles.split(','):
-                role_str = role_str.strip().replace('<@&', '').replace('>', '')
+                # Strip whitespace and remove mention formatting
+                role_str = role_str.strip().replace('<@&', '').replace('>', '').replace('@', '')
+                if not role_str:
+                    continue
                 try:
                     role_id = int(role_str)
                     role = interaction.guild.get_role(role_id)
                     if role:
                         role_ids.append(role_id)
+                    else:
+                        print(f"Warning: Role ID {role_id} not found in guild")
                 except ValueError:
+                    print(f"Warning: Could not parse role ID from: {role_str}")
                     continue
 
             if not role_ids:
@@ -1429,13 +1435,19 @@ class ShiftManagementCog(commands.Cog):
             # Parse roles
             role_ids = []
             for role_str in roles.split(','):
-                role_str = role_str.strip().replace('<@&', '').replace('>', '')
+                # Strip whitespace and remove mention formatting
+                role_str = role_str.strip().replace('<@&', '').replace('>', '').replace('@', '')
+                if not role_str:
+                    continue
                 try:
                     role_id = int(role_str)
                     role = interaction.guild.get_role(role_id)
                     if role:
                         role_ids.append(role_id)
+                    else:
+                        print(f"Warning: Role ID {role_id} not found in guild")
                 except ValueError:
+                    print(f"Warning: Could not parse role ID from: {role_str}")
                     continue
 
             if not role_ids:
@@ -1522,7 +1534,7 @@ class ShiftManagementCog(commands.Cog):
                     quota_role = interaction.guild.get_role(quota['role_id'])
                     if quota_role:
                         quota_lines.append(
-                            f"{role.mention} • {self.format_duration(timedelta(seconds=quota['quota_seconds']))}"
+                            f"{quota_role.mention} • {self.format_duration(timedelta(seconds=quota['quota_seconds']))}"
                         )
 
                 if quota_lines:
