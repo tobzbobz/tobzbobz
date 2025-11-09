@@ -439,56 +439,7 @@ async def add_callsign_to_database(callsign: str, discord_user_id: int, discord_
                 approved_by_name,
                 json.dumps(history)
             )
-
-        # Add HHStJ prefix if available (only if it doesn't already contain a dash)
-        if hhstj_prefix and "-" not in hhstj_prefix:
-            nickname_parts.append(hhstj_prefix)
-
-        # Add Roblox username
-        if roblox_username:
-            nickname_parts.append(roblox_username)
-
-    # Standard format with pipes
-    new_nickname = " | ".join(nickname_parts)
-
-    # Check length (Discord max is 32 characters)
-    if len(new_nickname) <= 32:
-        return new_nickname
-
-    # Fallback 1: Remove one prefix based on priority
-    if hhstj_priority:
-        # Remove FENZ prefix if too long
-        fallback_parts = [hhstj_prefix] if hhstj_prefix else []
-        if callsign:
-            fallback_parts.append(callsign)
-        if roblox_username:
-            fallback_parts.append(roblox_username)
-    else:
-        # Remove HHStJ prefix if too long (standard behavior)
-        fallback_parts = []
-        if fenz_prefix:
-            fallback_parts.append(f"{fenz_prefix}-{callsign}")
-        elif callsign:
-            fallback_parts.append(callsign)
-        if roblox_username:
-            fallback_parts.append(roblox_username)
-
-    fallback_nickname = " | ".join(fallback_parts)
-    if len(fallback_nickname) <= 32:
-        return fallback_nickname
-
-    # Fallback 2: Just primary callsign
-    if hhstj_priority and hhstj_prefix:
-        return hhstj_prefix
-    elif fenz_prefix:
-        return f"{fenz_prefix}-{callsign}"
-    elif callsign:
-        return callsign
-
-    # Last resort: truncate
-    return new_nickname[:32]
-
-
+            
 class CallsignCog(commands.Cog):
     callsign_group = app_commands.Group(name="callsign", description="Callsign management commands")
 
