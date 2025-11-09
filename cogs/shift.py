@@ -11,6 +11,10 @@ import asyncio
 import math
 import json
 
+CACHE_TTL_SECONDS = 300
+LONG_BREAK_THRESHOLD_SECONDS = 1200
+SHIFT_LIST_ITEMS_PER_PAGE = 4
+
 OWNER_USER_ID = 678475709257089057
 WEEKLY_REPORT_CHANNELS = [1413001074440142948, 1436829440729682014]
 WEEKLY_REPORT_PING_ROLES = [1285474077556998196, 1389113393511923863]
@@ -100,6 +104,16 @@ SHIFT_LOGS_CHANNEL = 1435798856687161467
 PING_ROLES = [1285474077556998196, 1389113393511923863, 1389550689113473024]
 
 
+def validate_time_input(hours: int, minutes: int, seconds: int = 0) -> tuple[bool, str]:
+    """Validate time input values"""
+    if hours < 0 or minutes < 0 or seconds < 0:
+        return False, "Time values cannot be negative"
+    if minutes >= 60 or seconds >= 60:
+        return False, "Minutes and seconds must be less than 60"
+    if hours > 999:
+        return False, "Hours cannot exceed 999"
+    return True, ""
+
 class WeeklyShiftManager:
     """Manages weekly shift resets and leaderboard generation"""
 
@@ -116,7 +130,7 @@ class WeeklyShiftManager:
         elif dt.tzinfo is None:
             dt = NZST.localize(dt)  # <:Accepted:1426930333789585509> CORRECT
         else:
-            dt = dt.astimezone(WeeklyShiftManager.NZST)
+            dt = dt.astimezone(NZST)
 
         # Get to Monday of this week in NZST
         days_since_monday = dt.weekday()
@@ -222,7 +236,16 @@ class WeeklyShiftManager:
             )
 
             if not shifts:
-                print("No shifts to report for weekly reset")
+                return
+
+            guild = self.bot.get_guild(shifts[0]['guild_id']) if 'guild_id' in shifts[0] else None
+            if not guild:
+                for g in self.bot.guilds:
+                    if g.get_member(shifts[0]['discord_user_id']):
+                        guild = g
+                        break
+
+            if not guild:
                 return
 
             # Get all role quotas
@@ -233,6 +256,12 @@ class WeeklyShiftManager:
             for q in quotas:
                 key = (q['role_id'], q['type'])
                 quota_map[key] = q['quota_seconds']
+
+            # 🆕 GET IGNORED ROLES
+            ignored_roles = await conn.fetch(
+                'SELECT role_id, type FROM quota_ignored_roles'
+            )
+            ignored_set = {(r['role_id'], r['type']) for r in ignored_roles}
 
             # Get guild
             guild = self.bot.get_guild(shifts[0]['guild_id']) if 'guild_id' in shifts[0] else None
@@ -259,6 +288,9 @@ class WeeklyShiftManager:
             embeds = []
 
             for type, type_shifts in types.items():
+                user_ids = list(set(s['discord_user_id'] for s in type_shifts))
+                members_dict = {m.id: m for m in guild.members if m.id in user_ids}
+
                 lines = []
 
                 for shift_data in type_shifts:
@@ -268,10 +300,21 @@ class WeeklyShiftManager:
 
                     # Get user's highest quota for this shift type
                     max_quota = 0
+                    user_ignored = False  # 🆕 Track if user should be ignored
+
                     for role in member.roles:
+                        # 🆕 CHECK IF ROLE IS IGNORED
+                        if (role.id, type) in ignored_set:
+                            user_ignored = True
+                            break
+
                         quota = quota_map.get((role.id, type), 0)
                         if quota > max_quota:
                             max_quota = quota
+
+                    # 🆕 SKIP IGNORED USERS
+                    if user_ignored:
+                        continue
 
                     # Skip users without quota requirements
                     if max_quota == 0:
@@ -362,6 +405,9 @@ class ShiftManagementCog(commands.Cog):
         self.SHIFT_LOGS_CHANNEL = SHIFT_LOGS_CHANNEL
         self._cache_cleanup_task = None
         self.weekly_manager = WeeklyShiftManager(self)
+
+        # Set Admin Command usage limit
+        self.admin_rate_limiter = AdminCommandRateLimiter(calls=10, period=60)
         bot.loop.create_task(self.on_cog_load())
 
     async def on_cog_load(self):
@@ -380,7 +426,7 @@ class ShiftManagementCog(commands.Cog):
     @tasks.loop(time=time(hour=0, minute=0, tzinfo=pytz.timezone('Pacific/Auckland')))
     async def weekly_reset_task(self):
         """Check if it's Monday midnight NZST and run weekly reset"""
-        now = datetime.now(WeeklyShiftManager.NZST)
+        now = datetime.now(NZST)
 
         if now.weekday() == 0:  # Monday
             print(f"Running weekly shift reset at {now}")
@@ -797,19 +843,23 @@ class ShiftManagementCog(commands.Cog):
             )
             return dict(shift) if shift else None
 
-    async def get_shift_statistics(self, user_id: int):
+    async def get_shift_statistics(self, user_id: int, guild_id: int = None):
         """Calculate shift statistics for a user (current week only)"""
         current_week = self.weekly_manager.get_current_week_monday()
 
         async with db.pool.acquire() as conn:
-            shifts = await conn.fetch(
-                '''SELECT *
-                   FROM shifts
-                   WHERE discord_user_id = $1
-                     AND end_time IS NOT NULL
-                     AND week_identifier = $2''',  # <:Accepted:1426930333789585509> Correct - uses week_identifier
-                user_id, current_week
-            )
+            query = '''SELECT *
+                       FROM shifts
+                       WHERE discord_user_id = $1
+                         AND end_time IS NOT NULL
+                         AND week_identifier = $2'''
+            params = [user_id, current_week]
+
+            if guild_id:
+                query += ' AND guild_id = $3'
+                params.append(guild_id)
+
+            shifts = await conn.fetch(query, *params)
 
             if not shifts:
                 return {
@@ -1194,12 +1244,35 @@ class ShiftManagementCog(commands.Cog):
             return
 
         try:
-            await self.weekly_manager.generate_weekly_report()
-            await self.weekly_manager.force_end_active_shifts()
-            await self.weekly_manager.archive_and_cleanup_shifts()
+            # Get next wave number ONCE (same as the actual weekly reset)
+            async with db.pool.acquire() as conn:
+                max_wave = await conn.fetchval(
+                    'SELECT MAX(wave_number) FROM shifts WHERE wave_number IS NOT NULL'
+                )
+                next_wave = (max_wave or 0) + 1
+
+            # Show initial status
+            await interaction.followup.send(
+                f"🔄 **Starting Weekly Reset Test**\n"
+                f"Creating Wave {next_wave}...",
+                ephemeral=True
+            )
+
+            # 1️⃣ Archive current week's completed shifts
+            await self.weekly_manager.archive_current_week_to_wave()
+
+            # 2️⃣ Force-end active shifts
+            await self.weekly_manager.force_end_active_shifts(next_wave)
+
+            # 3️⃣ Generate report for the completed wave
+            await self.weekly_manager.generate_weekly_report(next_wave)
 
             await interaction.followup.send(
-                "<:Accepted:1426930333789585509> Weekly reset test completed!",
+                f"<:Accepted:1426930333789585509> **Weekly Reset Test Completed!**\n"
+                f"✅ Wave {next_wave} created\n"
+                f"✅ Active shifts force-ended\n"
+                f"✅ Weekly report generated and sent\n\n"
+                f"Check <#{WEEKLY_REPORT_CHANNELS[0]}> for the leaderboard.",
                 ephemeral=True
             )
         except Exception as e:
@@ -1218,12 +1291,8 @@ class ShiftManagementCog(commands.Cog):
         minutes="Minutes for the quota",
         type="The shift type to set quota for"
     )
-    @app_commands.choices(action=[
-        app_commands.Choice(name="View My Quota", value="view"),
-        app_commands.Choice(name="Set Role Quota", value="set"),
-        app_commands.Choice(name="Remove Role Quota", value="remove"),
-        app_commands.Choice(name="View All Quotas", value="view_all")
-    ],
+    # REMOVE the static @app_commands.choices(action=[...])
+    @app_commands.choices(
         type=[
             app_commands.Choice(name="Shift FENZ", value="Shift FENZ"),
             app_commands.Choice(name="Shift HHStJ", value="Shift HHStJ"),
@@ -1233,7 +1302,7 @@ class ShiftManagementCog(commands.Cog):
     async def shift_quota(
             self,
             interaction: discord.Interaction,
-            action: app_commands.Choice[str],
+            action: str,
             roles: str = None,
             hours: int = 0,
             minutes: int = 0,
@@ -1242,22 +1311,19 @@ class ShiftManagementCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
 
         try:
-            if action.value == "view":
+            if action == "view":
                 # View user's own quota
                 quota_info = await self.get_quota_info(interaction.user, type.value if type else None)
 
                 if not quota_info['has_quota']:
-
                     embed = discord.Embed(
                         title="<:Search:1434957367505719457> Your Quota",
                         color=discord.Color(0x000000)
                     )
-
                     embed.set_author(
                         name=f"{interaction.guild.name}",
                         icon_url=interaction.guild.icon.url if interaction.guild.icon else None
                     )
-
                     await interaction.followup.send(embed=embed, ephemeral=True)
                     return
 
@@ -1265,7 +1331,6 @@ class ShiftManagementCog(commands.Cog):
                     title="<:Search:1434957367505719457> Your Quota",
                     color=discord.Color(0x000000)
                 )
-
                 embed.set_author(
                     name="Shift Management",
                     icon_url=interaction.user.display_avatar.url
@@ -1292,7 +1357,7 @@ class ShiftManagementCog(commands.Cog):
 
                 await interaction.followup.send(embed=embed, ephemeral=True)
 
-            elif action.value == "set":
+            elif action == "set":
                 # Check admin permission
                 if not any(role_check.id in QUOTA_ADMIN_ROLES for role_check in interaction.user.roles):
                     await interaction.followup.send(
@@ -1406,7 +1471,7 @@ class ShiftManagementCog(commands.Cog):
                         ephemeral=True
                     )
 
-            elif action.value == "remove":
+            elif action == "remove":
                 # Check admin permission
                 if not any(role_check.id in QUOTA_ADMIN_ROLES for role_check in interaction.user.roles):
                     await interaction.followup.send(
@@ -1478,14 +1543,19 @@ class ShiftManagementCog(commands.Cog):
                         ephemeral=True
                     )
 
-            elif action.value == "view_all":
-                # Check admin permission
-                if not any(role_check.id in QUOTA_ADMIN_ROLES for role_check in interaction.user.roles):
+            elif action == "view_all":
+                # View all quotas - ANYONE with shift access can use this
+                # Check if user has any shift role
+                user_types = await self.get_user_types(interaction.user)
+                if not user_types:
                     await interaction.followup.send(
                         "<:Denied:1426930694633816248> You don't have permission to view quotas.",
                         ephemeral=True
                     )
                     return
+
+                # Check if user is admin (to show ignored roles)
+                is_admin = any(role_check.id in QUOTA_ADMIN_ROLES for role_check in interaction.user.roles)
 
                 # Fetch all quotas
                 async with db.pool.acquire() as conn:
@@ -1499,12 +1569,28 @@ class ShiftManagementCog(commands.Cog):
                             'SELECT role_id, quota_seconds, type FROM shift_quotas ORDER BY type, quota_seconds DESC'
                         )
 
+                    # Fetch ignored roles if admin
+                    ignored_roles_data = []
+                    if is_admin:
+                        if type:
+                            ignored_roles_data = await conn.fetch(
+                                'SELECT role_id, type FROM quota_ignored_roles WHERE type = $1',
+                                type.value
+                            )
+                        else:
+                            ignored_roles_data = await conn.fetch(
+                                'SELECT role_id, type FROM quota_ignored_roles'
+                            )
+
                 if not quotas:
                     await interaction.followup.send(
                         "No shift quotas have been set.",
                         ephemeral=True
                     )
                     return
+
+                # Create ignored roles set
+                ignored_set = {(r['role_id'], r['type']) for r in ignored_roles_data}
 
                 # Create embed
                 embed = discord.Embed(
@@ -1523,13 +1609,25 @@ class ShiftManagementCog(commands.Cog):
                 # Add fields for each shift type
                 for type_name, type_quotas in quotas_by_type.items():
                     quota_lines = []
+                    ignored_lines = []
+
                     for quota in type_quotas:
                         quota_role = interaction.guild.get_role(quota['role_id'])
                         if quota_role:
-                            quota_lines.append(
-                                f"{quota_role.mention} • {self.format_duration(timedelta(seconds=quota['quota_seconds']))}"
-                            )
+                            is_ignored = (quota['role_id'], type_name) in ignored_set
 
+                            if is_ignored:
+                                # Only show ignored roles to admins
+                                if is_admin:
+                                    ignored_lines.append(
+                                        f"~~{quota_role.mention}~~ • {self.format_duration(timedelta(seconds=quota['quota_seconds']))} **(Hidden)**"
+                                    )
+                            else:
+                                quota_lines.append(
+                                    f"{quota_role.mention} • {self.format_duration(timedelta(seconds=quota['quota_seconds']))}"
+                                )
+
+                    # Add visible quotas
                     if quota_lines:
                         embed.add_field(
                             name=f"**{type_name}**",
@@ -1537,23 +1635,178 @@ class ShiftManagementCog(commands.Cog):
                             inline=False
                         )
 
+                    # Add ignored quotas (only for admins)
+                    if ignored_lines and is_admin:
+                        embed.add_field(
+                            name=f"**{type_name} - Hidden from Reports**",
+                            value="\n".join(ignored_lines),
+                            inline=False
+                        )
+
                 if not embed.fields:
                     embed.description = "No valid roles found."
+
+                if is_admin:
+                    embed.set_footer(
+                        text="💡 Use 'Toggle Role Visibility in Reports' to show/hide roles from weekly leaderboards")
+
+                await interaction.followup.send(embed=embed, ephemeral=True)
+
+            elif action == "toggle_visibility":
+                # Check admin permission
+                if not any(role_check.id in QUOTA_ADMIN_ROLES for role_check in interaction.user.roles):
+                    await interaction.followup.send(
+                        "<:Denied:1426930694633816248> You don't have permission to toggle role visibility.",
+                        ephemeral=True
+                    )
+                    return
+
+                if not roles:
+                    await interaction.followup.send(
+                        "<:Denied:1426930694633816248> Please specify role(s) to toggle visibility for.",
+                        ephemeral=True
+                    )
+                    return
+
+                if not type:
+                    await interaction.followup.send(
+                        "<:Denied:1426930694633816248> Please specify a shift type.",
+                        ephemeral=True
+                    )
+                    return
+
+                # Parse roles
+                role_ids = []
+                for role_str in roles.split(','):
+                    role_str = role_str.strip().replace('<@&', '').replace('>', '').replace('@', '')
+                    if not role_str:
+                        continue
+                    try:
+                        role_id = int(role_str)
+                        role = interaction.guild.get_role(role_id)
+                        if role:
+                            role_ids.append(role_id)
+                    except ValueError:
+                        continue
+
+                if not role_ids:
+                    await interaction.followup.send(
+                        "<:Denied:1426930694633816248> No valid roles provided.",
+                        ephemeral=True
+                    )
+                    return
+
+                # Toggle visibility for each role
+                async with db.pool.acquire() as conn:
+                    toggled_on = []  # Roles made visible (removed from ignored)
+                    toggled_off = []  # Roles made hidden (added to ignored)
+
+                    for role_id in role_ids:
+                        # Check if role has a quota
+                        has_quota = await conn.fetchval(
+                            'SELECT EXISTS(SELECT 1 FROM shift_quotas WHERE role_id = $1 AND type = $2)',
+                            role_id, type.value
+                        )
+
+                        if not has_quota:
+                            continue
+
+                        # Check if currently ignored
+                        is_ignored = await conn.fetchval(
+                            'SELECT EXISTS(SELECT 1 FROM quota_ignored_roles WHERE role_id = $1 AND type = $2)',
+                            role_id, type.value
+                        )
+
+                        role = interaction.guild.get_role(role_id)
+                        if not role:
+                            continue
+
+                        if is_ignored:
+                            # Currently hidden - make visible (remove from ignored)
+                            await conn.execute(
+                                'DELETE FROM quota_ignored_roles WHERE role_id = $1 AND type = $2',
+                                role_id, type.value
+                            )
+                            toggled_on.append(role.mention)
+                        else:
+                            # Currently visible - make hidden (add to ignored)
+                            await conn.execute(
+                                '''INSERT INTO quota_ignored_roles (role_id, type, added_by_id, added_by_name)
+                                   VALUES ($1, $2, $3, $4)''',
+                                role_id, type.value, interaction.user.id, interaction.user.display_name
+                            )
+                            toggled_off.append(role.mention)
+
+                # Build response message
+                response_parts = []
+
+                if toggled_on:
+                    response_parts.append(
+                        f"**✅ Now Visible in {type.value} Reports:**\n" +
+                        "\n".join(f"• {role}" for role in toggled_on)
+                    )
+
+                if toggled_off:
+                    response_parts.append(
+                        f"**🚫 Now Hidden from {type.value} Reports:**\n" +
+                        "\n".join(f"• {role}" for role in toggled_off)
+                    )
+
+                if not response_parts:
+                    await interaction.followup.send(
+                        "<:Denied:1426930694633816248> No roles with quotas found to toggle.",
+                        ephemeral=True
+                    )
+                    return
+
+                embed = discord.Embed(
+                    title="Role Visibility Toggled",
+                    description="\n\n".join(response_parts),
+                    color=discord.Color(0x5865f2)
+                )
+                embed.set_footer(text=f"Hidden roles will not appear in weekly leaderboards for {type.value}")
 
                 await interaction.followup.send(embed=embed, ephemeral=True)
 
         except Exception as e:
-            print(f"Error in shift_quota command: {e}")
+            await interaction.followup.send(
+                f"<:Denied:1426930694633816248> Error: {str(e)}",
+                ephemeral=True
+            )
             import traceback
             traceback.print_exc()
 
-            try:
-                await interaction.followup.send(
-                    f"<:Denied:1426930694633816248> An error occurred: {str(e)}",
-                    ephemeral=True
-                )
-            except:
-                print("Could not send error message to user")
+    @shift_quota.autocomplete('action')
+    async def quota_action_autocomplete(
+            self,
+            interaction: discord.Interaction,
+            current: str
+    ) -> list[app_commands.Choice[str]]:
+
+        choices = [
+            app_commands.Choice(name="View My Quota", value="view"),
+            app_commands.Choice(name="View All Quotas", value="view_all")
+        ]
+
+        # Check if user has quota admin permissions
+        user_role_ids = {role.id for role in interaction.user.roles}
+        is_quota_admin = bool(user_role_ids & set(QUOTA_ADMIN_ROLES))
+
+        if is_quota_admin:
+            choices.extend([
+                app_commands.Choice(name="Set Role Quota", value="set"),
+                app_commands.Choice(name="Remove Role Quota", value="remove"),
+                app_commands.Choice(name="Toggle Role Visibility in Reports", value="toggle_visibility")
+            ])
+
+        # Filter by current input
+        if current:
+            return [
+                choice for choice in choices
+                if current.lower() in choice.name.lower()
+            ]
+
+        return choices
 
     @shift_group.command(name="leaderboard", description="View shift leaderboard")
     @app_commands.describe(
@@ -1953,7 +2206,7 @@ class ShiftManagementCog(commands.Cog):
             traceback.print_exc()
 
     # Admin command
-    @shift_group.command(name="admin", description="[ADMIN] Manage shifts for users")
+    @shift_group.command(name="admin", description="Manage shifts for users")
     @app_commands.describe(
         user="The user to manage shifts for",
         type="The shift type (REQUIRED)"
@@ -1969,6 +2222,15 @@ class ShiftManagementCog(commands.Cog):
             user: discord.Member,
             type: app_commands.Choice[str]
     ):
+        """Admin shift management command"""
+        # Rate limit check FIRST
+        if not self.admin_rate_limiter.check(interaction.user.id):
+            await interaction.response.send_message(
+                "⏱️ Rate limit exceeded. Please wait before using this command again.",
+                ephemeral=True
+            )
+            return
+
         """Admin shift management command"""
         await interaction.response.defer()
 
@@ -2711,6 +2973,7 @@ class ShiftActiveView(discord.ui.View):
             if self.shift.get('pause_start'):
                 pause_duration += (datetime.utcnow() - self.shift['pause_start']).total_seconds()
 
+
             # Close any open break sessions
             async with db.pool.acquire() as conn:
                 current_sessions = await conn.fetchval(
@@ -2891,6 +3154,7 @@ class ShiftBreakView(discord.ui.View):
             ]
 
             # Only add break info if there was actually break time
+            total_break = timedelta(seconds=pause_duration)
             if total_break.total_seconds() > 0:
                 value_parts.append(f"**Total Break Time:** {self.cog.format_duration(total_break)}")
                 value_parts.append(f"**Last Break Time:** {self.cog.format_duration(last_break)}")
@@ -2902,12 +3166,6 @@ class ShiftBreakView(discord.ui.View):
             )
 
             embed.set_footer(text=f"Shift Type: {updated_shift['type']}")
-
-            # Create active view
-            view = ShiftActiveView(self.cog, self.user, updated_shift)
-
-            # Edit the message
-            await interaction.edit_original_response(embed=embed, view=view)
 
             # Create active view
             view = ShiftActiveView(self.cog, self.user, updated_shift)
@@ -3002,6 +3260,7 @@ class ShiftBreakView(discord.ui.View):
                 ]
 
             # Only add break info if there was actually break time
+            total_break = timedelta(seconds=pause_duration)
             if total_break.total_seconds() > 0:
                 value_parts.append(f"**Break Time:** {self.cog.format_duration(total_break)}")
 
@@ -3014,7 +3273,6 @@ class ShiftBreakView(discord.ui.View):
             embed.set_footer(text=f"Shift Type: {self.shift['type']}")
 
             await self.cog.end_shift_and_show_summary(interaction, self.shift)
-
 
         except Exception as e:
             await interaction.followup.send(
@@ -3630,7 +3888,6 @@ class AdminActionsSelect(discord.ui.Select):
             self.target_user,
             self.shift_type,
             current_wave_count,
-            # previous_wave_count,  # REMOVE THIS
             all_time_count,
             max_wave
         )
@@ -3957,26 +4214,6 @@ class ModifyShiftActionsView(discord.ui.View):
         modal = ResetTimeConfirmModal(self.cog, self.admin, self.target_user, self.shift)
         await interaction.response.send_modal(modal)
 
-        try:
-            async with db.pool.acquire() as conn:
-                await conn.execute(
-                    '''UPDATE shifts
-                       SET start_time     = end_time,
-                           pause_duration = 0
-                       WHERE id = $1''',
-                    self.shift['id']
-                )
-
-            await interaction.followup.send(
-                f"<:Accepted:1426930333789585509> Reset shift time for {self.target_user.mention} (Shift ID: {self.shift['id']})",
-                ephemeral=True
-            )
-        except Exception as e:
-            await interaction.followup.send(
-                f"<:Denied:1426930694633816248> Error: {str(e)}",
-                ephemeral=True
-            )
-
     async def populate_shift_dropdown(self):
         """Add a dropdown with recent shifts"""
         # Fetch recent shifts
@@ -4099,6 +4336,15 @@ class TimeModifyModal(discord.ui.Modal):
             hours = int(self.children[0].value or 0)
             minutes = int(self.children[1].value or 0)
             seconds = int(self.children[2].value or 0) if len(self.children) > 2 else 0
+
+            # NOW validate
+            valid, error_msg = validate_time_input(hours, minutes, seconds)
+            if not valid:
+                await interaction.followup.send(
+                    f"<:Denied:1426930694633816248> {error_msg}",
+                    ephemeral=True
+                )
+                return
 
             time_delta = timedelta(hours=hours, minutes=minutes, seconds=seconds)
 
@@ -4445,7 +4691,7 @@ class ClearShiftsScopeView(discord.ui.View):
     """View for selecting which scope of shifts to clear"""
 
     def __init__(self, cog: ShiftManagementCog, admin: discord.Member, target_user: discord.Member,
-                 type: str, current_count: int, previous_count: int, all_count: int, max_wave: int):
+                 type: str, current_count: int, all_count: int, max_wave: int):
         super().__init__(timeout=60)
         self.cog = cog
         self.admin = admin
@@ -5055,6 +5301,30 @@ class ResetConfirmView(discord.ui.View):
             item.disabled = True
         await interaction.message.edit(view=self)
         self.stop()
+
+
+class AdminCommandRateLimiter:
+    def __init__(self, calls: int, period: int):
+        self.calls = calls
+        self.period = period
+        self.cache = {}
+
+    def check(self, user_id: int) -> bool:
+        now = datetime.utcnow()
+        if user_id not in self.cache:
+            self.cache[user_id] = []
+
+        # Remove old entries
+        self.cache[user_id] = [
+            t for t in self.cache[user_id]
+            if (now - t).total_seconds() < self.period
+        ]
+
+        if len(self.cache[user_id]) >= self.calls:
+            return False
+
+        self.cache[user_id].append(now)
+        return True
 
 async def setup(bot):
     await bot.add_cog(ShiftManagementCog(bot))

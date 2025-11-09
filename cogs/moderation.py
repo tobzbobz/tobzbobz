@@ -707,20 +707,11 @@ class ModerateCog(commands.Cog):
         repetitions="Number of times to repeat (for swap, disperse_trail modes)",
         reason="Reason for the action"
     )
-    @app_commands.choices(mode=[
-        app_commands.Choice(name="Move Specific Users", value="specific"),
-        app_commands.Choice(name="Move All from Channel(s)", value="c_from"),
-        app_commands.Choice(name="Disperse Users Randomly", value="disperse"),
-        app_commands.Choice(name="Disperse Trail (Multiple Random Dispersions)", value="disperse_trail"),
-        app_commands.Choice(name="Move Trail (Sequential Channel Tour)", value="move_trail"),
-        app_commands.Choice(name="Swap Channels", value="swap"),
-        app_commands.Choice(name="Empty Channel", value="empty"),
-    ])
     @has_role_level(SUPERVISORS + LEADERS + LOCKS + [YOUR_USER_ID])
     async def move(
             self,
             interaction: discord.Interaction,
-            mode: app_commands.Choice[str],
+            mode: str,
             to: Optional[str] = None,
             users: Optional[str] = None,
             c_from: Optional[str] = None,
@@ -739,7 +730,7 @@ class ModerateCog(commands.Cog):
         is_owner_user = interaction.user.id == YOUR_USER_ID
 
         # Permission validation based on mode
-        if mode.value == "specific":
+        if mode == "specific":
             # Supervisors+ can use, but only to single channel
             if not (is_supervisor or is_leader or is_locks or is_owner_user):
                 await interaction.followup.send(
@@ -758,7 +749,7 @@ class ModerateCog(commands.Cog):
                     )
                     return
 
-        elif mode.value == "c_from":
+        elif mode == "c_from":
             # Supervisors: single source to single dest
             # Leaders: multi source/dest allowed
             if not (is_supervisor or is_leader or is_locks or is_owner_user):
@@ -780,7 +771,7 @@ class ModerateCog(commands.Cog):
                     )
                     return
 
-        elif mode.value == "disperse":
+        elif mode == "disperse":
             # Single channel disperse: Leaders+
             # Multi channel disperse: Locks+
             source_channels = await self.parse_channels_spaces(interaction, c_from) if c_from else \
@@ -803,7 +794,7 @@ class ModerateCog(commands.Cog):
                     )
                     return
 
-        elif mode.value == "disperse_trail":
+        elif mode == "disperse_trail":
             # Owner only
             if not is_owner_user:
                 await interaction.followup.send(
@@ -812,7 +803,7 @@ class ModerateCog(commands.Cog):
                 )
                 return
 
-        elif mode.value == "move_trail":
+        elif mode == "move_trail":
             # Owner only
             if not is_owner_user:
                 await interaction.followup.send(
@@ -821,7 +812,7 @@ class ModerateCog(commands.Cog):
                 )
                 return
 
-        elif mode.value == "swap":
+        elif mode == "swap":
             # Supervisors can swap, but repetitions restricted to owner
             if not (is_supervisor or is_leader or is_locks or is_owner_user):
                 await interaction.followup.send(
@@ -838,7 +829,7 @@ class ModerateCog(commands.Cog):
                 )
                 return
 
-        elif mode.value == "empty":
+        elif mode == "empty":
             # Empty single channel: Leaders+
             # Empty all channels: Locks+
             source_channels = await self.parse_channels_spaces(interaction, c_from) if c_from else []
@@ -868,7 +859,7 @@ class ModerateCog(commands.Cog):
                     return
 
         # Execute based on mode with different validation requirements
-        if mode.value == "specific":
+        if mode == "specific":
             if not users:
                 await interaction.followup.send(
                     "<:Denied:1426930694633816248> You must specify the users to move!",
@@ -892,7 +883,7 @@ class ModerateCog(commands.Cog):
 
             await self.move_specific_users(interaction, users, dest_channels, reason)
 
-        elif mode.value == "c_from":
+        elif mode == "c_from":
             # If from is empty, use all voice channels with users
             if not c_from:
                 # Get all voice channels with members
@@ -930,7 +921,7 @@ class ModerateCog(commands.Cog):
 
             await self.move_from_enhanced(interaction, source_channels, dest_channels, reason)
 
-        elif mode.value == "disperse":
+        elif mode == "disperse":
             # If from is empty, use all voice channels with users
             if not c_from:
                 source_channels = [c for c in interaction.guild.voice_channels if len(c.members) > 0]
@@ -969,7 +960,7 @@ class ModerateCog(commands.Cog):
 
             await self.move_disperse_enhanced(interaction, source_channels, dest_channels, reason)
 
-        elif mode.value == "disperse_trail":
+        elif mode == "disperse_trail":
             # If from is empty, use all voice channels with users
             if not c_from:
                 source_channels = [c for c in interaction.guild.voice_channels if len(c.members) > 0]
@@ -1011,7 +1002,7 @@ class ModerateCog(commands.Cog):
 
             await self.move_disperse_trail(interaction, source_channels, dest_channels, reps, reason)
 
-        elif mode.value == "move_trail":
+        elif mode == "move_trail":
             if not to:
                 await interaction.followup.send(
                     "<:Denied:1426930694633816248> You must specify the destination channel(s)!",
@@ -1067,7 +1058,7 @@ class ModerateCog(commands.Cog):
                 )
                 return
 
-        elif mode.value == "swap":
+        elif mode == "swap":
             if not c_from or not to:
                 await interaction.followup.send(
                     "<:Denied:1426930694633816248> You must specify both the source and destination channel(s)!",
@@ -1090,7 +1081,7 @@ class ModerateCog(commands.Cog):
 
             await self.move_swap_channels_repeated(interaction, source_channels, dest_channels, reps, reason)
 
-        elif mode.value == "empty":
+        elif mode == "empty":
             if not c_from:
                 await interaction.followup.send(
                     "<:Denied:1426930694633816248> You must specify channel(s) to empty.",
@@ -1107,6 +1098,61 @@ class ModerateCog(commands.Cog):
                 return
 
             await self.move_empty_channels(interaction, source_channels, reason)
+
+    @move.autocomplete('mode')
+    async def move_mode_autocomplete(
+            self,
+            interaction: discord.Interaction,
+            current: str
+    ) -> list[app_commands.Choice[str]]:
+        """Provide mode choices based on user permissions"""
+
+        user_role_ids = {role.id for role in interaction.user.roles}
+        is_supervisor = bool(user_role_ids & set(SUPERVISORS))
+        is_leader = bool(user_role_ids & set(LEADERS))
+        is_locks = bool(user_role_ids & set(LOCKS))
+        is_owner = interaction.user.id == YOUR_USER_ID
+
+        # Start with empty choices
+        choices = []
+
+        # Specific Users - Supervisors+
+        if is_supervisor or is_leader or is_locks or is_owner:
+            choices.append(app_commands.Choice(name="Move Specific Users", value="specific"))
+
+        # Move from Channel - Supervisors+
+        if is_supervisor or is_leader or is_locks or is_owner:
+            choices.append(app_commands.Choice(name="Move All from Channel(s)", value="c_from"))
+
+        # Disperse - Leaders+ (single), Locks+ (multi)
+        if is_leader or is_locks or is_owner:
+            choices.append(app_commands.Choice(name="Disperse Users Randomly", value="disperse"))
+
+        # Disperse Trail - Owner only
+        if is_owner:
+            choices.append(
+                app_commands.Choice(name="Disperse Trail (Multiple Random Dispersions)", value="disperse_trail"))
+
+        # Move Trail - Owner only
+        if is_owner:
+            choices.append(app_commands.Choice(name="Move Trail (Sequential Channel Tour)", value="move_trail"))
+
+        # Swap - Supervisors+ (single swap), Owner (with repetitions)
+        if is_supervisor or is_leader or is_locks or is_owner:
+            choices.append(app_commands.Choice(name="Swap Channels", value="swap"))
+
+        # Empty - Leaders+
+        if is_leader or is_locks or is_owner:
+            choices.append(app_commands.Choice(name="Empty Channel", value="empty"))
+
+        # Filter by current input if user is typing
+        if current:
+            return [
+                choice for choice in choices
+                if current.lower() in choice.name.lower()
+            ]
+
+        return choices
 
     async def move_swap_channels(self, interaction: discord.Interaction,
                                  source_channels: List[discord.VoiceChannel],
