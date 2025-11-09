@@ -129,6 +129,10 @@ class ERLC(commands.GroupCog, name="erlc"):
         """Format timestamp as Discord short time with seconds."""
         return f"<t:{timestamp}:T>"
 
+    def is_roblox_uid(self, value: str) -> bool:
+        """Check if a string is a Roblox UID (numeric) or username."""
+        return value.isdigit()
+
     async def get_player_id_from_name(self, player_name: str) -> Optional[str]:
         """Get Roblox user ID from username using Roblox API."""
         try:
@@ -151,7 +155,7 @@ class ERLC(commands.GroupCog, name="erlc"):
         """Check if the user is authorized to use ERLC commands."""
         if interaction.user.id != self.OWNER_ID:
             await interaction.response.send_message(
-                "❌ You are not authorized to use ERLC commands.",
+                "<:Denied:1426930694633816248> You are not authorized to use ERLC commands.",
                 ephemeral=True
             )
             return False
@@ -162,10 +166,10 @@ class ERLC(commands.GroupCog, name="erlc"):
         self.session = aiohttp.ClientSession()
 
         if not self.db or not self.db.pool:
-            logger.error("❌ Database not connected when ERLC cog loaded!")
-            print("❌ ERLC: Database not available!")
+            logger.error("<:Denied:1426930694633816248> Database not connected when ERLC cog loaded!")
+            print("<:Denied:1426930694633816248> ERLC: Database not available!")
         else:
-            logger.info("✅ ERLC: Database connection available")
+            logger.info("<:Accepted:1426930333789585509> ERLC: Database connection available")
 
         await self.load_all_configs()
         self.log_monitor.start()
@@ -228,12 +232,12 @@ class ERLC(commands.GroupCog, name="erlc"):
         try:
             success = await self.db.set_setting(guild_id, 'erlc_config', config)
             if success:
-                logger.info(f"✅ Saved ERLC config to database for guild {guild_id}")
+                logger.info(f"<:Accepted:1426930333789585509> Saved ERLC config to database for guild {guild_id}")
             else:
-                logger.error(f"❌ Failed to save ERLC config to database for guild {guild_id}")
+                logger.error(f"<:Denied:1426930694633816248> Failed to save ERLC config to database for guild {guild_id}")
             return success
         except Exception as e:
-            logger.error(f"❌ Error saving ERLC config: {e}")
+            logger.error(f"<:Denied:1426930694633816248> Error saving ERLC config: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -248,6 +252,43 @@ class ERLC(commands.GroupCog, name="erlc"):
         if config and log_type in config['log_monitoring']:
             config['log_monitoring'][log_type] = enabled
             await self.db.set_setting(guild_id, 'erlc_config', config)
+
+    async def format_player_info(self, player_identifier: str) -> tuple[str, Optional[str]]:
+        """
+        Format player info from either username or UID.
+        Returns: (display_name, profile_link)
+        """
+        if self.is_roblox_uid(player_identifier):
+            # It's already a UID, use it directly
+            player_id = player_identifier
+            # Optionally fetch username from UID
+            try:
+                if not self.session:
+                    self.session = aiohttp.ClientSession()
+
+                async with self.session.get(
+                        f'https://users.roblox.com/v1/users/{player_id}'
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        player_name = data.get('name', player_identifier)
+                    else:
+                        player_name = f"User_{player_identifier}"
+            except Exception as e:
+                logger.error(f"Failed to get username for UID {player_identifier}: {e}")
+                player_name = f"User_{player_identifier}"
+        else:
+            # It's a username, fetch the UID
+            player_name = player_identifier
+            player_id = await self.get_player_id_from_name(player_identifier)
+
+        # Create profile link
+        if player_id:
+            profile_link = f"[{player_name}](https://www.roblox.com/users/{player_id}/profile)"
+        else:
+            profile_link = player_name
+
+        return player_name, profile_link
 
     async def make_request(self, endpoint: str, server_key: str, method: str = "GET", json_data: dict = None):
         """Make a request to the ER:LC API with proper rate limit handling."""
@@ -340,7 +381,7 @@ class ERLC(commands.GroupCog, name="erlc"):
 
         if 'error' in data:
             embed.color = discord.Color.red()
-            embed.description = f"❌ {data['error']}"
+            embed.description = f"<:Denied:1426930694633816248> {data['error']}"
         else:
             if isinstance(data, dict):
                 for key, value in data.items():
@@ -451,15 +492,14 @@ class ERLC(commands.GroupCog, name="erlc"):
         for log in logs[-10:]:
             log_id = f"{log.get('Player', '')}_{log.get('Timestamp', '')}"
             if log_id not in last_seen:
-                player_name = log.get('Player', 'Unknown')
-                player_id = await self.get_player_id_from_name(player_name)
-                player_link = self.format_player_link(player_name, player_id)
+                player_identifier = log.get('Player', 'Unknown')
+                player_name, player_link = await self.format_player_info(player_identifier)
                 timestamp = self.format_timestamp(log.get('Timestamp', 0))
                 action = "joined" if log.get('Join') else "left"
 
                 embed = discord.Embed(
-                    title="🚪 Player Join/Leave",
-                    description=f"Player {player_link} {action} the server at {timestamp}",
+                    title="Player Join/Leave",
+                    description=f"{player_link} {action} the server at {timestamp}",
                     color=discord.Color.green() if log.get('Join') else discord.Color.orange(),
                     timestamp=datetime.fromtimestamp(log.get('Timestamp', 0), tz=timezone.utc)
                 )
@@ -478,14 +518,11 @@ class ERLC(commands.GroupCog, name="erlc"):
         for log in logs[-10:]:
             log_id = f"{log.get('Killer', '')}_{log.get('Killed', '')}_{log.get('Timestamp', '')}"
             if log_id not in last_seen:
-                killer_name = log.get('Killer', 'Unknown')
-                killed_name = log.get('Killed', 'Unknown')
+                killer_identifier = log.get('Killer', 'Unknown')
+                killed_identifier = log.get('Killed', 'Unknown')
 
-                killer_id = await self.get_player_id_from_name(killer_name)
-                killed_id = await self.get_player_id_from_name(killed_name)
-
-                killer_link = self.format_player_link(killer_name, killer_id)
-                killed_link = self.format_player_link(killed_name, killed_id)
+                killer_name, killer_link = await self.format_player_info(killer_identifier)
+                killed_name, killed_link = await self.format_player_info(killed_identifier)
                 timestamp = self.format_timestamp(log.get('Timestamp', 0))
 
                 description = f"{killer_link} killed {killed_link} at {timestamp}"
@@ -493,7 +530,7 @@ class ERLC(commands.GroupCog, name="erlc"):
                     description += f"\n**Weapon:** {log.get('Weapon')}"
 
                 embed = discord.Embed(
-                    title="💀 Kill Log",
+                    title="Kill",
                     description=description,
                     color=discord.Color.red(),
                     timestamp=datetime.fromtimestamp(log.get('Timestamp', 0), tz=timezone.utc)
@@ -513,16 +550,15 @@ class ERLC(commands.GroupCog, name="erlc"):
         for log in logs[-10:]:
             log_id = f"{log.get('Player', '')}_{log.get('Command', '')}_{log.get('Timestamp', '')}"
             if log_id not in last_seen:
-                player_name = log.get('Player', 'Unknown')
-                player_id = await self.get_player_id_from_name(player_name)
-                player_link = self.format_player_link(player_name, player_id)
+                player_identifier = log.get('Player', 'Unknown')
+                player_name, player_link = await self.format_player_info(player_identifier)
                 command = log.get('Command', 'Unknown')
                 timestamp = self.format_timestamp(log.get('Timestamp', 0))
 
                 color = self.get_command_color(command)
 
                 embed = discord.Embed(
-                    title="⚙️ Command Executed",
+                    title="Command Executed",
                     description=f"{player_link} executed `{command}` at {timestamp}",
                     color=color,
                     timestamp=datetime.fromtimestamp(log.get('Timestamp', 0), tz=timezone.utc)
@@ -542,22 +578,20 @@ class ERLC(commands.GroupCog, name="erlc"):
         for log in logs[-10:]:
             log_id = f"{log.get('Caller', '')}_{log.get('Timestamp', '')}"
             if log_id not in last_seen:
-                caller_name = log.get('Caller', 'Unknown')
-                caller_id = await self.get_player_id_from_name(caller_name)
-                caller_link = self.format_player_link(caller_name, caller_id)
+                caller_identifier = log.get('Caller', 'Unknown')
+                caller_name, caller_link = await self.format_player_info(caller_identifier)
                 timestamp = self.format_timestamp(log.get('Timestamp', 0))
 
                 if log.get('Moderator'):
-                    mod_name = log.get('Moderator')
-                    mod_id = await self.get_player_id_from_name(mod_name)
-                    mod_link = self.format_player_link(mod_name, mod_id)
+                    mod_identifier = log.get('Moderator')
+                    mod_name, mod_link = await self.format_player_info(mod_identifier)
                     description = f"{mod_link} responded to {caller_link} at {timestamp}"
                     color = discord.Color.green()
-                    title = "📞 Moderator Call - Responded"
+                    title = "Moderator Call | Responded <:Accepted:1426930333789585509>"
                 else:
                     description = f"{caller_link} called for a moderator at {timestamp}\n⏳ Waiting for response"
                     color = discord.Color.gold()
-                    title = "📞 Moderator Call - Pending"
+                    title = "Moderator Call | Pending <a:Load:1430912797469970444>"
 
                 embed = discord.Embed(
                     title=title,
@@ -572,7 +606,6 @@ class ERLC(commands.GroupCog, name="erlc"):
 
         self.last_logs[key] = last_seen
 
-    # Configuration Commands
     @app_commands.command(name="setup", description="Setup the ER:LC API configuration")
     @app_commands.describe(
         server_key="Your ER:LC server API key",
@@ -611,13 +644,13 @@ class ERLC(commands.GroupCog, name="erlc"):
 
         if not success:
             await interaction.followup.send(
-                "❌ Failed to save configuration to database. Please check bot logs.",
+                "<:Denied:1426930694633816248> Failed to save configuration to database. Please check bot logs.",
                 ephemeral=True
             )
             return
 
         embed = discord.Embed(
-            title="✅ Configuration Saved",
+            title="<:Accepted:1426930333789585509> Configuration Saved",
             description=f"ER:LC API has been configured for this server and saved to database.",
             color=discord.Color.green()
         )
@@ -651,7 +684,7 @@ class ERLC(commands.GroupCog, name="erlc"):
         config = self.get_config(interaction.guild_id)
         if not config:
             await interaction.response.send_message(
-                "❌ Please setup the API first using `/erlc setup`",
+                "<:Denied:1426930694633816248> Please setup the API first using `/erlc setup`",
                 ephemeral=True
             )
             return
@@ -660,7 +693,7 @@ class ERLC(commands.GroupCog, name="erlc"):
         await self.set_log_monitoring(interaction.guild_id, log_type, enabled)
 
         embed = discord.Embed(
-            title="✅ Log Monitoring Updated",
+            title="<:Accepted:1426930333789585509> Log Monitoring Updated",
             description=f"{log_type.title()} monitoring has been **{'enabled' if enabled else 'disabled'}**",
             color=discord.Color.green() if enabled else discord.Color.red()
         )
@@ -681,7 +714,7 @@ class ERLC(commands.GroupCog, name="erlc"):
         """Change the log monitoring interval."""
         if seconds < 10:
             await interaction.response.send_message(
-                "❌ Interval must be at least 10 seconds to respect API rate limits.",
+                "<:Denied:1426930694633816248> Interval must be at least 10 seconds to respect API rate limits.",
                 ephemeral=True
             )
             return
@@ -689,12 +722,12 @@ class ERLC(commands.GroupCog, name="erlc"):
         self.change_log_interval(seconds)
 
         embed = discord.Embed(
-            title="✅ Interval Updated",
+            title="<:Accepted:1426930333789585509> Interval Updated",
             description=f"Log monitoring will now check every **{seconds} seconds**",
             color=discord.Color.green()
         )
         embed.add_field(
-            name="⚠️ Note",
+            name="Note",
             value="Lower intervals may hit rate limits if monitoring multiple log types.",
             inline=False
         )
@@ -707,13 +740,13 @@ class ERLC(commands.GroupCog, name="erlc"):
         """Fetch and display server status."""
         config = self.get_config(interaction.guild_id)
         if not config:
-            await interaction.response.send_message("❌ Please setup the API first using `/erlc setup`", ephemeral=True)
+            await interaction.response.send_message("<:Denied:1426930694633816248> Please setup the API first using `/erlc setup`", ephemeral=True)
             return
 
         await interaction.response.defer()
 
         data = await self.make_request('/v1/server', config['server_key'])
-        embed = self.create_embed("🎮 Server Status", data)
+        embed = self.create_embed("Server Status", data)
 
         await interaction.followup.send(embed=embed)
         await self.send_to_channel(interaction.guild_id, embed)
@@ -736,7 +769,7 @@ class ERLC(commands.GroupCog, name="erlc"):
         """Fetch and display current players with optional filtering."""
         config = self.get_config(interaction.guild_id)
         if not config:
-            await interaction.response.send_message("❌ Please setup the API first using `/erlc setup`", ephemeral=True)
+            await interaction.response.send_message("<:Denied:1426930694633816248> Please setup the API first using `/erlc setup`", ephemeral=True)
             return
 
         await interaction.response.defer()
@@ -747,7 +780,7 @@ class ERLC(commands.GroupCog, name="erlc"):
             filtered_data = self.filter_players(data, team, callsign, permission, player)
 
             embed = discord.Embed(
-                title="👥 Current Players",
+                title="Current Players",
                 color=discord.Color.blue(),
                 timestamp=datetime.now(timezone.utc)
             )
@@ -768,12 +801,11 @@ class ERLC(commands.GroupCog, name="erlc"):
                 embed.description = f"**Total Players:** {len(filtered_data)}"
 
             for i, p in enumerate(filtered_data[:25]):
-                player_name = p.get('Player', 'Unknown')
-                player_id = await self.get_player_id_from_name(player_name)
-                player_link = self.format_player_link(player_name, player_id)
+                player_identifier = p.get('Player', 'Unknown')
+                player_name, profile_link = await self.format_player_info(player_identifier)
 
                 player_info = []
-                player_info.append(f"**Player:** {player_link}")
+                player_info.append(f"**Player:** {profile_link}")
                 player_info.append(f"**Permission:** {p.get('Permission', 'N/A')}")
                 if p.get('Team'):
                     player_info.append(f"**Team:** {p.get('Team')}")
@@ -788,14 +820,14 @@ class ERLC(commands.GroupCog, name="erlc"):
 
             if len(filtered_data) > 25:
                 embed.add_field(
-                    name="⚠️ Note",
+                    name="Note",
                     value=f"Showing first 25 of {len(filtered_data)} players",
                     inline=False
                 )
 
             embed.set_footer(text="ER:LC API")
         else:
-            embed = self.create_embed("👥 Current Players", data)
+            embed = self.create_embed("Current Players", data)
 
         await interaction.followup.send(embed=embed)
         await self.send_to_channel(interaction.guild_id, embed)
@@ -816,7 +848,7 @@ class ERLC(commands.GroupCog, name="erlc"):
         """Fetch and display current vehicles with optional filtering."""
         config = self.get_config(interaction.guild_id)
         if not config:
-            await interaction.response.send_message("❌ Please setup the API first using `/erlc setup`", ephemeral=True)
+            await interaction.response.send_message("<:Denied:1426930694633816248> Please setup the API first using `/erlc setup`", ephemeral=True)
             return
 
         await interaction.response.defer()
@@ -827,7 +859,7 @@ class ERLC(commands.GroupCog, name="erlc"):
             filtered_data = self.filter_vehicles(data, livery, name, owner)
 
             embed = discord.Embed(
-                title="🚗 Server Vehicles",
+                title="Server Vehicles",
                 color=discord.Color.blue(),
                 timestamp=datetime.now(timezone.utc)
             )
@@ -846,9 +878,12 @@ class ERLC(commands.GroupCog, name="erlc"):
                 embed.description = f"**Total Vehicles:** {len(filtered_data)}"
 
             for i, v in enumerate(filtered_data[:25]):
-                owner_name = v.get('Owner', 'N/A')
-                owner_id = await self.get_player_id_from_name(owner_name) if owner_name != 'N/A' else None
-                owner_link = self.format_player_link(owner_name, owner_id) if owner_name != 'N/A' else 'N/A'
+                owner_identifier = v.get('Owner', 'N/A')
+
+                if owner_identifier != 'N/A' and owner_identifier:
+                    owner_name, owner_link = await self.format_player_info(owner_identifier)
+                else:
+                    owner_link = 'N/A'
 
                 vehicle_info = []
                 vehicle_info.append(f"**Name:** {v.get('Name', 'Unknown')}")
@@ -863,14 +898,14 @@ class ERLC(commands.GroupCog, name="erlc"):
 
             if len(filtered_data) > 25:
                 embed.add_field(
-                    name="⚠️ Note",
+                    name="Note",
                     value=f"Showing first 25 of {len(filtered_data)} vehicles",
                     inline=False
                 )
 
             embed.set_footer(text="ER:LC API")
         else:
-            embed = self.create_embed("🚗 Server Vehicles", data)
+            embed = self.create_embed("Server Vehicles", data)
 
         await interaction.followup.send(embed=embed)
         await self.send_to_channel(interaction.guild_id, embed)
@@ -880,7 +915,7 @@ class ERLC(commands.GroupCog, name="erlc"):
         """Fetch and display server staff."""
         config = self.get_config(interaction.guild_id)
         if not config:
-            await interaction.response.send_message("❌ Please setup the API first using `/erlc setup`", ephemeral=True)
+            await interaction.response.send_message("<:Denied:1426930694633816248> Please setup the API first using `/erlc setup`", ephemeral=True)
             return
 
         await interaction.response.defer()
@@ -889,38 +924,61 @@ class ERLC(commands.GroupCog, name="erlc"):
 
         if isinstance(data, list):
             embed = discord.Embed(
-                title="👮 Server Staff",
+                title="Server Staff",
                 description=f"**Total Staff:** {len(data)}",
                 color=discord.Color.blue(),
                 timestamp=datetime.now(timezone.utc)
             )
 
-            for i, staff in enumerate(data[:25]):
-                staff_name = staff.get('Player', 'Unknown')
-                staff_id = await self.get_player_id_from_name(staff_name)
-                staff_link = self.format_player_link(staff_name, staff_id)
+            # Group staff by permission level for better organization
+            staff_by_role = {}
+            for staff in data:
+                role = staff.get('Permission', 'Unknown')
+                if role not in staff_by_role:
+                    staff_by_role[role] = []
+                staff_by_role[role].append(staff)
 
-                staff_info = [f"**Player:** {staff_link}"]
+            # Define role order for display
+            role_order = [
+                'Server Owner',
+                'Server Administrator',
+                'Server Moderator',
+                'Unknown'
+            ]
 
-                if staff.get('Permission'):
-                    staff_info.append(f"**Role:** {staff.get('Permission')}")
+            # Display staff grouped by role
+            for role in role_order:
+                if role not in staff_by_role:
+                    continue
 
-                embed.add_field(
-                    name=f"Staff {i + 1}",
-                    value='\n'.join(staff_info),
-                    inline=False
-                )
+                staff_list = staff_by_role[role]
+                staff_links = []
+
+                for staff in staff_list[:25]:  # Limit to 25 per role to avoid field limits
+                    player_identifier = staff.get('Player', 'Unknown')
+                    player_name, profile_link = await self.format_player_info(player_identifier)
+                    staff_links.append(f"• {profile_link}")
+
+                if staff_links:
+                    # Join all staff of this role
+                    staff_text = '\n'.join(staff_links)
+
+                    embed.add_field(
+                        name=f"{role} ({len(staff_list)})",
+                        value=staff_text if len(staff_text) <= 1024 else staff_text[:1020] + "...",
+                        inline=False
+                    )
 
             if len(data) > 25:
                 embed.add_field(
-                    name="⚠️ Note",
-                    value=f"Showing first 25 of {len(data)} staff members",
+                    name="Note",
+                    value=f"Some staff members may be hidden due to display limits",
                     inline=False
                 )
 
             embed.set_footer(text="ER:LC API")
         else:
-            embed = self.create_embed("👮 Server Staff", data)
+            embed = self.create_embed("Server Staff", data)
 
         await interaction.followup.send(embed=embed)
         await self.send_to_channel(interaction.guild_id, embed)
@@ -933,7 +991,7 @@ class ERLC(commands.GroupCog, name="erlc"):
         """Fetch and display server bans with profile links."""
         config = self.get_config(interaction.guild_id)
         if not config:
-            await interaction.response.send_message("❌ Please setup the API first using `/erlc setup`", ephemeral=True)
+            await interaction.response.send_message("<:Denied:1426930694633816248> Please setup the API first using `/erlc setup`", ephemeral=True)
             return
 
         await interaction.response.defer()
@@ -942,54 +1000,62 @@ class ERLC(commands.GroupCog, name="erlc"):
 
         if isinstance(data, list):
             if player:
-                found = [b for b in data if player.lower() in b.get('Player', '').lower()]
+                # Search for specific player (by name or UID)
+                found = []
+                for b in data:
+                    ban_identifier = b.get('Player', '')
+                    # Check if search matches name or UID
+                    if player.lower() in ban_identifier.lower() or player == ban_identifier:
+                        found.append(b)
 
                 if found:
+                    # Use first found ban for title (in case of multiple matches)
+                    first_ban = found[0]
+                    ban_identifier = first_ban.get('Player', 'Unknown')
+                    player_name, profile_link = await self.format_player_info(ban_identifier)
+
                     embed = discord.Embed(
-                        title="🔨 Ban Status: BANNED",
-                        description=f"Player **{player}** is currently banned.",
+                        title="Ban Status: BANNED",
+                        description=f"**{player_name}** is currently banned from the server.",
                         color=discord.Color.red(),
                         timestamp=datetime.now(timezone.utc)
                     )
 
                     ban_list = []
                     for ban in found:
-                        ban_player = ban.get('Player', 'Unknown')
-                        player_id = await self.get_player_id_from_name(ban_player)
-                        player_link = self.format_player_link(ban_player, player_id)
+                        ban_identifier = ban.get('Player', 'Unknown')
+                        player_name, profile_link = await self.format_player_info(ban_identifier)
 
-                        ban_line = f"• **Player:** {player_link}"
+                        ban_line = f"• **Player:** {profile_link}"
 
                         if ban.get('Reason'):
-                            ban_line += f" | **Reason:** {ban.get('Reason')}"
+                            ban_line += f"\n  **Reason:** {ban.get('Reason')}"
                         if ban.get('Moderator'):
-                            mod_name = ban.get('Moderator')
-                            mod_id = await self.get_player_id_from_name(mod_name)
-                            mod_link = self.format_player_link(mod_name, mod_id)
-                            ban_line += f" | **By:** {mod_link}"
+                            mod_identifier = ban.get('Moderator')
+                            mod_name, mod_link = await self.format_player_info(mod_identifier)
+                            ban_line += f"\n  **Banned by:** {mod_link}"
                         if ban.get('Timestamp'):
                             ban_time = self.format_timestamp(ban.get('Timestamp'))
-                            ban_line += f" | **Date:** {ban_time}"
+                            ban_line += f"\n  **Date:** {ban_time}"
 
                         ban_list.append(ban_line)
 
-                    # Add all bans to a single field or description
                     embed.add_field(
                         name="Ban Details",
-                        value='\n'.join(ban_list),
+                        value='\n\n'.join(ban_list),
                         inline=False
                     )
                 else:
                     embed = discord.Embed(
-                        title="✅ Ban Status: NOT BANNED",
-                        description=f"Player **{player}** is not currently banned.",
+                        title="<:Accepted:1426930333789585509> Ban Status: NOT BANNED",
+                        description=f"No bans found matching **{player}**.",
                         color=discord.Color.green(),
                         timestamp=datetime.now(timezone.utc)
                     )
             else:
-                # List all bans as bullet points
+                # List all bans
                 embed = discord.Embed(
-                    title="🔨 Server Bans",
+                    title="Server Bans",
                     description=f"**Total Bans:** {len(data)}",
                     color=discord.Color.red(),
                     timestamp=datetime.now(timezone.utc)
@@ -997,30 +1063,25 @@ class ERLC(commands.GroupCog, name="erlc"):
 
                 ban_list = []
                 for ban in data[:25]:
-                    ban_player = ban.get('Player', 'Unknown')
-                    player_id = await self.get_player_id_from_name(ban_player)
-                    player_link = self.format_player_link(ban_player, player_id)
+                    ban_identifier = ban.get('Player', 'Unknown')
+                    player_name, profile_link = await self.format_player_info(ban_identifier)
 
-                    ban_line = f"• {player_link}"
+                    ban_line = f"• {profile_link}"
 
                     if ban.get('Reason'):
                         ban_line += f" - *{ban.get('Reason')}*"
                     if ban.get('Moderator'):
-                        mod_name = ban.get('Moderator')
-                        mod_id = await self.get_player_id_from_name(mod_name)
-                        mod_link = self.format_player_link(mod_name, mod_id)
+                        mod_identifier = ban.get('Moderator')
+                        mod_name, mod_link = await self.format_player_info(mod_identifier)
                         ban_line += f" (by {mod_link})"
 
                     ban_list.append(ban_line)
 
-                # Split into multiple fields if needed (Discord has 1024 char limit per field)
                 if ban_list:
-                    # Join all bans
                     full_ban_text = '\n'.join(ban_list)
 
-                    # If text is too long, split into chunks
-                    if len(full_ban_text) > 4000:  # Leave room for description
-                        # Split into chunks of ~1000 characters
+                    # Split into chunks if too long
+                    if len(full_ban_text) > 4000:
                         chunks = []
                         current_chunk = []
                         current_length = 0
@@ -1037,8 +1098,7 @@ class ERLC(commands.GroupCog, name="erlc"):
                         if current_chunk:
                             chunks.append('\n'.join(current_chunk))
 
-                        # Add each chunk as a field
-                        for i, chunk in enumerate(chunks[:5]):  # Max 5 fields to be safe
+                        for i, chunk in enumerate(chunks[:5]):
                             embed.add_field(
                                 name=f"Banned Players ({i * 25 + 1}-{min((i + 1) * 25, len(data))})" if i > 0 else "Banned Players",
                                 value=chunk,
@@ -1053,14 +1113,14 @@ class ERLC(commands.GroupCog, name="erlc"):
 
                 if len(data) > 25:
                     embed.add_field(
-                        name="⚠️ Note",
+                        name="Note",
                         value=f"Showing first 25 of {len(data)} bans",
                         inline=False
                     )
 
             embed.set_footer(text="ER:LC API")
         else:
-            embed = self.create_embed("🔨 Server Bans", data)
+            embed = self.create_embed("Server Bans", data)
 
         await interaction.followup.send(embed=embed)
 
@@ -1071,7 +1131,7 @@ class ERLC(commands.GroupCog, name="erlc"):
         """Send a command to the ER:LC server."""
         config = self.get_config(interaction.guild_id)
         if not config:
-            await interaction.response.send_message("❌ Please setup the API first using `/erlc setup`", ephemeral=True)
+            await interaction.response.send_message("<:Denied:1426930694633816248> Please setup the API first using `/erlc setup`", ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -1085,13 +1145,13 @@ class ERLC(commands.GroupCog, name="erlc"):
 
         if data.get('success'):
             embed = discord.Embed(
-                title="✅ Command Executed",
+                title="<:Accepted:1426930333789585509> Command Executed",
                 description=f"Command `{command}` was executed successfully.",
                 color=discord.Color.green()
             )
         else:
             embed = discord.Embed(
-                title="❌ Command Failed",
+                title="<:Denied:1426930694633816248> Command Failed",
                 description=data.get('error', 'Unknown error'),
                 color=discord.Color.red()
             )

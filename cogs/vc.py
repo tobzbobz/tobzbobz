@@ -193,9 +193,12 @@ class VCRequestCog(commands.Cog):
     async def post_tracking_results(self, tracking):
         """Post the tracking results to the log channel"""
         try:
-            # Get the channel where request was made
-            request_channel = self.bot.get_channel(tracking['channel_id'])
-            if not request_channel:
+            print(f"[DEBUG] Processing tracking ID: {tracking['id']}")
+
+            # Log channel should ALWAYS be checked first
+            log_channel = self.bot.get_channel(VC_REQUEST_LOG_CHANNEL_ID)
+            if not log_channel:
+                print(f"[ERROR] Log channel {VC_REQUEST_LOG_CHANNEL_ID} not found!")
                 await db.mark_vc_request_completed(tracking['id'])
                 return
 

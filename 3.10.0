@@ -1,0 +1,17 @@
+Collecting SpeechRecognition
+  Downloading speechrecognition-3.14.3-py3-none-any.whl.metadata (30 kB)
+Collecting typing-extensions (from SpeechRecognition)
+  Downloading typing_extensions-4.15.0-py3-none-any.whl.metadata (3.3 kB)
+Collecting standard-aifc (from SpeechRecognition)
+  Downloading standard_aifc-3.13.0-py3-none-any.whl.metadata (969 bytes)
+Requirement already satisfied: audioop-lts in c:\users\owner\appdata\local\programs\python\python313\lib\site-packages (from SpeechRecognition) (0.2.2)
+Collecting standard-chunk (from standard-aifc->SpeechRecognition)
+  Downloading standard_chunk-3.13.0-py3-none-any.whl.metadata (860 bytes)
+Downloading speechrecognition-3.14.3-py3-none-any.whl (32.9 MB)
+   ---------------------------------------- 32.9/32.9 MB 1.3 MB/s  0:00:26
+Downloading standard_aifc-3.13.0-py3-none-any.whl (10 kB)
+Downloading standard_chunk-3.13.0-py3-none-any.whl (4.9 kB)
+Downloading typing_extensions-4.15.0-py3-none-any.whl (44 kB)
+Installing collected packages: standard-chunk, typing-extensions, standard-aifc, SpeechRecognition
+
+Successfully installed SpeechRecognition-3.14.3 standard-aifc-3.13.0 standard-chunk-3.13.0 typing-extensions-4.15.0

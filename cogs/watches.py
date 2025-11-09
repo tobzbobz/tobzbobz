@@ -883,12 +883,14 @@ class WatchCog(commands.Cog):
                 deleted_count = 0
                 async for message in watch_channel.history(limit=100):
                     try:
-                        # Skip the persistent stats embed
-                        if message.author.bot and message.embeds:
-                            if any(embed.title and ("Watch Statistics" in embed.title or "FENZ Watches" in embed.title) for embed in message.embeds):
+                        # Skip ONLY the persistent stats embed
+                        if message.author == self.bot.user and message.embeds:
+                            if any(embed.title and ("Watch Statistics" in embed.title or "FENZ Watches" in embed.title)
+                                   for embed in message.embeds):
                                 continue
                         await message.delete()
                         deleted_count += 1
+                        await asyncio.sleep(0.1)  # Small delay to avoid rate limits
                     except (discord.Forbidden, discord.NotFound):
                         pass
                 print(f'Cleaned {deleted_count} messages before watch start')
@@ -954,7 +956,6 @@ class WatchCog(commands.Cog):
                             inline=False)
             embed.set_image(
                 url='https://cdn.discordapp.com/attachments/1425867714160758896/1426932258694238258/image.png?ex=68f4eeb9&is=68f39d39&hm=b69f7f8bad7dcd7c7bde4dab731ca7e23e27d32d864cad9fc7224dcbb0648840')
-            embed.set_thumbnail(url='https://cdn.discordapp.com/emojis/1389200656090533970.webp?size=128')
             embed.set_author(name=f'Requested by {interaction.user.display_name}',
                              icon_url=interaction.user.display_avatar.url)
 
@@ -1980,7 +1981,6 @@ class WatchCog(commands.Cog):
                                   inline=False)
             start_embed.set_image(
                 url='https://cdn.discordapp.com/attachments/1425867714160758896/1426932258694238258/image.png?ex=68f4eeb9&is=68f39d39&hm=b69f7f8bad7dcd7c7bde4dab731ca7e23e27d32d864cad9fc7224dcbb0648840')
-            start_embed.set_thumbnail(url='https://cdn.discordapp.com/emojis/1389200656090533970.webp?size=128')
 
             # ✅ FIXED: Get user from guild instead of using non-existent interaction
             user = channel.guild.get_member(user_id)
@@ -2241,7 +2241,6 @@ class WatchCog(commands.Cog):
                                     inline=False)
                     embed.set_image(
                         url='https://cdn.discordapp.com/attachments/1425867714160758896/1426932258694238258/image.png?ex=68f4eeb9&is=68f39d39&hm=b69f7f8bad7dcd7c7bde4dab731ca7e23e27d32d864cad9fc7224dcbb0648840')
-                    embed.set_thumbnail(url='https://cdn.discordapp.com/emojis/1389200656090533970.webp?size=128')
                     embed.set_author(name=f'Updated by {interaction.user.display_name}',
                                      icon_url=interaction.user.display_avatar.url)
 
@@ -2282,6 +2281,18 @@ class WatchCog(commands.Cog):
                 except Exception as e:
                     print(f'Error deleting original watch message: {e}')
 
+                related_messages = watch_data.get('related_messages', [])
+                for msg_id in related_messages:
+                    if msg_id != int(watch):  # Don't try to delete the main message again
+                        try:
+                            boost_msg = await channel.fetch_message(msg_id)
+                            await boost_msg.delete()
+                            print(f'Deleted boost message {msg_id}')
+                        except (discord.NotFound, discord.Forbidden):
+                            pass
+                        except Exception as e:
+                            print(f'Error deleting boost message {msg_id}: {e}')
+
                 embed = discord.Embed(title=f'🚨 {final_colour} Watch Announcement 🚨', colour=embed_colour)
                 embed.add_field(name='Station', value=f'`{final_station}`', inline=True)
                 embed.add_field(name='Time', value=f'<t:{watch_data["started_at"]}:R>', inline=True)
@@ -2309,7 +2320,6 @@ class WatchCog(commands.Cog):
                                 inline=False)
                 embed.set_image(
                     url='https://cdn.discordapp.com/attachments/1425867714160758896/1426932258694238258/image.png?ex=68f4eeb9&is=68f39d39&hm=b69f7f8bad7dcd7c7bde4dab731ca7e23e27d32d864cad9fc7224dcbb0648840')
-                embed.set_thumbnail(url='https://cdn.discordapp.com/emojis/1389200656090533970.webp?size=128')
                 embed.set_author(name=f'Switched by {interaction.user.display_name}',
                                  icon_url=interaction.user.display_avatar.url)
 
@@ -2511,6 +2521,25 @@ class WatchCog(commands.Cog):
             boost_embed.add_field(name='Station', value=f"`{watch_data['station']}`", inline=True)
             boost_embed.add_field(name='Watch Leader', value=f"<@{watch_data['user_id']}>", inline=True)
             boost_embed.add_field(name='Started', value=f"<t:{watch_data['started_at']}:R>", inline=True)
+
+            # ADD FIRE COMMS STATUS
+            comms_status = watch_data.get('comms_status', 'inactive')
+            comms_emoji = '<:Accepted:1426930333789585509>' if comms_status == 'active' else '<:Denied:1426930694633816248>'
+            boost_embed.add_field(name='FIRE COMMS', value=f'{comms_emoji} {comms_status.capitalize()}', inline=True)
+
+            # ADD VEHICLE INFO
+            watch_info = get_watch_info(watch_data['station'], watch_data['colour'])
+            boost_embed.add_field(
+                name=watch_info['title'],
+                value=watch_info['Active'],
+                inline=True
+            )
+            boost_embed.add_field(
+                name='​',
+                value=watch_info['Rear'],
+                inline=True
+            )
+
             boost_embed.add_field(name='​', value='Join Fenz RTO and help out! 🙌', inline=False)
             boost_embed.set_thumbnail(url='https://cdn.discordapp.com/emojis/1389200656090533970.webp?size=128')
             boost_embed.set_footer(text=f'Boosted by {interaction.user.display_name}',

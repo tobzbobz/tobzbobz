@@ -388,8 +388,8 @@ async def add_callsign_to_database(callsign: str, discord_user_id: int, discord_
                                    is_fenz_high_command: bool = False, is_hhstj_high_command: bool = False):
     """Add a new callsign to the database"""
     async with db.pool.acquire() as conn:
-        async with conn.transaction():  # ✅ Proper transaction
-            # ✅ CHECK FOR CONFLICTS FIRST (before any DELETE)
+        async with conn.transaction():  # <:Accepted:1426930333789585509> Proper transaction
+            # <:Accepted:1426930333789585509> CHECK FOR CONFLICTS FIRST (before any DELETE)
             if callsign not in ["BLANK", "###"]:
                 existing = await conn.fetchrow(
                     'SELECT discord_user_id FROM callsigns WHERE callsign = $1 AND fenz_prefix = $2',
@@ -439,32 +439,6 @@ async def add_callsign_to_database(callsign: str, discord_user_id: int, discord_
                 approved_by_name,
                 json.dumps(history)
             )
-
-    nickname_parts = []
-
-    # Check if HHStJ high command takes priority (has HHStJ HC but NOT FENZ HC)
-    hhstj_priority = has_hhstj_high_command and not has_fenz_high_command
-
-    if hhstj_priority and hhstj_prefix:
-        # HHStJ high command priority format
-        nickname_parts.append(hhstj_prefix)
-
-        # Add FENZ callsign
-        if fenz_prefix and fenz_prefix != "":
-            nickname_parts.append(f"{fenz_prefix}-{callsign}")
-        elif callsign:
-            nickname_parts.append(callsign)
-
-        # Add Roblox username
-        if roblox_username:
-            nickname_parts.append(roblox_username)
-    else:
-        # Standard format: FENZ first
-        # Add FENZ callsign
-        if fenz_prefix and fenz_prefix != "":
-            nickname_parts.append(f"{fenz_prefix}-{callsign}")
-        elif callsign:
-            nickname_parts.append(callsign)
 
         # Add HHStJ prefix if available (only if it doesn't already contain a dash)
         if hhstj_prefix and "-" not in hhstj_prefix:
@@ -582,13 +556,14 @@ class CallsignCog(commands.Cog):
                     'rank_changes': [],
                     'removed_users': [],
                     'added_users': [],
-                    # ✅ NEW: Naughty role tracking
+                    # <:Accepted:1426930333789585509> NEW: Naughty role tracking
                     'naughty_roles_found': 0,
                     'naughty_roles_stored': 0,
                     'naughty_roles_removed': 0,
+                    'permission_errors': [],
                 }
 
-                # ✅ NEW: Track all naughty roles in the server during sync
+                # <:Accepted:1426930333789585509> NEW: Track all naughty roles in the server during sync
                 naughty_role_data = []
 
                 # Check each callsign in database
@@ -606,7 +581,7 @@ class CallsignCog(commands.Cog):
                             )
                         stats['last_seen_updates'] += 1
 
-                        # ✅ NEW: Check for naughty roles on this member
+                        # <:Accepted:1426930333789585509> NEW: Check for naughty roles on this member
                         member_naughty_roles = []
                         for role in member.roles:
                             if role.id in NAUGHTY_ROLES:
@@ -650,7 +625,7 @@ class CallsignCog(commands.Cog):
                                 stats['removed_inactive'] += 1
                                 continue
 
-                # ✅ NEW: Sync naughty roles to database
+                # <:Accepted:1426930333789585509> NEW: Sync naughty roles to database
                 if naughty_role_data:
                     async with db.pool.acquire() as conn:
                         # Get all currently stored naughty roles
@@ -941,6 +916,8 @@ class CallsignCog(commands.Cog):
                                 })
                                 stats['nickname_updates'] += 1
                             except discord.Forbidden:
+                                # Track permission errors separately for cleaner logging
+                                stats['permission_errors'].append(member)
                                 stats['errors'].append({
                                     'member': member,
                                     'username': record['discord_username'],
@@ -983,7 +960,7 @@ class CallsignCog(commands.Cog):
                     # Send enhanced log with DETAILED changes
                     await self.send_detailed_sync_log(self.bot, guild.name, stats, sync_duration)
 
-                    print(f"✅ Auto-sync completed for guild {guild.name}:")
+                    print(f"<:Accepted:1426930333789585509> Auto-sync completed for guild {guild.name}:")
                     print(f"    📊 {stats['total_callsigns']} callsigns synced to Google Sheets")
                     print(f"    👥 {stats['members_found']} members found / {stats['members_not_found']} not in server")
                     print(f"    🏷️ {stats['nickname_updates']} nicknames updated")
@@ -994,17 +971,21 @@ class CallsignCog(commands.Cog):
                         print(f"    🗑️ {stats['removed_inactive']} removed (inactive 7+ days)")
                     if stats['callsigns_reset']:
                         print(f"    🔄 {len(stats['callsigns_reset'])} callsigns reset due to rank changes")
-                    # ✅ NEW: Print naughty role stats
+                    # <:Accepted:1426930333789585509> NEW: Print naughty role stats
                     if stats['naughty_roles_found'] > 0:
                         print(f"    🚨 {stats['naughty_roles_found']} naughty roles found")
                         print(f"    💾 {stats['naughty_roles_stored']} new naughty roles stored")
                         print(f"    ✂️ {stats['naughty_roles_removed']} naughty roles removed")
+                    if stats['permission_errors']:
+                        print(f"    ⚠️ {len(stats['permission_errors'])} permission errors")
                     if stats['errors']:
-                        print(f"    ⚠️ {len(stats['errors'])} errors occurred")
+                        non_perm_errors = [e for e in stats['errors'] if e['error'] != 'Missing permissions']
+                        if non_perm_errors:
+                            print(f"    ⚠️ {len(non_perm_errors)} other errors occurred")
                     print(f"    ⏱️ Completed in {sync_duration:.2f}s")
 
             except Exception as e:
-                print(f"❌ Error during auto-sync for {guild.name}: {e}")
+                print(f"<:Denied:1426930694633816248> Error during auto-sync for {guild.name}: {e}")
                 import traceback
                 traceback.print_exc()
 
@@ -1012,7 +993,7 @@ class CallsignCog(commands.Cog):
                 try:
                     await self.send_sync_log(
                         self.bot,
-                        "❌ Auto-Sync Failed",
+                        "<:Denied:1426930694633816248> Auto-Sync Failed",
                         f"Auto-sync failed for **{guild.name}**",
                         [{'name': 'Error', 'value': f'```{str(e)[:1000]}```', 'inline': False}],
                         discord.Color.red()
@@ -1030,7 +1011,7 @@ class CallsignCog(commands.Cog):
 
             # Main summary embed
             summary_embed = discord.Embed(
-                title="🔄 Auto-Sync Completed",
+                title="Auto-Sync Completed",
                 description=f"Automatic sync completed for **{guild_name}**",
                 color=discord.Color.blue(),
                 timestamp=datetime.utcnow()
@@ -1043,10 +1024,22 @@ class CallsignCog(commands.Cog):
             summary_embed.add_field(name='Rank Changes', value=str(stats['rank_updates']), inline=True)
             summary_embed.add_field(name='Duration', value=f'{sync_duration:.2f}s', inline=True)
 
-            # ✅ Naughty role stats
+            if stats['permission_errors']:
+                # Create mentions string (limit to avoid embed length issues)
+                mentions = ' '.join([member.mention for member in stats['permission_errors'][:25]])
+                if len(stats['permission_errors']) > 25:
+                    mentions += f"\n... and {len(stats['permission_errors']) - 25} more"
+
+                summary_embed.add_field(
+                    name=f'Permission Errors ({len(stats["permission_errors"])})',
+                    value=mentions,
+                    inline=False
+                )
+
+            # <:Accepted:1426930333789585509> Naughty role stats
             if stats.get('naughty_roles_found', 0) > 0:
                 summary_embed.add_field(
-                    name='🚨 Naughty Roles',
+                    name='Naughty Roles',
                     value=f"Found: {stats['naughty_roles_found']}\n"
                           f"Stored: {stats['naughty_roles_stored']}\n"
                           f"Removed: {stats['naughty_roles_removed']}",
@@ -1061,7 +1054,7 @@ class CallsignCog(commands.Cog):
                     chunk = stats['nickname_changes'][i:i + 5]
 
                     embed = discord.Embed(
-                        title=f"🏷️ Nickname Updates ({i + 1}-{min(i + 5, len(stats['nickname_changes']))} of {len(stats['nickname_changes'])})",
+                        title=f"Nickname Updates ({i + 1}-{min(i + 5, len(stats['nickname_changes']))} of {len(stats['nickname_changes'])})",
                         color=discord.Color.green()
                     )
 
@@ -1080,7 +1073,7 @@ class CallsignCog(commands.Cog):
                     chunk = stats['rank_changes'][i:i + 5]
 
                     embed = discord.Embed(
-                        title=f"🎖️ Rank Changes ({i + 1}-{min(i + 5, len(stats['rank_changes']))} of {len(stats['rank_changes'])})",
+                        title=f"Rank Changes ({i + 1}-{min(i + 5, len(stats['rank_changes']))} of {len(stats['rank_changes'])})",
                         color=discord.Color.gold()
                     )
 
@@ -1099,7 +1092,7 @@ class CallsignCog(commands.Cog):
                     chunk = stats['callsigns_reset'][i:i + 5]
 
                     embed = discord.Embed(
-                        title=f"🔄 Callsigns Reset ({i + 1}-{min(i + 5, len(stats['callsigns_reset']))} of {len(stats['callsigns_reset'])})",
+                        title=f"Callsigns Reset ({i + 1}-{min(i + 5, len(stats['callsigns_reset']))} of {len(stats['callsigns_reset'])})",
                         description="These callsigns were reset to ### due to rank changes",
                         color=discord.Color.orange()
                     )
@@ -1119,7 +1112,7 @@ class CallsignCog(commands.Cog):
                     chunk = stats['added_users'][i:i + 10]
 
                     embed = discord.Embed(
-                        title=f"➕ Added from Sheets ({i + 1}-{min(i + 10, len(stats['added_users']))} of {len(stats['added_users'])})",
+                        title=f"Added from Sheets ({i + 1}-{min(i + 10, len(stats['added_users']))} of {len(stats['added_users'])})",
                         description="Users found in sheets but not in database (now added)",
                         color=discord.Color.teal()
                     )
@@ -1139,7 +1132,7 @@ class CallsignCog(commands.Cog):
                     chunk = stats['removed_users'][i:i + 5]
 
                     embed = discord.Embed(
-                        title=f"🗑️ Removed (Inactive) ({i + 1}-{min(i + 5, len(stats['removed_users']))} of {len(stats['removed_users'])})",
+                        title=f"Removed (Inactive) ({i + 1}-{min(i + 5, len(stats['removed_users']))} of {len(stats['removed_users'])})",
                         description="Users removed from database (not in server for 7+ days)",
                         color=discord.Color.dark_red()
                     )
@@ -1160,7 +1153,7 @@ class CallsignCog(commands.Cog):
                     chunk = added_roles[i:i + 10]
 
                     embed = discord.Embed(
-                        title=f"🚨 Naughty Roles Added ({i + 1}-{min(i + 10, len(added_roles))} of {len(added_roles)})",
+                        title=f"Naughty Roles Added ({i + 1}-{min(i + 10, len(added_roles))} of {len(added_roles)})",
                         description="These users received naughty roles during sync",
                         color=discord.Color.red()
                     )
@@ -1181,7 +1174,7 @@ class CallsignCog(commands.Cog):
                     chunk = removed_roles[i:i + 10]
 
                     embed = discord.Embed(
-                        title=f"✂️ Naughty Roles Removed ({i + 1}-{min(i + 10, len(removed_roles))} of {len(removed_roles)})",
+                        title=f"Naughty Roles Removed ({i + 1}-{min(i + 10, len(removed_roles))} of {len(removed_roles)})",
                         description="These users no longer have naughty roles",
                         color=discord.Color.green()
                     )
@@ -1195,14 +1188,17 @@ class CallsignCog(commands.Cog):
 
                     await channel.send(embed=embed)
 
-            # 8. Errors - SHOW WHO HAD ERRORS
-            if stats['errors']:
-                for i in range(0, len(stats['errors']), 5):
-                    chunk = stats['errors'][i:i + 5]
+            # 8. Errors - SHOW WHO HAD NON-PERMISSION ERRORS
+            # Filter out permission errors since they're shown in the summary
+            non_permission_errors = [e for e in stats['errors'] if e['error'] != 'Missing permissions']
+
+            if non_permission_errors:
+                for i in range(0, len(non_permission_errors), 5):
+                    chunk = non_permission_errors[i:i + 5]
 
                     embed = discord.Embed(
-                        title=f"❌ Errors ({i + 1}-{min(i + 5, len(stats['errors']))} of {len(stats['errors'])})",
-                        description="Permission errors or other issues",
+                        title=f"<:Denied:1426930694633816248> Other Errors ({i + 1}-{min(i + 5, len(non_permission_errors))} of {len(non_permission_errors)})",
+                        description="Non-permission errors that occurred during sync",
                         color=discord.Color.red()
                     )
 
@@ -1217,7 +1213,7 @@ class CallsignCog(commands.Cog):
                     await channel.send(embed=embed)
 
         except Exception as e:
-            print(f"❌ Error sending detailed sync log: {e}")
+            print(f"<:Denied:1426930694633816248> Error sending detailed sync log: {e}")
             import traceback
             traceback.print_exc()
 
@@ -1275,7 +1271,7 @@ class CallsignCog(commands.Cog):
                 channel = self.bot.get_channel(SYNC_LOG_CHANNEL_ID)
                 if channel:
                     embed = discord.Embed(
-                        title="🚨 Naughty Roles Restored on Rejoin",
+                        title="Naughty Roles Restored on Rejoin",
                         description=f"{member.mention} rejoined the server",
                         color=discord.Color.red(),
                         timestamp=datetime.utcnow()
@@ -1283,14 +1279,14 @@ class CallsignCog(commands.Cog):
 
                     if restored_roles:
                         embed.add_field(
-                            name="✅ Restored Roles",
+                            name="<:Accepted:1426930333789585509> Restored Roles",
                             value="\n".join(f"• {name}" for name in restored_roles),
                             inline=False
                         )
 
                     if failed_roles:
                         embed.add_field(
-                            name="❌ Failed to Restore",
+                            name="<:Denied:1426930694633816248> Failed to Restore",
                             value="\n".join(f"• {name}" for name in failed_roles),
                             inline=False
                         )
@@ -1310,7 +1306,7 @@ class CallsignCog(commands.Cog):
         try:
             channel = bot.get_channel(CALLSIGN_REQUEST_LOG_CHANNEL_ID)
             if not channel:
-                print(f"⚠️ Could not find callsign request log channel {CALLSIGN_REQUEST_LOG_CHANNEL_ID}")
+                print(f"Could not find callsign request log channel {CALLSIGN_REQUEST_LOG_CHANNEL_ID}")
                 return
 
             embed = discord.Embed(
@@ -1593,8 +1589,8 @@ class CallsignCog(commands.Cog):
                         else:
 
                             # After fetching user roles
-                            is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in user.roles)
-                            is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in user.roles)
+                            is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
+                            is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
 
                             new_nickname = format_nickname(
                                 current_fenz_prefix,
@@ -1655,14 +1651,14 @@ class CallsignCog(commands.Cog):
 
             # Build response
             response = f"<:Accepted:1426930333789585509> **Bidirectional Sync Complete!**\n"
-            response += f"📊 Synced {len(db_callsigns)} callsigns to Google Sheets (sorted by rank hierarchy)\n"
-            response += f"🏷️ Updated {updated_count} Discord nicknames\n"
+            response += f"Synced {len(db_callsigns)} callsigns to Google Sheets (sorted by rank hierarchy)\n"
+            response += f"Updated {updated_count} Discord nicknames\n"
 
             if added_from_sheets > 0:
-                response += f"➕ Added {added_from_sheets} callsigns from sheets to database\n"
+                response += f"Added {added_from_sheets} callsigns from sheets to database\n"
 
             if callsigns_reset:
-                response += f"\n🔄 Reset {len(callsigns_reset)} callsigns due to rank changes:\n"
+                response += f"\nReset {len(callsigns_reset)} callsigns due to rank changes:\n"
                 response += "\n".join(
                     f"- {r['member'].mention}: ~~{r['old_callsign']}~~ → {r['new_prefix']}-###" for r in
                     callsigns_reset[:5])
@@ -1670,13 +1666,13 @@ class CallsignCog(commands.Cog):
                     response += f"\n... and {len(callsigns_reset) - 5} more"
 
             if missing_in_sheets:
-                response += f"\n⚠️ Found {len(missing_in_sheets)} entries in sheets with missing user data:\n"
+                response += f"\nFound {len(missing_in_sheets)} entries in sheets with missing user data:\n"
                 response += "\n".join(f"- {msg}" for msg in missing_in_sheets[:5])
                 if len(missing_in_sheets) > 5:
                     response += f"\n... and {len(missing_in_sheets) - 5} more"
 
             if failed_updates:
-                response += f"\n⚠️ Failed to update {len(failed_updates)} nicknames:\n"
+                response += f"\nFailed to update {len(failed_updates)} nicknames:\n"
                 response += "\n".join(f"- {fail}" for fail in failed_updates[:10])
                 if len(failed_updates) > 10:
                     response += f"\n... and {len(failed_updates) - 10} more"
@@ -1815,10 +1811,6 @@ class CallsignCog(commands.Cog):
                 new_nickname = " | ".join(nickname_parts)
             else:
 
-                # After fetching user roles
-                is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in user.roles)
-                is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in user.roles)
-
                 new_nickname = format_nickname(
                     final_fenz_prefix,
                     final_callsign,
@@ -1833,7 +1825,7 @@ class CallsignCog(commands.Cog):
                 await user.edit(nick=new_nickname)
             except discord.Forbidden:
                 await interaction.followup.send(
-                    f"⚠️ Callsign assigned but couldn't update nickname (lacking permissions). "
+                    f"Callsign assigned but couldn't update nickname (lacking permissions). "
                     f"Please manually set to: `{new_nickname}`",
                     ephemeral=True
                 )
@@ -2065,14 +2057,14 @@ class CallsignCog(commands.Cog):
 
             if skipped:
                 embed.add_field(
-                    name=f"⭐ Skipped ({len(skipped)})",
+                    name=f"Skipped ({len(skipped)})",
                     value=f"{len(skipped)} members already have correct nicknames",
                     inline=False
                 )
 
             if not_found:
                 embed.add_field(
-                    name=f"❓ Not Found ({len(not_found)})",
+                    name=f"Not Found ({len(not_found)})",
                     value="\n".join(not_found[:5]) + (
                         f"\n... and {len(not_found) - 5} more" if len(not_found) > 5 else ""),
                     inline=False
@@ -2080,7 +2072,7 @@ class CallsignCog(commands.Cog):
 
             if errors:
                 embed.add_field(
-                    name=f"⚠️ Errors ({len(errors)})",
+                    name=f"Errors ({len(errors)})",
                     value="\n".join(errors[:5]) + (f"\n... and {len(errors) - 5} more" if len(errors) > 5 else ""),
                     inline=False
                 )
@@ -2179,7 +2171,7 @@ class CallsignCog(commands.Cog):
 
             # Build confirmation message
             embed = discord.Embed(
-                title="🗑️ Callsign Removed",
+                title="Callsign Removed",
                 description=f"Successfully removed callsign from {user.mention}",
                 color=discord.Color.orange()
             )
@@ -2214,13 +2206,13 @@ class CallsignCog(commands.Cog):
                 )
             else:
                 embed.add_field(
-                    name="⚠️ Nickname",
+                    name="Nickname",
                     value="Could not reset nickname (missing permissions). Please manually update.",
                     inline=False
                 )
 
             embed.add_field(
-                name="📝 Next Steps",
+                name="Next Steps",
                 value="• Callsign removed from database\n"
                       "• Run `/callsign sync` to update Google Sheets\n"
                       "• The callsign is now available for reassignment",
@@ -2325,25 +2317,25 @@ class CallsignCog(commands.Cog):
             # FOR HIGH COMMAND - Send choice message
             if is_high_command:
                 embed = discord.Embed(
-                    title="🎖️ High Command Callsign Request",
+                    title="High Command Callsign Request",
                     description=f"Your callsign request for **{callsign}** is approved!\n\n"
                                 f"As a **{fenz_rank_name}**, you can choose whether to use your rank prefix or not.",
                     color=discord.Color.gold()
                 )
                 embed.add_field(
-                    name="📋 Option 1: With Prefix",
+                    name="Option 1: With Prefix",
                     value=f"Your callsign will be: **{fenz_prefix}-{callsign}**\n"
                           f"Example nickname: `{fenz_prefix}-{callsign} | {roblox_username}`",
                     inline=False
                 )
                 embed.add_field(
-                    name="🔢 Option 2: Without Prefix",
+                    name="Option 2: Without Prefix",
                     value=f"Your callsign will be: **{callsign}**\n"
                           f"Example nickname: `{callsign} | {roblox_username}`",
                     inline=False
                 )
                 embed.add_field(
-                    name="⏰ Time Limit",
+                    name="Time Limit",
                     value="You have **5 minutes** to make your choice.",
                     inline=False
                 )
@@ -2372,10 +2364,6 @@ class CallsignCog(commands.Cog):
                 is_hhstj_high_command
             )
 
-            # Check for high command roles (for formatting)
-            is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in interaction.user.roles)
-            is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in interaction.user.roles)
-
             # Update nickname
             new_nickname = format_nickname(
                 fenz_prefix, callsign, hhstj_prefix, roblox_username,
@@ -2387,7 +2375,7 @@ class CallsignCog(commands.Cog):
             except discord.Forbidden:
                 await interaction.followup.send(
                     f"<:Accepted:1426930333789585509> Callsign **{fenz_prefix}-{callsign}** approved!\n"
-                    f"⚠️ Could not update nickname automatically. Please ask an admin to set it to: `{new_nickname}`",
+                    f"Could not update nickname automatically. Please ask an admin to set it to: `{new_nickname}`",
                     ephemeral=True
                 )
                 return
@@ -2582,7 +2570,7 @@ class CallsignCog(commands.Cog):
                     chunk = incomplete_data[i:i + chunk_size]
 
                     embed = discord.Embed(
-                        title=f"⚠️ Incomplete Callsign Data ({i + 1}-{min(i + chunk_size, len(incomplete_data))} of {len(incomplete_data)})",
+                        title=f"Incomplete Callsign Data ({i + 1}-{min(i + chunk_size, len(incomplete_data))} of {len(incomplete_data)})",
                         description="These users are in the database but have incomplete information",
                         color=discord.Color.orange()
                     )
@@ -2609,7 +2597,7 @@ class CallsignCog(commands.Cog):
 
             # Summary embed
             summary_embed = discord.Embed(
-                title="📊 Callsign Audit Summary",
+                title="Callsign Audit Summary",
                 color=discord.Color.blue()
             )
 
@@ -2636,7 +2624,7 @@ class CallsignCog(commands.Cog):
 
             if missing_from_db or incomplete_data:
                 summary_embed.add_field(
-                    name="📝 Next Steps",
+                    name="Next Steps",
                     value="• Use `/callsign assign` to add missing users\n"
                           "• Use `/callsign assign` to fix incomplete data\n"
                           "• Run `/callsign sync` after making changes",
@@ -2766,7 +2754,7 @@ class CallsignCog(commands.Cog):
 
             if not users_without_callsigns:
                 await interaction.edit_original_response(
-                    content="⚠️ No members found that are eligible for bulk assignment.\n"
+                    content="No members found that are eligible for bulk assignment.\n"
                             "Members need:\n"
                             "• Valid FENZ rank role\n"
                             "• Linked Bloxlink account\n"
@@ -2790,7 +2778,7 @@ class CallsignCog(commands.Cog):
 
             breakdown_text = "\n".join([f"**{prefix}**: {count}" for prefix, count in sorted(rank_breakdown.items())])
             summary_embed.add_field(
-                name="📊 By Rank",
+                name="By Rank",
                 value=breakdown_text or "None",
                 inline=False
             )
@@ -2890,16 +2878,16 @@ class HighCommandPrefixChoice(discord.ui.View):
         # Send confirmation to high command member
         await interaction.followup.send(
             f"<:Accepted:1426930333789585509> You've chosen to use the prefix!\n"
-            f"🏷️ Your callsign is: **{self.fenz_prefix}-{self.callsign}**\n"
-            f"📌 Nickname set to: `{new_nickname}`",
+            f"Your callsign is: **{self.fenz_prefix}-{self.callsign}**\n"
+            f"Nickname set to: `{new_nickname}`",
             ephemeral=True
         )
 
         # Send confirmation to admin who assigned it
         await self.original_interaction.followup.send(
             f"<:Accepted:1426930333789585509> {self.user.mention} chose to use prefix: **{self.fenz_prefix}-{self.callsign}**\n"
-            f"🏷️ Nickname updated to: `{new_nickname}`\n"
-            f"💡 Callsign synced to database and Google Sheets!",
+            f"Nickname updated to: `{new_nickname}`\n"
+            f"Callsign synced to database and Google Sheets!",
             ephemeral=True
         )
 
@@ -2959,16 +2947,16 @@ class HighCommandPrefixChoice(discord.ui.View):
         # Send confirmation to high command member
         await interaction.followup.send(
             f"<:Accepted:1426930333789585509> You've chosen NOT to use a prefix!\n"
-            f"🔢 Your callsign is: **{self.callsign}**\n"
-            f"📌 Nickname set to: `{new_nickname}`",
+            f"Your callsign is: **{self.callsign}**\n"
+            f"Nickname set to: `{new_nickname}`",
             ephemeral=True
         )
 
         # Send confirmation to admin who assigned it
         await self.original_interaction.followup.send(
             f"<:Accepted:1426930333789585509> {self.user.mention} chose NO prefix: **{self.callsign}**\n"
-            f"🏷️ Nickname updated to: `{new_nickname}`\n"
-            f"💡 Callsign synced to database and Google Sheets!",
+            f"Nickname updated to: `{new_nickname}`\n"
+            f"Callsign synced to database and Google Sheets!",
             ephemeral=True
         )
 
@@ -3006,13 +2994,13 @@ class HighCommandPrefixChoice(discord.ui.View):
             try:
                 # Edit the original message
                 await self.message.edit(
-                    content=f"⏰ {self.user.mention} - Callsign assignment timed out (no response after 5 minutes).",
+                    content=f"{self.user.mention} - Callsign assignment timed out (no response after 5 minutes).",
                     view=self
                 )
 
                 # Notify admin
                 await self.original_interaction.followup.send(
-                    f"⏰ Callsign assignment for {self.user.mention} timed out.",
+                    f"Callsign assignment for {self.user.mention} timed out.",
                     ephemeral=True
                 )
             except Exception as e:
@@ -3051,7 +3039,7 @@ class BulkAssignView(discord.ui.View):
         member = user_data['member']
 
         embed = discord.Embed(
-            title=f"📋 Bulk Callsign Assignment ({self.current_index + 1}/{len(self.users_data)})",
+            title=f"Bulk Callsign Assignment ({self.current_index + 1}/{len(self.users_data)})",
             description=f"Assign a callsign to {member.mention}",
             color=discord.Color.blue()
         )
@@ -3075,7 +3063,7 @@ class BulkAssignView(discord.ui.View):
         )
 
         embed.add_field(
-            name="📊 Progress",
+            name="Progress",
             value=f"Assigned: {self.assigned_count} | NIL: {self.nil_count} | Skipped: {self.skipped_count}",
             inline=False
         )
@@ -3106,7 +3094,7 @@ class BulkAssignView(discord.ui.View):
 
         if self.assigned_count > 0 or self.nil_count > 0:
             embed.add_field(
-                name="📝 Next Steps",
+                name="Next Steps",
                 value="Run `/callsign sync` to update Google Sheets",
                 inline=False
             )
@@ -3126,7 +3114,7 @@ class BulkAssignView(discord.ui.View):
         modal = BulkAssignModal(self, user_data)
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="NIL (###)", style=discord.ButtonStyle.primary, emoji="🚫")
+    @discord.ui.button(label="###", style=discord.ButtonStyle.primary, emoji="🚫")
     async def nil_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Set callsign to ### (NIL/default)"""
         await interaction.response.defer()
@@ -3177,7 +3165,7 @@ class BulkAssignView(discord.ui.View):
             self.current_index += 1
 
             await interaction.followup.send(
-                f"🚫 Set {member.mention} to NIL ({user_data['fenz_prefix']}-###)",
+                f"Set {member.mention} to ###, ({user_data['fenz_prefix']}-###)",
                 ephemeral=True
             )
 
