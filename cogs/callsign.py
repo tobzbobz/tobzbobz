@@ -159,161 +159,141 @@ def validate_nickname(nickname: str) -> bool:
     return True
 
 
-# REPLACE the format_nickname function (around line 170-240)
 def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_username: str,
                     has_fenz_high_command: bool = False, has_hhstj_high_command: bool = False) -> str:
     """
-    Format nickname in standard format
+    Format nickname in standard format with strong fallback chain
     Priority: If HHStJ high command WITHOUT FENZ high command, format as:
     {HHStJ prefix} | {FENZ}-{callsign} | {Roblox username}
 
     Otherwise: {FENZ prefix}-{callsign} | {HHStJ prefix} | {Roblox username}
 
-    IMPORTANT: Handles special cases like ### and BLANK to avoid trailing hyphens
+    GUARANTEED to return a valid nickname under 32 characters
     """
+
+    # Helper function to build and validate
+    def try_format(parts: list) -> str:
+        """Try to format parts, return None if invalid"""
+        if not parts:
+            return None
+        result = " | ".join(parts)
+        if validate_nickname(result) and len(result) <= 32:
+            return result
+        return None
+
     nickname_parts = []
 
-    # Check if HHStJ high command takes priority (has HHStJ HC but NOT FENZ HC)
+    # Determine priority
     hhstj_priority = has_hhstj_high_command and not has_fenz_high_command
 
-    # Special handling for ### and BLANK callsigns
+    # === ATTEMPT 1: Full nickname with all components ===
     if callsign in ["###", "BLANK"]:
+        # Special handling for ### and BLANK
         if hhstj_priority and hhstj_prefix:
-            # HHStJ priority format
-            nickname_parts.append(hhstj_prefix)
-
-            # For ### or BLANK, show prefix-callsign if prefix exists
-            if fenz_prefix and fenz_prefix != "":
-                if callsign == "BLANK":
-                    nickname_parts.append(fenz_prefix)  # Just prefix, no hyphen
-                else:  # ###
-                    nickname_parts.append(f"{fenz_prefix}-###")
-
-            if roblox_username:
-                nickname_parts.append(roblox_username)
+            if fenz_prefix and callsign == "BLANK":
+                nickname_parts = [hhstj_prefix, fenz_prefix, roblox_username]
+            elif fenz_prefix and callsign == "###":
+                nickname_parts = [hhstj_prefix, f"{fenz_prefix}-###", roblox_username]
+            else:
+                nickname_parts = [hhstj_prefix, roblox_username]
         else:
-            # Standard format
-            if fenz_prefix and fenz_prefix != "":
-                if callsign == "BLANK":
-                    nickname_parts.append(fenz_prefix)  # Just prefix for BLANK
-                else:  # ###
-                    nickname_parts.append(f"{fenz_prefix}-###")
-            elif callsign == "###":
-                nickname_parts.append("###")  # Show ### even without prefix
+            if fenz_prefix and callsign == "BLANK":
+                nickname_parts = [fenz_prefix]
+            elif fenz_prefix and callsign == "###":
+                nickname_parts = [f"{fenz_prefix}-###"]
+            else:
+                nickname_parts = ["###"]
 
-            # Add HHStJ prefix if available (only if it doesn't already contain a dash)
             if hhstj_prefix and "-" not in hhstj_prefix:
                 nickname_parts.append(hhstj_prefix)
-
             if roblox_username:
                 nickname_parts.append(roblox_username)
     else:
-        # Normal callsign formatting
+        # Normal callsign
         if hhstj_priority and hhstj_prefix:
-            # HHStJ high command priority format
-            nickname_parts.append(hhstj_prefix)
-
-            # Add FENZ callsign
-            if fenz_prefix and fenz_prefix != "":
+            nickname_parts = [hhstj_prefix]
+            if fenz_prefix:
                 nickname_parts.append(f"{fenz_prefix}-{callsign}")
-            elif callsign:
+            else:
                 nickname_parts.append(callsign)
-
-            # Add Roblox username
             if roblox_username:
                 nickname_parts.append(roblox_username)
         else:
-            # Standard format: FENZ first
-            # Add FENZ callsign
-            if fenz_prefix and fenz_prefix != "":
+            if fenz_prefix:
                 nickname_parts.append(f"{fenz_prefix}-{callsign}")
-            elif callsign:
+            else:
                 nickname_parts.append(callsign)
 
-            # Add HHStJ prefix if available (only if it doesn't already contain a dash)
             if hhstj_prefix and "-" not in hhstj_prefix:
                 nickname_parts.append(hhstj_prefix)
-
-            # Add Roblox username
             if roblox_username:
                 nickname_parts.append(roblox_username)
 
-    # Standard format with pipes
-    new_nickname = " | ".join(nickname_parts)
+    # Try full nickname
+    result = try_format(nickname_parts)
+    if result:
+        return result
 
-    # Validate before returning
-    if not validate_nickname(new_nickname):
-        # Fallback: try without one component
-        if len(nickname_parts) > 2:
-            # Remove middle component (usually HHStJ or prefix)
-            fallback_parts = [nickname_parts[0], nickname_parts[-1]]
-            new_nickname = " | ".join(fallback_parts)
+    # === ATTEMPT 2: Remove middle component (usually HHStJ or less important prefix) ===
+    if len(nickname_parts) >= 3:
+        fallback_parts = [nickname_parts[0], nickname_parts[-1]]
+        result = try_format(fallback_parts)
+        if result:
+            return result
 
-            if validate_nickname(new_nickname) and len(new_nickname) <= 32:
-                return new_nickname
-
-        # Last resort: just roblox username or first part
-        if roblox_username and validate_nickname(roblox_username):
-            return roblox_username
-        elif nickname_parts and validate_nickname(nickname_parts[0]):
-            return nickname_parts[0]
-
-        # Absolute fallback
-        return "Invalid Nickname"
-
-    # Check length (Discord max is 32 characters)
-    if len(new_nickname) <= 32:
-        return new_nickname
-
-    # Fallback 1: Remove one prefix based on priority
-    if hhstj_priority:
-        # Remove FENZ prefix if too long
-        fallback_parts = [hhstj_prefix] if hhstj_prefix else []
-        if callsign and callsign not in ["###", "BLANK"]:
-            fallback_parts.append(callsign)
-        elif callsign == "###":
-            fallback_parts.append("###")
-        if roblox_username:
-            fallback_parts.append(roblox_username)
-    else:
-        # Remove HHStJ prefix if too long (standard behavior)
-        fallback_parts = []
-        if fenz_prefix and callsign not in ["###", "BLANK"]:
-            fallback_parts.append(f"{fenz_prefix}-{callsign}")
-        elif fenz_prefix and callsign == "###":
-            fallback_parts.append(f"{fenz_prefix}-###")
-        elif callsign and callsign == "###":
-            fallback_parts.append("###")
-        elif callsign:
-            fallback_parts.append(callsign)
-        if roblox_username:
-            fallback_parts.append(roblox_username)
-
-    fallback_nickname = " | ".join(fallback_parts)
-
-    if validate_nickname(fallback_nickname) and len(fallback_nickname) <= 32:
-        return fallback_nickname
-
-    # Fallback 2: Just primary callsign
+    # === ATTEMPT 3: Primary identifier only ===
     if hhstj_priority and hhstj_prefix:
-        if validate_nickname(hhstj_prefix):
-            return hhstj_prefix
-    elif fenz_prefix and callsign not in ["###", "BLANK"]:
-        final = f"{fenz_prefix}-{callsign}"
-        if validate_nickname(final):
-            return final
-    elif callsign:
-        if validate_nickname(callsign):
-            return callsign
+        result = try_format([hhstj_prefix])
+        if result:
+            return result
 
-    # Last resort: truncate and validate
-    truncated = new_nickname[:32]
-    if validate_nickname(truncated):
-        return truncated
+    if fenz_prefix and callsign and callsign not in ["###", "BLANK"]:
+        result = try_format([f"{fenz_prefix}-{callsign}"])
+        if result:
+            return result
 
-    # Give up and return roblox username
-    return roblox_username if roblox_username else "Error"
+    if fenz_prefix and callsign == "###":
+        result = try_format([f"{fenz_prefix}-###"])
+        if result:
+            return result
 
+    if callsign and callsign not in ["BLANK"]:
+        result = try_format([callsign])
+        if result:
+            return result
+
+    # === ATTEMPT 4: Just roblox username ===
+    if roblox_username:
+        result = try_format([roblox_username])
+        if result:
+            return result
+
+    # === ATTEMPT 5: Truncate roblox username if too long ===
+    if roblox_username and len(roblox_username) > 32:
+        truncated = roblox_username[:32]
+        if validate_nickname(truncated):
+            return truncated
+        # Try removing trailing characters until valid
+        for i in range(31, 0, -1):
+            truncated = roblox_username[:i]
+            if validate_nickname(truncated):
+                return truncated
+
+    # === ABSOLUTE LAST RESORT ===
+    # This should theoretically never happen, but prevents crashes
+    fallback_options = [
+        fenz_prefix if fenz_prefix else None,
+        hhstj_prefix if hhstj_prefix else None,
+        callsign if callsign and callsign != "BLANK" else None,
+        "User"  # Ultimate fallback
+    ]
+
+    for option in fallback_options:
+        if option and validate_nickname(option) and len(option) <= 32:
+            return option
+
+    # If literally everything fails (should be impossible)
+    return "User"
 
 async def check_callsign_exists(callsign: str, fenz_prefix: str = None) -> dict:
     """Check if a callsign exists in the database with the same prefix"""
@@ -439,7 +419,7 @@ async def add_callsign_to_database(callsign: str, discord_user_id: int, discord_
                 approved_by_name,
                 json.dumps(history)
             )
-            
+
 class CallsignCog(commands.Cog):
     callsign_group = app_commands.Group(name="callsign", description="Callsign management commands")
 
@@ -2320,6 +2300,15 @@ class CallsignCog(commands.Cog):
                 fenz_prefix, callsign, hhstj_prefix, roblox_username,
                 is_fenz_high_command, is_hhstj_high_command
             )
+
+            await member.edit(nick=new_nickname)
+        except discord.HTTPException as e:
+            if e.code == 50035:  # Invalid Form Body
+                print(f"⚠️ Nickname too long for {member.id}: '{new_nickname}' ({len(new_nickname)} chars)")
+                # Try again with just roblox username
+                await member.edit(nick=roblox_username[:32])
+            else:
+                raise
 
             try:
                 await interaction.user.edit(nick=new_nickname)
