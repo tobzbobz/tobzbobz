@@ -951,6 +951,7 @@ class ShiftManagementCog(commands.Cog):
                         modified_quota = max_quota * 0.5
                         completed = (active_seconds / modified_quota >= 1) if modified_quota > 0 else False
                     else:
+                        bypass_type = None  # Add this line
                         completed = (active_seconds / max_quota >= 1) if max_quota > 0 else False
 
                 results[user_id] = {
