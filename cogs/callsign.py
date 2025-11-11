@@ -2966,7 +2966,7 @@ class CallsignCog(commands.Cog):
         try:
             # Step 1: Detect database mismatches
             status_embed = discord.Embed(
-                title="🔍 Scanning for database issues...",
+                title="<a:Load:1430912797469970444> Scanning for database issues...",
                 description="Checking for outdated or incomplete data...",
                 color=discord.Color.blue()
             )
@@ -3050,7 +3050,7 @@ class CallsignCog(commands.Cog):
 
             # Get all callsigns from database
             async with db.pool.acquire() as conn:
-                db_callsigns = await conn.fetch('SELECT discord_user_id FROM callsigns')
+                db_callsigns = await conn.fetch('SELECT * FROM callsigns')
 
             db_user_ids = {record['discord_user_id'] for record in db_callsigns}
 
@@ -3663,6 +3663,7 @@ class BulkAssignView(discord.ui.View):
             await self.interaction.followup.send("No users to assign!", ephemeral=True)
             return
 
+        # Send initial message - this will be edited for all subsequent users
         await self.show_current_user()
 
     async def show_current_user(self):
@@ -3708,10 +3709,12 @@ class BulkAssignView(discord.ui.View):
         embed.set_footer(
             text="Click 'Assign' to enter a callsign, 'NIL' to set Not Assigned, 'Skip' to skip, or 'Finish' to end")
 
-        if self.current_index == 0:
-            await self.interaction.followup.send(embed=embed, view=self, ephemeral=True)
-        else:
+        # Always edit the original response (works for all users after the first followup)
+        try:
             await self.interaction.edit_original_response(embed=embed, view=self)
+        except discord.NotFound:
+            # If original response doesn't exist yet (shouldn't happen), send as followup
+            await self.interaction.followup.send(embed=embed, view=self, ephemeral=True)
 
     async def finish(self):
         """Finish the bulk assignment process"""

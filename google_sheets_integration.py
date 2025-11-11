@@ -952,5 +952,48 @@ class GoogleSheetsManager:
             traceback.print_exc()
             return []
 
+    async def remove_callsign_from_sheets(self, discord_user_id: int):
+        """
+        Remove a callsign from Google Sheets by Discord user ID
+        Searches both Non-Command and Command sheets
+        """
+        try:
+            if not self.client:
+                auth_success = self.authenticate()
+                if not auth_success:
+                    return False
+
+            # Get both worksheets
+            non_command_sheet = self.get_worksheet("Non-Command")
+            command_sheet = self.get_worksheet("Command")
+
+            if not non_command_sheet or not command_sheet:
+                print("<:Denied:1426930694633816248> Could not access worksheets")
+                return False
+
+            # Search for user in Non-Command sheet (Column G = Discord ID)
+            non_command_row = self.find_row_by_discord_id(non_command_sheet, str(discord_user_id), 'G')
+            if non_command_row:
+                self.delete_row(non_command_sheet, non_command_row)
+                print(f"<:Accepted:1426930333789585509> Removed Discord ID {discord_user_id} from Non-Command sheet")
+                return True
+
+            # Search for user in Command sheet (Column E = Discord ID)
+            command_row = self.find_row_by_discord_id(command_sheet, str(discord_user_id), 'E')
+            if command_row:
+                self.delete_row(command_sheet, command_row)
+                print(f"<:Accepted:1426930333789585509> Removed Discord ID {discord_user_id} from Command sheet")
+                return True
+
+            # User not found in either sheet
+            print(f"<:Warn:1437771973970104471> Discord ID {discord_user_id} not found in sheets")
+            return False
+
+        except Exception as e:
+            print(f"<:Denied:1426930694633816248> Error removing from Google Sheets: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
 # Create global instance
 sheets_manager = GoogleSheetsManager()
