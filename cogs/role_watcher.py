@@ -279,7 +279,7 @@ class RoleWatcherCog(commands.Cog):
                 except Exception as e:
                     print(f"<:Warn:1437771973970104471> Failed to log role grant to database: {e}")
 
-            await channel.send(content=ping_content, embed=embed)
+            await channel.send(content=f"||{ping_content}||", embed=embed)
 
         except Exception as e:
             print(f"<:Denied:1426930694633816248> Failed to send role alert: {e}")

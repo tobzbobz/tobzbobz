@@ -83,7 +83,7 @@ class InactiveTicketCog(commands.Cog):
             embed.set_image(url='https://message.style/cdn/images/465c6cd9daa50d83686fc37e82c6e223ea8f4f5330365012db441087fc1a69d6.png')
 
             # Send the embed in the current channel
-            await interaction.channel.send(content=f'{user.mention}', embed=embed)
+            await interaction.channel.send(content=f'||{user.mention}||', embed=embed)
 
             # Confirm to user
             success_embed = discord.Embed(

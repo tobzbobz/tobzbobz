@@ -384,7 +384,7 @@ class WeeklyShiftManager:
                     if channel:
                         try:
                             await channel.send(
-                                content=f"{ping_mentions}\n**Weekly Shift Report**",
+                                content=f"||{ping_mentions}||\n**Weekly Shift Report**",
                                 embeds=embeds
                             )
                             print(f"Sent weekly report to channel {channel_id} with {len(embeds)} embeds")

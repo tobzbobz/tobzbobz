@@ -68,7 +68,7 @@ class VCRequestCog(commands.Cog):
 
             # Send in CURRENT channel with ping
             request_message = await interaction.followup.send(
-                content=f"{user.mention}",
+                content=f"||{user.mention}||",
                 embed=embed
             )
 
@@ -273,7 +273,7 @@ class VCRequestCog(commands.Cog):
 
             result_embed.add_field(
                 name="User",
-                value=user.mention if user else f"<@{tracking['user_id']}>",
+                value=user.mention if user else f"||<@{tracking['user_id']}>||",
                 inline=True
             )
 
@@ -297,7 +297,7 @@ class VCRequestCog(commands.Cog):
 
             result_embed.add_field(
                 name="Requested by",
-                value=requester.mention if requester else f"<@{tracking['requester_id']}>",
+                value=requester.mention if requester else f"||<@{tracking['requester_id']}>||",
                 inline=False
             )
 
