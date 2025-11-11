@@ -103,7 +103,7 @@ class GoogleSheetsManager:
             service_account_info = os.getenv('GOOGLE_SERVICE_ACCOUNT_JSON')
 
             if not service_account_info:
-                print("❌ GOOGLE_SERVICE_ACCOUNT_JSON environment variable not set")
+                print("<:Denied:1426930694633816248> GOOGLE_SERVICE_ACCOUNT_JSON environment variable not set")
                 return False
 
             # Parse the JSON string
@@ -117,13 +117,13 @@ class GoogleSheetsManager:
 
             self.client = gspread.authorize(creds)
             self.spreadsheet = self.client.open_by_key(SPREADSHEET_ID)
-            print("✅ Google Sheets authenticated successfully")
+            print("<:Accepted:1426930333789585509> Google Sheets authenticated successfully")
             return True
         except json.JSONDecodeError as e:
-            print(f"❌ Invalid JSON in GOOGLE_SERVICE_ACCOUNT_JSON: {e}")
+            print(f"<:Denied:1426930694633816248> Invalid JSON in GOOGLE_SERVICE_ACCOUNT_JSON: {e}")
             return False
         except Exception as e:
-            print(f"❌ Google Sheets authentication failed: {e}")
+            print(f"<:Denied:1426930694633816248> Google Sheets authentication failed: {e}")
             return False
 
     def get_worksheet(self, sheet_name: str):
@@ -131,7 +131,7 @@ class GoogleSheetsManager:
         try:
             return self.spreadsheet.worksheet(sheet_name)
         except Exception as e:
-            print(f"❌ Error getting worksheet '{sheet_name}': {e}")
+            print(f"<:Denied:1426930694633816248> Error getting worksheet '{sheet_name}': {e}")
             return None
 
     def find_first_empty_row(self, worksheet) -> int:
@@ -148,7 +148,7 @@ class GoogleSheetsManager:
             # If no empty row found, return next row after last
             return len(all_values) + 1
         except Exception as e:
-            print(f"❌ Error finding empty row: {e}")
+            print(f"<:Denied:1426930694633816248> Error finding empty row: {e}")
             return 2  # Default to row 2 if error
 
     def find_row_by_discord_id(self, worksheet, discord_id: str, column: str) -> int:
@@ -157,7 +157,7 @@ class GoogleSheetsManager:
             cell = worksheet.find(str(discord_id), in_column=self._column_to_number(column))
             return cell.row if cell else None
         except Exception as e:
-            print(f"❌ Error finding Discord ID: {e}")
+            print(f"<:Denied:1426930694633816248> Error finding Discord ID: {e}")
             return None
 
     def _column_to_number(self, column: str) -> int:
@@ -172,9 +172,9 @@ class GoogleSheetsManager:
         """Delete a specific row"""
         try:
             worksheet.delete_rows(row_number)
-            print(f"✅ Deleted row {row_number} from {worksheet.title}")
+            print(f"<:Accepted:1426930333789585509> Deleted row {row_number} from {worksheet.title}")
         except Exception as e:
-            print(f"❌ Error deleting row: {e}")
+            print(f"<:Denied:1426930694633816248> Error deleting row: {e}")
 
     def get_existing_data_validation(self, worksheet, row: int, column: int):
         """
@@ -226,7 +226,7 @@ class GoogleSheetsManager:
             return None
 
         except Exception as e:
-            print(f"⚠️ Could not get existing data validation: {e}")
+            print(f"<:Warn:1437771973970104471> Could not get existing data validation: {e}")
             return None
 
     def copy_data_validation_to_cell(self, worksheet, source_row: int, target_row: int, column: int):
@@ -260,11 +260,11 @@ class GoogleSheetsManager:
             }
 
             self.spreadsheet.batch_update({"requests": [copy_request]})
-            print(f"✅ Copied validation to {column_letter}{target_row}")
+            print(f"<:Accepted:1426930333789585509> Copied validation to {column_letter}{target_row}")
             return True
 
         except Exception as e:
-            print(f"⚠️ Could not copy data validation: {e}")
+            print(f"<:Warn:1437771973970104471> Could not copy data validation: {e}")
             return False
 
     def determine_rank_type(self, member_roles) -> tuple:
@@ -339,7 +339,7 @@ class GoogleSheetsManager:
             rank_type, rank_data = self.determine_rank_type(member.roles)
 
             if not rank_type:
-                print(f"⚠️ No FENZ rank found for {member.display_name}")
+                print(f"<:Warn:1437771973970104471> No FENZ rank found for {member.display_name}")
                 return False
 
             # Get both worksheets
@@ -347,7 +347,7 @@ class GoogleSheetsManager:
             command_sheet = self.get_worksheet("Command")
 
             if not non_command_sheet or not command_sheet:
-                print("❌ Could not access worksheets")
+                print("<:Denied:1426930694633816248> Could not access worksheets")
                 return False
 
             # Search for existing entry in both sheets (Column G for Non-Command, Column E for Command)
@@ -402,7 +402,7 @@ class GoogleSheetsManager:
                 # Column I: Qualifications dropdown
                 self.copy_data_validation_to_cell(target_sheet, source_row=2, target_row=empty_row, column=9)
 
-                print(f"✅ Added Non-Command callsign {full_callsign} to row {empty_row}")
+                print(f"<:Accepted:1426930333789585509> Added Non-Command callsign {full_callsign} to row {empty_row}")
 
             else:  # command
                 # Command: A, B, C, D, E, F
@@ -443,12 +443,12 @@ class GoogleSheetsManager:
                 # Column C: Qualifications dropdown
                 self.copy_data_validation_to_cell(target_sheet, source_row=2, target_row=empty_row, column=3)
 
-                print(f"✅ Added Command callsign {full_callsign} to row {empty_row}")
+                print(f"<:Accepted:1426930333789585509> Added Command callsign {full_callsign} to row {empty_row}")
 
             return True
 
         except Exception as e:
-            print(f"❌ Error adding to Google Sheets: {e}")
+            print(f"<:Denied:1426930694633816248> Error adding to Google Sheets: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -481,10 +481,10 @@ class GoogleSheetsManager:
             }
 
             self.spreadsheet.batch_update({'requests': [sort_request]})
-            print(f"✅ Sorted {worksheet.title}")
+            print(f"<:Accepted:1426930333789585509> Sorted {worksheet.title}")
             return True
         except Exception as e:
-            print(f"❌ Error sorting worksheet: {e}")
+            print(f"<:Denied:1426930694633816248> Error sorting worksheet: {e}")
             return False
 
     def detect_rank_mismatch(self, member_roles, current_fenz_prefix: str) -> tuple:
@@ -522,7 +522,7 @@ class GoogleSheetsManager:
             command_sheet = self.get_worksheet("Command")
 
             if not non_command_sheet or not command_sheet:
-                print("❌ Could not access worksheets")
+                print("<:Denied:1426930694633816248> Could not access worksheets")
                 return False
 
             # Get existing data from sheets
@@ -555,7 +555,7 @@ class GoogleSheetsManager:
                 discord_id = str(data['discord_user_id'])
                 is_command = data.get('is_command', False)
 
-                # ✅ Skip RFF-### from being synced to sheets
+                # <:Accepted:1426930333789585509> Skip RFF-### from being synced to sheets
                 if data['callsign'] == '###' and fenz_prefix == 'RFF':
                     # If it exists in sheets, mark for deletion
                     if discord_id in existing_nc_map:
@@ -570,14 +570,19 @@ class GoogleSheetsManager:
                     cmd_deletes.discard(discord_id)
                     nc_deletes.discard(discord_id)
 
-                    full_callsign = f"{fenz_prefix}-{data['callsign']}" if fenz_prefix else data['callsign']
+                    # Handle "Not Assigned" callsigns - show only prefix
+                    if data['callsign'] == "Not Assigned":
+                        full_callsign = fenz_prefix if fenz_prefix else "Not Assigned"
+                    else:
+                        full_callsign = f"{fenz_prefix}-{data['callsign']}" if fenz_prefix else data['callsign']
+
                     rank_priority = COMMAND_RANK_PRIORITY.get(fenz_prefix, 99)
 
                     new_row = [
                         full_callsign,
                         data['roblox_username'],
-                        qualifications or "No Additional Qualifications",  # ✅ Use passed value
-                        strikes or "Good Boy",  # ✅ Use passed value
+                        qualifications or "No Additional Qualifications",  # <:Accepted:1426930333789585509> Use passed value
+                        strikes or "Good Boy",  # <:Accepted:1426930333789585509> Use passed value
                         discord_id,
                         rank_priority
                     ]
@@ -587,7 +592,7 @@ class GoogleSheetsManager:
                         while len(existing) < 6:
                             existing.append('')
 
-                        # ✅ Check if ANY field changed (including strikes/qualifications)
+                        # <:Accepted:1426930333789585509> Check if ANY field changed (including strikes/qualifications)
                         if (existing[0] != new_row[0] or
                                 existing[1] != new_row[1] or
                                 existing[2] != new_row[2] or  # Qualifications
@@ -608,7 +613,12 @@ class GoogleSheetsManager:
                     nc_deletes.discard(discord_id)
                     cmd_deletes.discard(discord_id)
 
-                    full_callsign = f"{fenz_prefix}-{data['callsign']}"
+                    # Handle "Not Assigned" callsigns - show only prefix
+                    if data['callsign'] == "Not Assigned":
+                        full_callsign = fenz_prefix  # Just the prefix
+                    else:
+                        full_callsign = f"{fenz_prefix}-{data['callsign']}"
+
                     rank_number = next((num for _, (_, prefix, num) in NON_COMMAND_RANKS.items()
                                         if prefix == fenz_prefix), 3)
 
@@ -618,16 +628,16 @@ class GoogleSheetsManager:
                         data['callsign'],
                         data['roblox_username'],
                         "",  # Column E (empty)
-                        strikes or "Clear",  # ✅ Use passed value
+                        strikes or "Clear",  # <:Accepted:1426930333789585509> Use passed value
                         discord_id,
                         rank_number,
-                        qualifications or "No Additional Qualifications"  # ✅ Use passed value
+                        qualifications or "No Additional Qualifications"  # <:Accepted:1426930333789585509> Use passed value
                     ]
 
                     if discord_id in existing_nc_map:
                         existing = existing_nc_map[discord_id]['data']
 
-                        # ✅ Check if ANY field changed (including strikes/qualifications)
+                        # <:Accepted:1426930333789585509> Check if ANY field changed (including strikes/qualifications)
                         if (existing[0] != new_row[0] or
                                 existing[1] != new_row[1] or
                                 existing[2] != new_row[2] or
@@ -674,11 +684,11 @@ class GoogleSheetsManager:
                 for i in range(0, len(batch_data), chunk_size):
                     chunk = batch_data[i:i + chunk_size]
                     non_command_sheet.batch_update(chunk, value_input_option='RAW')
-                    print(f"✅ Updated {len(chunk)} NC rows")
+                    print(f"<:Accepted:1426930333789585509> Updated {len(chunk)} NC rows")
                     if i + chunk_size < len(batch_data):
                         await asyncio.sleep(1)
 
-                # ✅ Copy validations to updated rows
+                # <:Accepted:1426930333789585509> Copy validations to updated rows
                 updated_rows = [update['row'] for update in nc_updates]
                 self.batch_copy_validations(non_command_sheet, 2, updated_rows, [6, 9])
 
@@ -695,11 +705,11 @@ class GoogleSheetsManager:
                 for i in range(0, len(batch_data), chunk_size):
                     chunk = batch_data[i:i + chunk_size]
                     command_sheet.batch_update(chunk, value_input_option='RAW')
-                    print(f"✅ Updated {len(chunk)} CMD rows")
+                    print(f"<:Accepted:1426930333789585509> Updated {len(chunk)} CMD rows")
                     if i + chunk_size < len(batch_data):
                         await asyncio.sleep(1)
 
-                # ✅ Copy validations to updated rows
+                # <:Accepted:1426930333789585509> Copy validations to updated rows
                 updated_rows = [update['row'] for update in cmd_updates]
                 self.batch_copy_validations(command_sheet, 2, updated_rows, [3, 4])
 
@@ -732,11 +742,11 @@ class GoogleSheetsManager:
                 {'column': 6, 'order': 'ASCENDING'}
             ])
 
-            print(f"✅ Smart update complete!")
+            print(f"<:Accepted:1426930333789585509> Smart update complete!")
             return True
 
         except Exception as e:
-            print(f"❌ Error in smart update: {e}")
+            print(f"<:Denied:1426930694633816248> Error in smart update: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -787,12 +797,12 @@ class GoogleSheetsManager:
             for i in range(0, len(requests), batch_size):
                 batch = requests[i:i + batch_size]
                 self.spreadsheet.batch_update({"requests": batch})
-                print(f"✅ Copied validations (batch {i // batch_size + 1}/{(len(requests) - 1) // batch_size + 1})")
+                print(f"<:Accepted:1426930333789585509> Copied validations (batch {i // batch_size + 1}/{(len(requests) - 1) // batch_size + 1})")
 
             return True
 
         except Exception as e:
-            print(f"⚠️ Could not batch copy data validation: {e}")
+            print(f"<:Warn:1437771973970104471> Could not batch copy data validation: {e}")
             return False
 
     def apply_validations_directly(self, worksheet, rows: range, column: int, validation_values: list):
@@ -827,7 +837,7 @@ class GoogleSheetsManager:
             return True
 
         except Exception as e:
-            print(f"⚠️ Could not apply validation: {e}")
+            print(f"<:Warn:1437771973970104471> Could not apply validation: {e}")
             return False
 
     async def get_all_callsigns(self):
@@ -874,7 +884,7 @@ class GoogleSheetsManager:
             return all_callsigns
 
         except Exception as e:
-            print(f"❌ Error getting callsigns: {e}")
+            print(f"<:Denied:1426930694633816248> Error getting callsigns: {e}")
             return []
 
     async def get_all_callsigns_from_sheets(self):
@@ -937,7 +947,7 @@ class GoogleSheetsManager:
             return all_callsigns
 
         except Exception as e:
-            print(f"❌ Error getting callsigns from sheets: {e}")
+            print(f"<:Denied:1426930694633816248> Error getting callsigns from sheets: {e}")
             import traceback
             traceback.print_exc()
             return []

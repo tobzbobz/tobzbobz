@@ -70,6 +70,89 @@ class LoggingCog(commands.Cog):
         except Exception as e:
             print(f"Failed to send log to channel {channel_id}: {e}")
 
+    async def _format_parameter_value(self, value) -> str:
+        """Format a parameter value for logging display"""
+
+        # Handle None
+        if value is None:
+            return "`None`"
+
+        # Handle booleans
+        if isinstance(value, bool):
+            return "`True`" if value else "`False`"
+
+        # Handle Discord objects with mentions
+        if isinstance(value, discord.Member):
+            return f"{value.mention} (`{value.name}` - `{value.id}`)"
+
+        if isinstance(value, discord.User):
+            return f"{value.mention} (`{value.name}` - `{value.id}`)"
+
+        if isinstance(value, discord.Role):
+            return f"{value.mention} (`{value.name}` - `{value.id}`)"
+
+        if isinstance(value, discord.TextChannel):
+            return f"{value.mention} (`{value.name}` - `{value.id}`)"
+
+        if isinstance(value, discord.VoiceChannel):
+            return f"{value.mention} (`{value.name}` - `{value.id}`)"
+
+        if isinstance(value, discord.CategoryChannel):
+            return f"`{value.name}` (Category - `{value.id}`)"
+
+        if isinstance(value, discord.Thread):
+            return f"{value.mention} (`{value.name}` - `{value.id}`)"
+
+        # Handle datetime objects
+        if isinstance(value, datetime):
+            return f"`{value.strftime('%Y-%m-%d %H:%M:%S UTC')}`"
+
+        # Handle lists/tuples
+        if isinstance(value, (list, tuple)):
+            if len(value) == 0:
+                return "`[]`"
+            elif len(value) <= 3:
+                # Format each item
+                items = [await self._format_parameter_value(item) for item in value]
+                return f"[{', '.join(items)}]"
+            else:
+                # Show first 3 and count
+                items = [await self._format_parameter_value(item) for item in value[:3]]
+                return f"[{', '.join(items)}, ... +{len(value) - 3} more]"
+
+        # Handle enums
+        if hasattr(value, 'name') and hasattr(value, 'value'):
+            return f"`{value.name}` ({value.value})"
+
+        # Handle strings (check if it looks like a mention or ID)
+        if isinstance(value, str):
+            # Check if it's a user/channel mention format
+            if value.startswith('<@') and value.endswith('>'):
+                return f"{value} (mention)"
+            elif value.startswith('<#') and value.endswith('>'):
+                return f"{value} (channel mention)"
+            # Check if it's a snowflake ID
+            elif value.isdigit() and len(value) >= 17:
+                return f"`{value}` (ID)"
+            # Regular string
+            else:
+                # Escape markdown in strings
+                escaped = value.replace('`', '\\`').replace('*', '\\*').replace('_', '\\_')
+                return f"`{escaped}`"
+
+        # Handle numbers
+        if isinstance(value, (int, float)):
+            return f"`{value}`"
+
+        # Default: convert to string and wrap in backticks
+        try:
+            value_str = str(value)
+            # Escape markdown
+            escaped = value_str.replace('`', '\\`').replace('*', '\\*').replace('_', '\\_')
+            return f"`{escaped}`"
+        except:
+            return "`<unprintable>`"
+
     # ==================== COMMAND LOGGING ====================
 
     @commands.Cog.listener()
@@ -78,8 +161,13 @@ class LoggingCog(commands.Cog):
         if not LOG_SLASH_COMMANDS or not COMMAND_LOG_CHANNEL_ID:
             return
 
+        param_count = 0
+        if interaction.namespace:
+            param_count = len([v for k, v in interaction.namespace.__dict__.items()
+                               if v is not None and not k.startswith('_')])
+
         embed = discord.Embed(
-            title="📝 Slash Command Used",
+            title=f"Slash Command Used{f' ({param_count} parameters)' if param_count > 0 else ''}",
             color=discord.Color(0xadd8e6),
             timestamp=discord.utils.utcnow()
         )
@@ -128,18 +216,33 @@ class LoggingCog(commands.Cog):
             params = []
             for name, value in interaction.namespace.__dict__.items():
                 if value is not None and not name.startswith('_'):
-                    # Truncate long values
-                    value_str = str(value)
-                    if len(value_str) > 100:
-                        value_str = value_str[:97] + "..."
-                    params.append(f"**{name}:** `{value_str}`")
+                    # Format the value based on its type
+                    formatted_value = await self._format_parameter_value(value)
+
+                    # Truncate if too long
+                    if len(formatted_value) > 200:
+                        formatted_value = formatted_value[:197] + "..."
+
+                    params.append(f"**{name}:** {formatted_value}")
 
             if params:
-                embed.add_field(
-                    name="Parameters",
-                    value="\n".join(params),
-                    inline=False
-                )
+                # Split into multiple fields if there are many parameters
+                if len(params) <= 5:
+                    embed.add_field(
+                        name="Parameters",
+                        value="\n".join(params),
+                        inline=False
+                    )
+                else:
+                    # Split into chunks of 5
+                    for i in range(0, len(params), 5):
+                        chunk = params[i:i + 5]
+                        field_name = "Parameters" if i == 0 else "Parameters (continued)"
+                        embed.add_field(
+                            name=field_name,
+                            value="\n".join(chunk),
+                            inline=False
+                        )
 
         await self.send_log(COMMAND_LOG_CHANNEL_ID, embed)
 
@@ -150,7 +253,7 @@ class LoggingCog(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="📝 Prefix Command Used",
+            title="Prefix Command Used",
             color=discord.Color(0xadd8e6),
             timestamp=discord.utils.utcnow()
         )
@@ -189,16 +292,39 @@ class LoggingCog(commands.Cog):
                 inline=True
             )
 
-        # Command arguments
-        if ctx.args[2:]:  # Skip self and ctx
-            args_str = ' '.join(str(arg) for arg in ctx.args[2:])
-            if len(args_str) > 1024:
-                args_str = args_str[:1021] + "..."
-            embed.add_field(
-                name="Arguments",
-                value=f"`{args_str}`",
-                inline=False
-            )
+        # Command arguments - combine positional args and kwargs
+        all_args = []
+
+        # Positional arguments (skip self and ctx)
+        if ctx.args[2:]:
+            for i, arg in enumerate(ctx.args[2:]):
+                formatted_arg = await self._format_parameter_value(arg)
+                all_args.append(f"**Arg {i + 1}:** {formatted_arg}")
+
+        # Keyword arguments
+        if ctx.kwargs:
+            for name, value in ctx.kwargs.items():
+                formatted_value = await self._format_parameter_value(value)
+                all_args.append(f"**{name}:** {formatted_value}")
+
+        if all_args:
+            # Split into multiple fields if needed
+            if len(all_args) <= 5:
+                embed.add_field(
+                    name="Arguments",
+                    value="\n".join(all_args),
+                    inline=False
+                )
+            else:
+                # Split into chunks of 5
+                for i in range(0, len(all_args), 5):
+                    chunk = all_args[i:i + 5]
+                    field_name = "Arguments" if i == 0 else "Arguments (continued)"
+                    embed.add_field(
+                        name=field_name,
+                        value="\n".join(chunk),
+                        inline=False
+                    )
 
         # Message link
         if ctx.message:
@@ -263,14 +389,14 @@ class LoggingCog(commands.Cog):
         # Log to channel
         if channel_id:
             embed = discord.Embed(
-                title=f"{error_category} ❌",
+                title=f"{error_category} <:Denied:1426930694633816248>",
                 color=self._get_error_color(error_category),
                 timestamp=discord.utils.utcnow()
             )
 
             # Add a category field to make it clear
             embed.add_field(
-                name="🏷️ Category",
+                name="Category",
                 value=f"`{error_category}`",
                 inline=True
             )
@@ -302,6 +428,26 @@ class LoggingCog(commands.Cog):
                     value=f"{interaction.guild.name}\n`{interaction.guild.id}`",
                     inline=True
                 )
+
+            # Command parameters (if any) - helpful for debugging
+            if interaction.namespace:
+                params = []
+                for name, value in interaction.namespace.__dict__.items():
+                    if value is not None and not name.startswith('_'):
+                        formatted_value = await self._format_parameter_value(value)
+                        if len(formatted_value) > 100:
+                            formatted_value = formatted_value[:97] + "..."
+                        params.append(f"**{name}:** {formatted_value}")
+
+                if params:
+                    params_str = "\n".join(params[:5])  # Limit to 5 params to avoid clutter
+                    if len(params) > 5:
+                        params_str += f"\n*... and {len(params) - 5} more*"
+                    embed.add_field(
+                        name="Parameters Used",
+                        value=params_str,
+                        inline=False
+                    )
 
             # Error info
             embed.add_field(
@@ -335,7 +481,7 @@ class LoggingCog(commands.Cog):
 
         # Inform the user
         error_embed = discord.Embed(
-            description="An error occurred while executing this command. It has been logged ❌",
+            description="An error occurred while executing this command. It has been logged <:Denied:1426930694633816248>",
             color=discord.Color(0xf24d4d)
         )
 
@@ -406,7 +552,7 @@ class LoggingCog(commands.Cog):
         # Log to channel
         if channel_id:
             embed = discord.Embed(
-                title="Prefix Command Error ❌",
+                title="Prefix Command Error <:Denied:1426930694633816248>",
                 color=discord.Color(0xf24d4d),
                 timestamp=discord.utils.utcnow()
             )
@@ -480,7 +626,7 @@ class LoggingCog(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="👋 Member Joined",
+            title="Member Joined",
             color=discord.Color(0x2ecc71),
             timestamp=discord.utils.utcnow()
         )
@@ -509,7 +655,7 @@ class LoggingCog(commands.Cog):
         account_age = (discord.utils.utcnow() - member.created_at).days
         if account_age < 7:
             embed.add_field(
-                name="⚠️ Warning",
+                name="<:Warn:1437771973970104471> Warning",
                 value=f"Account is only {account_age} day(s) old",
                 inline=False
             )
@@ -523,7 +669,7 @@ class LoggingCog(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="👋 Member Left",
+            title="Member Left",
             color=discord.Color(0xffa756),
             timestamp=discord.utils.utcnow()
         )
@@ -574,7 +720,7 @@ class LoggingCog(commands.Cog):
                 return
 
             embed = discord.Embed(
-                title="✏️ Nickname Changed",
+                title="Nickname Changed",
                 color=discord.Color(0xadd8e6),
                 timestamp=discord.utils.utcnow()
             )
@@ -625,7 +771,7 @@ class LoggingCog(commands.Cog):
 
             if added_roles or removed_roles:
                 embed = discord.Embed(
-                    title="🎭 Roles Updated",
+                    title="Roles Updated",
                     color=discord.Color(0xcbc3e3),
                     timestamp=discord.utils.utcnow()
                 )
@@ -643,7 +789,7 @@ class LoggingCog(commands.Cog):
                     if len(roles_str) > 1024:
                         roles_str = roles_str[:1021] + "..."
                     embed.add_field(
-                        name="Roles Added ✅",
+                        name="Roles Added <:Accepted:1426930333789585509>",
                         value=roles_str,
                         inline=False
                     )
@@ -653,7 +799,7 @@ class LoggingCog(commands.Cog):
                     if len(roles_str) > 1024:
                         roles_str = roles_str[:1021] + "..."
                     embed.add_field(
-                        name="Roles Removed ❌",
+                        name="Roles Removed <:Denied:1426930694633816248>",
                         value=roles_str,
                         inline=False
                     )
@@ -683,7 +829,7 @@ class LoggingCog(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="🎭 Role Created",
+            title="Role Created",
             color=discord.Color(0x2ecc71),
             timestamp=discord.utils.utcnow()
         )
@@ -728,7 +874,7 @@ class LoggingCog(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="🎭 Role Deleted",
+            title="Role Deleted",
             color=discord.Color(0xf24d4d),
             timestamp=discord.utils.utcnow()
         )
@@ -787,7 +933,7 @@ class LoggingCog(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="🎭 Role Updated",
+            title="Role Updated",
             color=discord.Color(0xadd8e6),
             timestamp=discord.utils.utcnow()
         )
@@ -828,7 +974,7 @@ class LoggingCog(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="📺 Channel Created",
+            title="Channel Created",
             color=discord.Color(0x2ecc71),
             timestamp=discord.utils.utcnow()
         )
@@ -878,7 +1024,7 @@ class LoggingCog(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="📺 Channel Deleted",
+            title="Channel Deleted",
             color=discord.Color(0xf24d4d),
             timestamp=discord.utils.utcnow()
         )
@@ -941,7 +1087,7 @@ class LoggingCog(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="📺 Channel Updated",
+            title="Channel Updated",
             color=discord.Color(0xadd8e6),
             timestamp=discord.utils.utcnow()
         )
@@ -986,7 +1132,7 @@ class LoggingCog(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="🗑️ Message Deleted",
+            title="Message Deleted",
             color=discord.Color(0xf24d4d),
             timestamp=discord.utils.utcnow()
         )
@@ -1050,7 +1196,7 @@ class LoggingCog(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="✏️ Message Edited",
+            title="Message Edited",
             color=discord.Color(0xadd8e6),
             timestamp=discord.utils.utcnow()
         )
@@ -1106,7 +1252,7 @@ class LoggingCog(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="🔨 Member Banned",
+            title="Member Banned",
             color=discord.Color(0xf24d4d),
             timestamp=discord.utils.utcnow()
         )
@@ -1147,7 +1293,7 @@ class LoggingCog(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="🔓 Member Unbanned",
+            title="Member Unbanned",
             color=discord.Color(0x2ecc71),
             timestamp=discord.utils.utcnow()
         )
@@ -1192,7 +1338,7 @@ class LoggingCog(commands.Cog):
             async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.kick):
                 if (discord.utils.utcnow() - entry.created_at).total_seconds() < 5:
                     embed = discord.Embed(
-                        title="👢 Member Kicked",
+                        title="Member Kicked",
                         color=discord.Color(0xffa756),
                         timestamp=discord.utils.utcnow()
                     )
@@ -1253,7 +1399,7 @@ class LoggingCog(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="🏠 Server Updated",
+            title="Server Updated",
             color=discord.Color(0xadd8e6),
             timestamp=discord.utils.utcnow()
         )
@@ -1300,7 +1446,7 @@ class LoggingCog(commands.Cog):
         # Member joined voice
         if before.channel is None and after.channel is not None:
             embed = discord.Embed(
-                title="🔊 Voice Join",
+                title="Voice Join",
                 color=discord.Color(0x2ecc71),
                 timestamp=discord.utils.utcnow()
             )
@@ -1322,7 +1468,7 @@ class LoggingCog(commands.Cog):
         # Member left voice
         elif before.channel is not None and after.channel is None:
             embed = discord.Embed(
-                title="🔇 Voice Leave",
+                title="Voice Leave",
                 color=discord.Color(0xf24d4d),
                 timestamp=discord.utils.utcnow()
             )
@@ -1344,7 +1490,7 @@ class LoggingCog(commands.Cog):
         # Member moved voice channels
         elif before.channel != after.channel:
             embed = discord.Embed(
-                title="🔄 Voice Move",
+                title="Voice Move",
                 color=discord.Color(0xadd8e6),
                 timestamp=discord.utils.utcnow()
             )
@@ -1373,13 +1519,13 @@ class LoggingCog(commands.Cog):
         elif before.self_mute != after.self_mute or before.mute != after.mute:
             if after.self_mute or after.mute:
                 embed = discord.Embed(
-                    title="🔇 Voice Mute",
+                    title="Voice Mute",
                     color=discord.Color(0xffa756),
                     timestamp=discord.utils.utcnow()
                 )
             else:
                 embed = discord.Embed(
-                    title="🔊 Voice Unmute",
+                    title="Voice Unmute",
                     color=discord.Color(0x2ecc71),
                     timestamp=discord.utils.utcnow()
                 )

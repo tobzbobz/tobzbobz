@@ -104,9 +104,9 @@ class VCRequestCog(commands.Cog):
 
                 # Current voice state
                 if user.voice and user.voice.channel:
-                    log_embed.add_field(name="Current Voice", value=f"🔊 {user.voice.channel.mention}", inline=False)
+                    log_embed.add_field(name="Current Voice", value=f"{user.voice.channel.mention}", inline=False)
                 else:
-                    log_embed.add_field(name="Current Voice", value="❌ Not in voice", inline=False)
+                    log_embed.add_field(name="Current Voice", value="<:Denied:1426930694633816248> Not in voice", inline=False)
 
                 log_embed.set_footer(text=f"Request ID: {request_message.id}")
 
@@ -230,7 +230,7 @@ class VCRequestCog(commands.Cog):
                     channel_mention = channel_obj.mention if channel_obj else f"<#{activity['to_channel_id']}>"
 
                     is_requested = activity['to_channel_id'] == tracking['requested_channel_id']
-                    emoji = "✅" if is_requested else "🔊"
+                    emoji = "<:Accepted:1426930333789585509>" if is_requested else "<a:Load:1430912797469970444>"
 
                     line = f"{emoji} <t:{timestamp}:T> - Joined {channel_mention}"
                     if is_requested:
@@ -242,7 +242,7 @@ class VCRequestCog(commands.Cog):
                 elif activity['activity_type'] == 'leave':
                     channel_obj = guild.get_channel(activity['from_channel_id'])
                     channel_mention = channel_obj.mention if channel_obj else f"<#{activity['from_channel_id']}>"
-                    activity_lines.append(f"🔇 <t:{timestamp}:T> - Left {channel_mention}")
+                    activity_lines.append(f"<t:{timestamp}:T> - Left {channel_mention}")
 
                 elif activity['activity_type'] == 'switch':
                     from_channel_obj = guild.get_channel(activity['from_channel_id'])
@@ -251,7 +251,7 @@ class VCRequestCog(commands.Cog):
                     to_mention = to_channel_obj.mention if to_channel_obj else f"<#{activity['to_channel_id']}>"
 
                     is_requested = activity['to_channel_id'] == tracking['requested_channel_id']
-                    emoji = "✅" if is_requested else "🔄"
+                    emoji = "<:Accepted:1426930333789585509>" if is_requested else "<a:Load:1430912797469970444>"
 
                     line = f"{emoji} <t:{timestamp}:T> - Moved from {from_mention} to {to_mention}"
                     if is_requested:
@@ -285,7 +285,7 @@ class VCRequestCog(commands.Cog):
 
             result_embed.add_field(
                 name="Compliance Status",
-                value="✅ Joined Requested Channel" if joined_requested_channel else "❌ Did Not Join",
+                value="<:Accepted:1426930333789585509> Joined Requested Channel" if joined_requested_channel else "<:Denied:1426930694633816248> Did Not Join",
                 inline=True
             )
 

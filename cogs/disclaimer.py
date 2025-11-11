@@ -45,7 +45,7 @@ class DisclaimerCog(commands.Cog):
 
         return True  # No restrictions if no roles configured
 
-    @app_commands.command(name='disclaimer', description='Display important disclaimer information.')
+    @app_commands.command(name='disclaimer', description='Display important disclaimer information')
     async def disclaimer(self, interaction: discord.Interaction):
         try:
             # Check permissions (optional - remove this block if you want everyone to use it)
@@ -62,7 +62,7 @@ class DisclaimerCog(commands.Cog):
 
             # First Embed
             embed2 = discord.Embed(
-                title='⚠️ Disclaimer',
+                title='<:Warn:1437771973970104471> Disclaimer',
                 description='''The ***New Zealand Copyright Act of 1994*** protects all original materials produced and owned by **FENZ and HHStJ Utilities**, including but not limited to source code, documentation, branding, and Discord assets.\n\nIt is strictly forbidden for any person, server, or organisation to use, reproduce, resell, or claim ownership of these materials without permission. The **FENZ and HHStJ Development Team** reserves the right to pursue legal action against any infringement, including submitting a DMCA notice.\n\nSee if it applies to your country: [NZ Copyright Act 1994](https://www.legislation.govt.nz/act/public/1994/0143/latest/DLM345634.html)\n\n~~‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎‎ ‎ ‎ ‎ ‎‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎  ‎ ~~\n‎\n📜 Legal Links:\n- [**Discord Support Server**](https://discord.gg/9ntthSkhhS).\n- [**Terms of Service**](https://discord.com/channels/1430002479239532747/1430003436316921897) (In Support Server).\n- [**Privacy Policy**](https://discord.com/channels/1430002479239532747/1430002586584612946) (In Support Server).\n- Contact **<@678475709257089057>** directly through discord for any other inquiries.''',
                 colour=discord.Colour(0x000000)
             )

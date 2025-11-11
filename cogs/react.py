@@ -43,13 +43,13 @@ class ReactCog(commands.Cog):
 
         return True  # No restrictions if no roles configured
 
-    @app_commands.command(name='react', description='Add reactions to a message as the bot.')
+    @app_commands.command(name='react', description='Add reactions to a message as the bot')
     @app_commands.default_permissions(administrator=True)
     @app_commands.describe(
-        message_id='The ID of the message to react to.',
-        emojis='The emojis to react with, separated by spaces (e.g., 😀 or :custom: or Emote ID).',
-        channel='The channel where the message is (defaults to current channel)..',
-        remove='Remove the reactions instead of adding them.'
+        message_id='The ID of the message to react to',
+        emojis='The emojis to react with, separated by spaces (e.g., 😀 or :custom: or Emote ID)',
+        channel='The channel where the message is (defaults to current channel)',
+        remove='Remove the reactions instead of adding them'
     )
     async def react(
             self,
@@ -176,7 +176,7 @@ class ReactCog(commands.Cog):
 
             if successful_reactions:
                 action = "removed reactions from" if remove and remove.lower() == 'yes' else "reacted to"
-                success_text = f'✅ Successfully {action} [message]({message.jump_url}) in {target_channel.mention} with: {" ".join(successful_reactions)}'
+                success_text = f'<:Accepted:1426930333789585509> Successfully {action} [message]({message.jump_url}) in {target_channel.mention} with: {" ".join(successful_reactions)}'
                 response_parts.append(success_text)
 
             if failed_reactions:

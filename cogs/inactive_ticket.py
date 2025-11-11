@@ -48,10 +48,10 @@ class InactiveTicketCog(commands.Cog):
     # Create command group
     inactive_group = app_commands.Group(name="inactive", description="Inactive ticket commands")
 
-    @inactive_group.command(name='ticket', description='Send an inactive ticket notice to a user.')
+    @inactive_group.command(name='ticket', description='Sends an inactive ticket notice')
     @app_commands.default_permissions(manage_nicknames=True)
     @app_commands.describe(
-        user='Select the user to send the inactive ticket notice to.'
+        user='The user the notice is for'
     )
     async def inactive_ticket(
             self,
@@ -87,7 +87,7 @@ class InactiveTicketCog(commands.Cog):
 
             # Confirm to user
             success_embed = discord.Embed(
-                description=f'✅ Inactive ticket warning sent to {user.mention}!',
+                description=f'<:Accepted:1426930333789585509> Inactive ticket warning sent to {user.mention}!',
                 colour=discord.Colour(0x2ecc71)
             )
 

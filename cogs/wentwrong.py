@@ -74,7 +74,7 @@ class WentWrongCog(commands.Cog):
             # Send error DM to owner
 
             error_embed = discord.Embed(
-                description=f'❌ Error: {e}',
+                description=f'<:Denied:1426930694633816248> Error: {e}',
                 colour=discord.Colour.red()
             )
             if not interaction.response.is_done():
@@ -88,10 +88,10 @@ class WentWrongCog(commands.Cog):
     @app_commands.describe(
         vehicle_callsigns='The callsigns of the vehicles involved separated by a comma (e.g. HAM415. HAM411 and HAM4118).',
         driver_usernames='The username(s) of the drivers involved (e.g. MajorKarlsruhe, dancingskulls and 123eye_sonme).',
-        date_and_time='The date and time of incident (e.g., "Today at 3:30 PM, or yesterday 5:45 AM")',
+        date_and_time='The date and time of incident (e.g., "Today at 7:00 PM, or yesterday 10:00 PM")',
         location='The location of the incident (e.g. Sandstone Road, Postal Code 210).',
         approx_speed='The approximate speed before the incident (e.g. 67km/h).',
-        proof='Images or videos of the occurance (attachment). If you want to add more, add them after you send the command.'
+        proof='Images or videos of the occurrence (attachment). If you want to add more, add them after you send the command.'
     )
     async def went_wrong(
             self,
@@ -118,7 +118,7 @@ class WentWrongCog(commands.Cog):
 
                 if not has_permission:
                     no_permission_embed = discord.Embed(
-                        description='❌ You do not have permission to use this command!',
+                        description='<:Denied:1426930694633816248> You do not have permission to use this command!',
                         colour=discord.Colour.red()
                     )
                     await interaction.followup.send(embed=no_permission_embed, ephemeral=True)
@@ -143,7 +143,7 @@ class WentWrongCog(commands.Cog):
                 report_channel = interaction.guild.get_channel(report_channel_id)
                 if not report_channel:
                     error_embed = discord.Embed(
-                        description='❌ Report channel not found!',
+                        description='<:Denied:1426930694633816248> Report channel not found!',
                         colour=discord.Colour(0xf24d4d)
                     )
                     await interaction.followup.send(embed=error_embed, ephemeral=True)
@@ -154,17 +154,17 @@ class WentWrongCog(commands.Cog):
 
             # Create the report embed
             embed = discord.Embed(
-                title='🚨 When tings go wong on da job!',
+                title='When tings go wong on da job!',
                 colour=discord.Colour(0xf24d4d),
                 timestamp=discord.utils.utcnow()
             )
 
             # Add fields
-            embed.add_field(name='🚗 **Vehicle Callsign(s)**', value=vehicle_callsigns, inline=True)
-            embed.add_field(name='👤 **Driver Username(s)**', value=driver_usernames, inline=True)
-            embed.add_field(name='📅 **Date & Time**', value=discord_timestamp, inline=True)
-            embed.add_field(name='📍 **Location**', value=location, inline=True)
-            embed.add_field(name='⚡ **Approx Speed**', value=approx_speed, inline=True)
+            embed.add_field(name='**Vehicle Callsign(s)**', value=vehicle_callsigns, inline=True)
+            embed.add_field(name='**Driver Username(s)**', value=driver_usernames, inline=True)
+            embed.add_field(name='**Date & Time**', value=discord_timestamp, inline=True)
+            embed.add_field(name='**Location**', value=location, inline=True)
+            embed.add_field(name='**Approx Speed**', value=approx_speed, inline=True)
             embed.add_field(name='‎ ',
                             value=f'-# *Submitted at {discord.utils.format_dt(discord.utils.utcnow(), style="F")}*', inline=False)
 
@@ -195,7 +195,7 @@ class WentWrongCog(commands.Cog):
 
             # Send confirmation to user
             success_embed = discord.Embed(
-                description=f'✅ Report submitted successfully in {report_channel.mention}!',
+                description=f'<:Accepted:1426930333789585509> Report submitted successfully in {report_channel.mention}!',
                 colour=discord.Colour(0x2ecc71)
             )
             await interaction.followup.send(embed=success_embed, ephemeral=True)
@@ -205,7 +205,7 @@ class WentWrongCog(commands.Cog):
             # Send error DM to owner
 
             error_embed = discord.Embed(
-                description=f'❌ Error: {e}',
+                description=f'<:Denied:1426930694633816248> Error: {e}',
                 colour=discord.Colour(0xf24d4d)
             )
             if not interaction.response.is_done():

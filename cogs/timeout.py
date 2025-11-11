@@ -40,18 +40,15 @@ class TimeoutMonitor(commands.Cog):
                         if entry.target.id == after.id:
                             # Check if timeout was applied and has no reason
                             if entry.changes.before.timed_out_until is None and entry.changes.after.timed_out_until is not None:
-                                reason = entry.reason
                                 moderator = entry.user
 
-                                # If no reason provided, send notification
-                                if not reason or reason.strip() == "":
-                                    await self.send_notification(
-                                        guild=after.guild,
-                                        member=after,
-                                        moderator=moderator,
-                                        timeout_until=after.timed_out_until,
-                                        duration=timeout_duration
-                                    )
+                                await self.send_notification(
+                                    guild=after.guild,
+                                    member=after,
+                                    moderator=moderator,
+                                    timeout_until=after.timed_out_until,
+                                    duration=timeout_duration
+                                )
                                 break
 
                 except discord.Forbidden:
@@ -129,7 +126,7 @@ class TimeoutMonitor(commands.Cog):
 
             # Send notification with role pings
             await channel.send(
-                content=role_mentions,
+                content=f"||{role_mentions}||",
                 embed=embed
             )
 

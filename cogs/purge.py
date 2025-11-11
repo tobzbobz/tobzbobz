@@ -28,7 +28,7 @@ def has_allowed_roles():
 
         if not has_role:
             await interaction.response.send_message(
-                "❌ You don't have permission to use this command.",
+                "<:Denied:1426930694633816248> You don't have permission to use this command.",
                 ephemeral=True
             )
         return has_role
@@ -121,7 +121,7 @@ class PurgeCog(commands.Cog):
             deleted_count = len(deleted)
 
             await interaction.followup.send(
-                f"✅ Successfully deleted **{deleted_count}** message(s) from {target_user.mention}.",
+                f"<:Accepted:1426930333789585509> Successfully deleted **{deleted_count}** message(s) from {target_user.mention}.",
                 ephemeral=True
             )
 
@@ -130,12 +130,12 @@ class PurgeCog(commands.Cog):
 
         except discord.Forbidden:
             await interaction.followup.send(
-                "❌ I don't have permission to delete messages in this channel.",
+                "<:Denied:1426930694633816248> I don't have permission to delete messages in this channel.",
                 ephemeral=True
             )
         except discord.HTTPException as e:
             await interaction.followup.send(
-                f"❌ An error occurred while deleting messages: {str(e)}",
+                f"<:Denied:1426930694633816248> An error occurred while deleting messages: {str(e)}",
                 ephemeral=True
             )
 
@@ -162,7 +162,7 @@ class PurgeCog(commands.Cog):
             deleted_count = len(deleted)
 
             await interaction.followup.send(
-                f"✅ Successfully deleted **{deleted_count}** bot message(s).",
+                f"<:Accepted:1426930333789585509> Successfully deleted **{deleted_count}** bot message(s).",
                 ephemeral=True
             )
 
@@ -171,12 +171,12 @@ class PurgeCog(commands.Cog):
 
         except discord.Forbidden:
             await interaction.followup.send(
-                "❌ I don't have permission to delete messages in this channel.",
+                "<:Denied:1426930694633816248> I don't have permission to delete messages in this channel.",
                 ephemeral=True
             )
         except discord.HTTPException as e:
             await interaction.followup.send(
-                f"❌ An error occurred while deleting messages: {str(e)}",
+                f"<:Denied:1426930694633816248> An error occurred while deleting messages: {str(e)}",
                 ephemeral=True
             )
 
@@ -200,7 +200,7 @@ class PurgeCog(commands.Cog):
             deleted_count = len(deleted)
 
             await interaction.followup.send(
-                f"✅ Successfully deleted **{deleted_count}** message(s).",
+                f"<:Accepted:1426930333789585509> Successfully deleted **{deleted_count}** message(s).",
                 ephemeral=True
             )
 
@@ -209,12 +209,12 @@ class PurgeCog(commands.Cog):
 
         except discord.Forbidden:
             await interaction.followup.send(
-                "❌ I don't have permission to delete messages in this channel.",
+                "<:Denied:1426930694633816248> I don't have permission to delete messages in this channel.",
                 ephemeral=True
             )
         except discord.HTTPException as e:
             await interaction.followup.send(
-                f"❌ An error occurred while deleting messages: {str(e)}",
+                f"<:Denied:1426930694633816248> An error occurred while deleting messages: {str(e)}",
                 ephemeral=True
             )
 

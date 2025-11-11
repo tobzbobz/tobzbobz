@@ -1323,12 +1323,12 @@ class ShiftManagementCog(commands.Cog):
             )
 
             embed.add_field(
-                name="📤 Report Destination",
+                name="Report Destination",
                 value=f"Would send to channels: {', '.join([f'<#{ch}>' for ch in WEEKLY_REPORT_CHANNELS])}",
                 inline=False
             )
 
-            embed.set_footer(text="⚠️ DRY RUN - No actual changes made to database")
+            embed.set_footer(text="<:Warn:1437771973970104471> DRY RUN - No actual changes made to database")
             embed.timestamp = datetime.utcnow()
 
             await interaction.followup.send(embed=embed, ephemeral=True)
@@ -1341,15 +1341,15 @@ class ShiftManagementCog(commands.Cog):
             import traceback
             traceback.print_exc()
 
-    @shift_group.command(name="quota", description="View or set shift quotas")
+    @shift_group.command(name="quota", description="View your quota (Leadership+ - Set Quota)")
     @app_commands.describe(
-        action="View your quota or set quota for roles",
-        roles="The role(s) to set quota for (admin only)",
+        action="What you want to do.",
+        roles="The role(s) to set quota for",
         hours="Hours for the quota",
         minutes="Minutes for the quota",
         type="The shift type to set quota for"
     )
-    # REMOVE the static @app_commands.choices(action=[...])
+
     @app_commands.choices(
         type=[
             app_commands.Choice(name="Shift FENZ", value="Shift FENZ"),
@@ -1706,7 +1706,7 @@ class ShiftManagementCog(commands.Cog):
 
                 if is_admin:
                     embed.set_footer(
-                        text="💡 Use 'Toggle Role Visibility in Reports' to show/hide roles from weekly leaderboards")
+                        text="*Use 'Toggle Role Visibility in Reports' to show/hide roles from weekly leaderboards*")
 
                 await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -1800,13 +1800,13 @@ class ShiftManagementCog(commands.Cog):
 
                 if toggled_on:
                     response_parts.append(
-                        f"**✅ Now Visible in {type.value} Reports:**\n" +
+                        f"**<:Accepted:1426930333789585509> Now Visible in {type.value} Reports:**\n" +
                         "\n".join(f"• {role}" for role in toggled_on)
                     )
 
                 if toggled_off:
                     response_parts.append(
-                        f"**🚫 Now Hidden from {type.value} Reports:**\n" +
+                        f"**<:No:1437788507111428228> Now Hidden from {type.value} Reports:**\n" +
                         "\n".join(f"• {role}" for role in toggled_off)
                     )
 
@@ -1868,8 +1868,8 @@ class ShiftManagementCog(commands.Cog):
 
     @shift_group.command(name="leaderboard", description="View shift leaderboard")
     @app_commands.describe(
-        type="Filter by shift type (REQUIRED)",
-        wave="View current week or specific wave number (e.g., 1, 2, 3)"  # ← Changed description
+        type="Filter by shift type",
+        wave="View current week or specific wave number (e.g., 1, 2, 3)"
     )
     @app_commands.choices(
         type=[
@@ -2271,7 +2271,7 @@ class ShiftManagementCog(commands.Cog):
     @shift_group.command(name="admin", description="Manage shifts for users")
     @app_commands.describe(
         user="The user to manage shifts for",
-        type="The shift type (REQUIRED)"
+        type="The shift type"
     )
     @app_commands.choices(type=[
         app_commands.Choice(name="Shift FENZ", value="Shift FENZ"),
@@ -2288,7 +2288,7 @@ class ShiftManagementCog(commands.Cog):
         # Rate limit check FIRST
         if not self.admin_rate_limiter.check(interaction.user.id):
             await interaction.response.send_message(
-                "⏱️ Rate limit exceeded. Please wait before using this command again.",
+                "<:Alert:1437790206462922803> Rate limit exceeded. Please wait before using this command again.",
                 ephemeral=True
             )
             return

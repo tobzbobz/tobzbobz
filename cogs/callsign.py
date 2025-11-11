@@ -121,6 +121,62 @@ UPPER_LEAD = {
     1389111326571499590
 }
 
+
+def normalize_callsign(callsign: str) -> str:
+    """
+    Normalize callsign by stripping leading zeros
+    Examples: '01' -> '1', '001' -> '1', '10' -> '10', '100' -> '100'
+    Returns normalized callsign or original if not numeric
+    """
+    if not callsign or not callsign.isdigit():
+        return callsign
+
+    # Convert to int and back to string to strip leading zeros
+    # This preserves '10' and '100' while converting '01' to '1'
+    return str(int(callsign))
+
+async def safe_edit_nickname(member: discord.Member, nickname: str) -> bool:
+    """
+    Safely edit a member's nickname with automatic truncation on length errors
+    Returns True if successful, False otherwise
+    """
+    try:
+        await member.edit(nick=nickname)
+        return True
+    except discord.HTTPException as e:
+        if e.code == 50035:  # Invalid Form Body (nickname too long)
+            print(f"<:Warn:1437771973970104471> Nickname too long ({len(nickname)} chars): '{nickname}'")
+
+            shift_prefixes = ["DUTY | ", "BRK | ", "LOA | "]
+            for prefix in shift_prefixes:
+                if nickname.startswith(prefix):
+                    stripped = nickname[len(prefix):]
+                    try:
+                        await member.edit(nick=stripped)
+                        print(f"<:Accepted:1426930333789585509> Used nickname without shift prefix: '{stripped}'")
+                        return True
+                    except:
+                        continue
+
+            # Try truncating
+            truncated = nickname[:32]
+            try:
+                await safe_edit_nickname(member, new_nickname)
+                print(f"<:Accepted:1426930333789585509> Used truncated nickname: '{truncated}'")
+                return True
+            except:
+                print(f"<:Denied:1426930694633816248> Even truncated nickname failed")
+                return False
+        else:
+            print(f"<:Denied:1426930694633816248> Discord HTTP error: {e}")
+            return False
+    except discord.Forbidden:
+        print(f"<:Denied:1426930694633816248> Missing permissions to edit nickname for {member.id}")
+        return False
+    except Exception as e:
+        print(f"<:Denied:1426930694633816248> Unexpected error editing nickname: {e}")
+        return False
+
 def get_rank_sort_key(fenz_prefix: str, hhstj_prefix: str) -> tuple:
     """
     Generate a sort key based on rank hierarchy.
@@ -187,22 +243,25 @@ def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_u
     hhstj_priority = has_hhstj_high_command and not has_fenz_high_command
 
     # === ATTEMPT 1: Full nickname with all components ===
-    if callsign in ["###", "BLANK"]:
-        # Special handling for ### and BLANK
+    if callsign in ["Not Assigned", "BLANK"]:
+        # Special handling for Not Assigned and BLANK
         if hhstj_priority and hhstj_prefix:
             if fenz_prefix and callsign == "BLANK":
                 nickname_parts = [hhstj_prefix, fenz_prefix, roblox_username]
-            elif fenz_prefix and callsign == "###":
-                nickname_parts = [hhstj_prefix, f"{fenz_prefix}-###", roblox_username]
+            elif fenz_prefix and callsign == "Not Assigned":
+                if fenz_prefix == "RFF":
+                    nickname_parts = ["RFF"]
+                else:
+                    nickname_parts = [hhstj_prefix, f"{fenz_prefix}-Not Assigned", roblox_username]
             else:
                 nickname_parts = [hhstj_prefix, roblox_username]
         else:
             if fenz_prefix and callsign == "BLANK":
                 nickname_parts = [fenz_prefix]
-            elif fenz_prefix and callsign == "###":
-                nickname_parts = [f"{fenz_prefix}-###"]
+            elif fenz_prefix and callsign == "Not Assigned":
+                nickname_parts = [f"{fenz_prefix}-Not Assigned"]
             else:
-                nickname_parts = ["###"]
+                nickname_parts = ["Not Assigned"]
 
             if hhstj_prefix and "-" not in hhstj_prefix:
                 nickname_parts.append(hhstj_prefix)
@@ -224,8 +283,14 @@ def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_u
             else:
                 nickname_parts.append(callsign)
 
-            if hhstj_prefix and "-" not in hhstj_prefix:
-                nickname_parts.append(hhstj_prefix)
+            if hhstj_prefix:
+                # Only skip if it's a full callsign with hyphen (like "WOM-MIKE30")
+                if "-" not in hhstj_prefix:
+                    nickname_parts.append(hhstj_prefix)
+                # If has_fenz_high_command AND has HHStJ supervisory (no hyphen), include it
+                elif has_fenz_high_command and has_hhstj_high_command:
+                    nickname_parts.append(hhstj_prefix)
+
             if roblox_username:
                 nickname_parts.append(roblox_username)
 
@@ -247,13 +312,13 @@ def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_u
         if result:
             return result
 
-    if fenz_prefix and callsign and callsign not in ["###", "BLANK"]:
+    if fenz_prefix and callsign and callsign not in ["Not Assigned", "BLANK"]:
         result = try_format([f"{fenz_prefix}-{callsign}"])
         if result:
             return result
 
-    if fenz_prefix and callsign == "###":
-        result = try_format([f"{fenz_prefix}-###"])
+    if fenz_prefix and callsign == "Not Assigned":
+        result = try_format([f"{fenz_prefix}-Not Assigned"])
         if result:
             return result
 
@@ -298,8 +363,8 @@ def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_u
 async def check_callsign_exists(callsign: str, fenz_prefix: str = None) -> dict:
     """Check if a callsign exists in the database with the same prefix"""
     async with db.pool.acquire() as conn:
-        # BLANK and ### callsigns are allowed to be non-unique, skip check
-        if callsign in ["BLANK", "###"]:
+        # BLANK and Not Assigned callsigns are allowed to be non-unique, skip check
+        if callsign in ["BLANK", "Not Assigned"]:
             return None
 
         # Check for same callsign WITH same prefix
@@ -332,6 +397,78 @@ def get_hhstj_prefix_from_roles(roles) -> str:
                 return prefix
 
     return ""
+
+
+def get_hhstj_shortened_versions(hhstj_prefix: str) -> list:
+    """
+    Get all shortened versions of an HHStJ callsign
+    Returns list of versions in order: [full, shortened, prefix-only]
+    """
+    if not hhstj_prefix or '-' not in hhstj_prefix:
+        return [hhstj_prefix] if hhstj_prefix else []
+
+    # Split the callsign (e.g., "WOM-MIKE30" -> "WOM", "MIKE30")
+    parts = hhstj_prefix.split('-', 1)
+    if len(parts) != 2:
+        return [hhstj_prefix]
+
+    prefix = parts[0]  # e.g., "WOM"
+    phonetic_number = parts[1]  # e.g., "MIKE30"
+
+    # Extract shortened phonetic: First letter + Last letter before number + numbers
+    # Examples: MIKE30 -> MKE30, OSCAR32 -> OSC32, OSCAR3 -> OSC3
+    if len(phonetic_number) >= 3:
+        # Find where numbers start
+        number_start = 0
+        for i, char in enumerate(phonetic_number):
+            if char.isdigit():
+                number_start = i
+                break
+
+        if number_start >= 2:  # Need at least 2 letters before numbers
+            # Take first letter + last letter before numbers + all numbers
+            # MIKE30: M + K (phonetic_number[number_start-1]) + 30
+            # OSCAR32: O + C (phonetic_number[number_start-1]) + 32
+            first_letter = phonetic_number[0]
+            last_letter_before_num = phonetic_number[number_start - 1]
+            numbers = phonetic_number[number_start:]
+            shortened_phonetic = f"{first_letter}{last_letter_before_num}{numbers}"
+            version2 = f"{prefix}-{shortened_phonetic}"
+        else:
+            version2 = hhstj_prefix  # Can't shorten properly
+    else:
+        version2 = hhstj_prefix  # Can't shorten
+
+    version1 = hhstj_prefix  # Full version
+    version3 = prefix  # Prefix only
+
+    return [version1, version2, version3]
+
+
+def test_hhstj_versions_fit(fenz_prefix: str, callsign: str, hhstj_versions: list,
+                            roblox_username: str, is_fenz_hc: bool, is_hhstj_hc: bool) -> list:
+    """
+    Test which HHStJ versions will fit in a nickname
+    Returns list of dicts with {'version': str, 'nickname': str, 'fits': bool}
+    """
+    results = []
+
+    for version in hhstj_versions:
+        # Build the full nickname with this version
+        test_nickname = format_nickname(
+            fenz_prefix, callsign, version, roblox_username,
+            is_fenz_hc, is_hhstj_hc
+        )
+
+        fits = len(test_nickname) <= 32 and validate_nickname(test_nickname)
+
+        results.append({
+            'version': version,
+            'nickname': test_nickname,
+            'fits': fits
+        })
+
+    return results
 
 def format_duplicate_callsign_message(callsign: str, existing_data: dict) -> str:
     """Format a user-friendly message when a callsign is already taken"""
@@ -370,7 +507,7 @@ async def add_callsign_to_database(callsign: str, discord_user_id: int, discord_
     async with db.pool.acquire() as conn:
         async with conn.transaction():  # <:Accepted:1426930333789585509> Proper transaction
             # <:Accepted:1426930333789585509> CHECK FOR CONFLICTS FIRST (before any DELETE)
-            if callsign not in ["BLANK", "###"]:
+            if callsign not in ["BLANK", "Not Assigned"]:
                 existing = await conn.fetchrow(
                     'SELECT discord_user_id FROM callsigns WHERE callsign = $1 AND fenz_prefix = $2',
                     callsign, fenz_prefix
@@ -420,6 +557,56 @@ async def add_callsign_to_database(callsign: str, discord_user_id: int, discord_
                 json.dumps(history)
             )
 
+
+class PaginatedEmbedView(discord.ui.View):
+    """View for paginating through multiple embeds"""
+
+    def __init__(self, embeds: list[discord.Embed], timeout=300):
+        super().__init__(timeout=timeout)
+        self.embeds = embeds
+        self.current_page = 0
+        self.max_pages = len(embeds)
+
+        # Update button states
+        self.update_buttons()
+
+    def update_buttons(self):
+        """Enable/disable buttons based on current page"""
+        self.first_page.disabled = (self.current_page == 0)
+        self.prev_page.disabled = (self.current_page == 0)
+        self.next_page.disabled = (self.current_page >= self.max_pages - 1)
+        self.last_page.disabled = (self.current_page >= self.max_pages - 1)
+
+    @discord.ui.button(label="<:LeftSkip:1434962162064822343>", style=discord.ButtonStyle.secondary)
+    async def first_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page = 0
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.embeds[self.current_page], view=self)
+
+    @discord.ui.button(label="<:LeftArrow:1434962165215002777>", style=discord.ButtonStyle.primary)
+    async def prev_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page = max(0, self.current_page - 1)
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.embeds[self.current_page], view=self)
+
+    @discord.ui.button(label="<:RightArrow:1434962170147246120>", style=discord.ButtonStyle.primary)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page = min(self.max_pages - 1, self.current_page + 1)
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.embeds[self.current_page], view=self)
+
+    @discord.ui.button(label="<:RightSkip:1434962167660281926>", style=discord.ButtonStyle.secondary)
+    async def last_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page = self.max_pages - 1
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.embeds[self.current_page], view=self)
+
+    @discord.ui.button(label="<:Wipe:1434954284851658762>", style=discord.ButtonStyle.danger)
+    async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        await interaction.delete_original_response()
+        self.stop()
+
 class CallsignCog(commands.Cog):
     callsign_group = app_commands.Group(name="callsign", description="Callsign management commands")
 
@@ -456,7 +643,7 @@ class CallsignCog(commands.Cog):
     async def auto_sync_loop(self):
         """Background task for automatic syncing with nickname updates"""
         if db.pool is None:
-            print("⚠️ Auto-sync skipped: database not connected")
+            print("<:Warn:1437771973970104471> Auto-sync skipped: database not connected")
             return
 
         for guild in self.bot.guilds:
@@ -741,14 +928,14 @@ class CallsignCog(commands.Cog):
                         if is_fenz_high_command and current_fenz_prefix == "":
                             fenz_rank_changed = False
 
-                        # If FENZ rank changed AND they have a real callsign (not ### or BLANK), reset it
-                        if fenz_rank_changed and current_callsign not in ["###", "BLANK"]:
+                        # If FENZ rank changed AND they have a real callsign (not Not Assigned or BLANK), reset it
+                        if fenz_rank_changed and current_callsign not in ["Not Assigned", "BLANK"]:
                             old_callsign = f"{current_fenz_prefix}-{current_callsign}" if current_fenz_prefix else current_callsign
 
                             async with db.pool.acquire() as conn:
                                 await conn.execute(
                                     'UPDATE callsigns SET callsign = $1, fenz_prefix = $2 WHERE discord_user_id = $3',
-                                    "###", correct_fenz_prefix, member.id
+                                    "Not Assigned", correct_fenz_prefix, member.id
                                 )
 
                             stats['callsigns_reset'].append({
@@ -759,10 +946,10 @@ class CallsignCog(commands.Cog):
                             })
 
                             current_fenz_prefix = correct_fenz_prefix
-                            current_callsign = "###"
+                            current_callsign = "Not Assigned"
                             stats['rank_updates'] += 1
                         elif fenz_rank_changed:
-                            # Rank changed but callsign is already ### or BLANK, just update prefix
+                            # Rank changed but callsign is already Not Assigned or BLANK, just update prefix
                             stats['rank_changes'].append({
                                 'member': member,
                                 'old_rank': current_fenz_prefix or 'None',
@@ -796,11 +983,11 @@ class CallsignCog(commands.Cog):
                             stats['rank_updates'] += 1
 
                         # UPDATE NICKNAME
-                        if current_callsign == "###":
-                            # Reset callsign - nickname should be: PREFIX-### | HHStJ | Roblox
+                        if current_callsign == "Not Assigned":
+                            # Reset callsign - nickname should be: PREFIX-Not Assigned | HHStJ | Roblox
                             nickname_parts = []
                             if current_fenz_prefix:
-                                nickname_parts.append(f"{current_fenz_prefix}-###")
+                                nickname_parts.append(f"{current_fenz_prefix}-Not Assigned")
                             if current_hhstj_prefix and "-" not in current_hhstj_prefix:
                                 nickname_parts.append(current_hhstj_prefix)
                             if record['roblox_username']:
@@ -837,7 +1024,7 @@ class CallsignCog(commands.Cog):
                                 # Apply shift prefix back to new nickname
                                 final_nickname = shift_prefix + expected_nickname
 
-                                await member.edit(nick=final_nickname)
+                                await safe_edit_nickname(member, new_nickname)
 
                                 # Track nickname change
                                 stats['nickname_changes'].append({
@@ -908,12 +1095,12 @@ class CallsignCog(commands.Cog):
                         print(f"    💾 {stats['naughty_roles_stored']} new naughty roles stored")
                         print(f"    ✂️ {stats['naughty_roles_removed']} naughty roles removed")
                     if stats['permission_errors']:
-                        print(f"    ⚠️ {len(stats['permission_errors'])} permission errors")
+                        print(f"    <:Warn:1437771973970104471> {len(stats['permission_errors'])} permission errors")
                     if stats['errors']:
                         non_perm_errors = [e for e in stats['errors'] if e['error'] != 'Missing permissions']
                         if non_perm_errors:
-                            print(f"    ⚠️ {len(non_perm_errors)} other errors occurred")
-                    print(f"    ⏱️ Completed in {sync_duration:.2f}s")
+                            print(f"    <:Warn:1437771973970104471> {len(non_perm_errors)} other errors occurred")
+                    print(f"    <:Alert:1437790206462922803> Completed in {sync_duration:.2f}s")
 
             except Exception as e:
                 print(f"<:Denied:1426930694633816248> Error during auto-sync for {guild.name}: {e}")
@@ -937,14 +1124,14 @@ class CallsignCog(commands.Cog):
         try:
             channel = bot.get_channel(SYNC_LOG_CHANNEL_ID)
             if not channel:
-                print(f"⚠️ Could not find sync log channel {SYNC_LOG_CHANNEL_ID}")
+                print(f"<:Warn:1437771973970104471> Could not find sync log channel {SYNC_LOG_CHANNEL_ID}")
                 return
 
             # Main summary embed
             summary_embed = discord.Embed(
                 title="Auto-Sync Completed",
                 description=f"Automatic sync completed for **{guild_name}**",
-                color=discord.Color.blue(),
+                color=discord.Color.green(),
                 timestamp=datetime.utcnow()
             )
 
@@ -1024,14 +1211,14 @@ class CallsignCog(commands.Cog):
 
                     embed = discord.Embed(
                         title=f"Callsigns Reset ({i + 1}-{min(i + 5, len(stats['callsigns_reset']))} of {len(stats['callsigns_reset'])})",
-                        description="These callsigns were reset to ### due to rank changes",
+                        description="These callsigns were reset to Not Assigned due to rank changes",
                         color=discord.Color.orange()
                     )
 
                     for reset in chunk:
                         embed.add_field(
                             name=f"{reset['member'].mention} ({reset['member'].display_name})",
-                            value=f"**Old:** {reset['old_callsign']}\n**New:** {reset['new_prefix']}-###\n**Reason:** {reset['reason']}",
+                            value=f"**Old:** {reset['old_callsign']}\n**New:** {reset['new_prefix']}-Not Assigned\n**Reason:** {reset['reason']}",
                             inline=False
                         )
 
@@ -1335,9 +1522,8 @@ class CallsignCog(commands.Cog):
             print(f"Error fetching Roblox username: {e}")
             return None
 
-    @callsign_group.command(name="sync", description="Sync callsigns between database and Google Sheets")
+    @callsign_group.command(name="sync", description="Syncs data between Bot Database and FENZ Callsigns Google Sheet")
     @app_commands.checks.has_role(SYNC_ROLE_ID)
-    @app_commands.checks.has_permissions(administrator=True)
     async def sync_callsigns(self, interaction: discord.Interaction):
         """Bidirectional sync: database ↔ Google Sheets and update Discord nicknames"""
         await interaction.response.defer(thinking=True)
@@ -1448,16 +1634,16 @@ class CallsignCog(commands.Cog):
                             fenz_rank_changed = False
 
                         # If FENZ rank changed AND they have a real callsign, reset it
-                        if fenz_rank_changed and current_callsign not in ["###", "BLANK"]:
+                        if fenz_rank_changed and current_callsign not in ["Not Assigned", "BLANK"]:
                             old_callsign = f"{current_fenz_prefix}-{current_callsign}" if current_fenz_prefix else current_callsign
 
                             existing = await check_callsign_exists(current_callsign, correct_fenz_prefix)
                             if existing and existing['discord_user_id'] != member.id:
-                                # Callsign conflict - reset to ### instead
+                                # Callsign conflict - reset to Not Assigned instead
                                 async with db.pool.acquire() as conn:
                                     await conn.execute(
                                         'UPDATE callsigns SET callsign = $1, fenz_prefix = $2 WHERE discord_user_id = $3',
-                                        "###", correct_fenz_prefix, member.id
+                                        "Not Assigned", correct_fenz_prefix, member.id
                                     )
                                 callsigns_reset.append({
                                     'member': member,
@@ -1466,14 +1652,14 @@ class CallsignCog(commands.Cog):
                                     'reason': f'Rank changed but callsign conflicts: {correct_fenz_prefix}-{current_callsign} already exists'
                                 })
                                 current_fenz_prefix = correct_fenz_prefix
-                                current_callsign = "###"
+                                current_callsign = "Not Assigned"
                                 stats['rank_updates'] += 1
                                 continue
 
                             async with db.pool.acquire() as conn:
                                 await conn.execute(
                                     'UPDATE callsigns SET callsign = $1, fenz_prefix = $2 WHERE discord_user_id = $3',
-                                    "###", correct_fenz_prefix, member.id
+                                    "Not Assigned", correct_fenz_prefix, member.id
                                 )
 
                             callsigns_reset.append({
@@ -1482,10 +1668,10 @@ class CallsignCog(commands.Cog):
                                 'new_prefix': correct_fenz_prefix
                             })
 
-                            record['callsign'] = "###"
+                            record['callsign'] = "Not Assigned"
                             record['fenz_prefix'] = correct_fenz_prefix
                             current_fenz_prefix = correct_fenz_prefix
-                            current_callsign = "###"
+                            current_callsign = "Not Assigned"
                         elif fenz_rank_changed:
                             # Just update prefix
                             async with db.pool.acquire() as conn:
@@ -1507,11 +1693,11 @@ class CallsignCog(commands.Cog):
                             current_hhstj_prefix = correct_hhstj_prefix
 
                         # Calculate the correct nickname
-                        if record['callsign'] == "###":
-                            # Reset callsign - nickname should be: PREFIX-### | HHStJ | Roblox
+                        if record['callsign'] == "Not Assigned":
+                            # Reset callsign - nickname should be: PREFIX-Not Assigned | HHStJ | Roblox
                             nickname_parts = []
                             if current_fenz_prefix:
-                                nickname_parts.append(f"{current_fenz_prefix}-###")
+                                nickname_parts.append(f"{current_fenz_prefix}-Not Assigned")
                             if current_hhstj_prefix and "-" not in current_hhstj_prefix:
                                 nickname_parts.append(current_hhstj_prefix)
                             if record['roblox_username']:
@@ -1535,7 +1721,7 @@ class CallsignCog(commands.Cog):
                         # Only update if nickname is different
                         if member.nick != new_nickname:
                             try:
-                                await member.edit(nick=new_nickname)
+                                await safe_edit_nickname(member, new_nickname)
                                 updated_count += 1
                             except discord.Forbidden:
                                 failed_updates.append(
@@ -1591,7 +1777,7 @@ class CallsignCog(commands.Cog):
             if callsigns_reset:
                 response += f"\nReset {len(callsigns_reset)} callsigns due to rank changes:\n"
                 response += "\n".join(
-                    f"- {r['member'].mention}: ~~{r['old_callsign']}~~ → {r['new_prefix']}-###" for r in
+                    f"- {r['member'].mention}: ~~{r['old_callsign']}~~ → {r['new_prefix']}-Not Assigned" for r in
                     callsigns_reset[:5])
                 if len(callsigns_reset) > 5:
                     response += f"\n... and {len(callsigns_reset) - 5} more"
@@ -1617,11 +1803,10 @@ class CallsignCog(commands.Cog):
 
     @callsign_group.command(name="assign", description="Assign a callsign to a user")
     @app_commands.check(lambda interaction: any(role.id in UPPER_LEAD for role in interaction.user.roles))
-    @app_commands.checks.has_permissions(administrator=True)
     @app_commands.describe(
         user="The user to assign the callsign to",
         callsign="The callsign number (1-3 digits)",
-        prefix="Whether to use rank prefix (Supervisor+ only - defaults to True)"
+        prefix="Whether to use rank affix (FENZ Supervisor+ only - refers to whether you want to be just 'DNC' or 'DNC-1')"
     )
     async def assign_callsign(self, interaction: discord.Interaction, user: discord.Member, callsign: str,
                               prefix: bool = True):
@@ -1655,6 +1840,8 @@ class CallsignCog(commands.Cog):
                         ephemeral=True
                     )
                     return
+
+                callsign = normalize_callsign(callsign)
 
             # Get user's Roblox info FIRST
             bloxlink_data = await self.get_bloxlink_data(user.id, interaction.guild.id)
@@ -1696,15 +1883,26 @@ class CallsignCog(commands.Cog):
             hhstj_prefix = get_hhstj_prefix_from_roles(user.roles)
 
             # NOW check if callsign already exists (AFTER we have fenz_prefix)
-            if callsign not in ["BLANK", "###"]:
+            if callsign not in ["BLANK", "Not Assigned"]:
                 existing = await check_callsign_exists(callsign, fenz_prefix)
                 if existing and existing['discord_user_id'] != user.id:
                     error_message = format_duplicate_callsign_message(callsign, existing)
                     await interaction.followup.send(error_message, ephemeral=True)
                     return
 
+            FENZ_LEADERHIP_ROLE_ID = 1285474077556998196
+
             # Determine what to assign based on prefix parameter and rank
             if is_high_command and not prefix:
+                if not any(role.id == FENZ_LEADERHIP_ROLE_ID for role in interaction.user.roles):
+                    await interaction.followup.send(
+                        "<:Denied:1426930694633816248> Only users with the Owner role can assign callsigns without prefix!\n"
+                        "The prefix will be included automatically.",
+                        ephemeral=True
+                    )
+                    prefix = True
+
+            if not prefix:
                 # High command without number: Just rank prefix, no callsign number
                 final_fenz_prefix = fenz_prefix
                 final_callsign = "BLANK"
@@ -1772,10 +1970,25 @@ class CallsignCog(commands.Cog):
 
             await interaction.followup.send(
                 f"<:Accepted:1426930333789585509> Assigned callsign {callsign_display} to {user.mention}\n"
-                f"🏷️ Nickname updated to: `{new_nickname}`\n"
-                f"💡 Remember to run `/callsign sync` to update Google Sheets!",
+                f"Nickname updated to: `{new_nickname}`\n",
                 ephemeral=True
             )
+
+            # Log to designated channel
+            log_channel = self.bot.get_channel(CALLSIGN_REQUEST_LOG_CHANNEL_ID)
+            if log_channel:
+                log_embed = discord.Embed(
+                    title="Callsign Assigned (Manual)",
+                    color=discord.Color.green(),
+                    timestamp=datetime.utcnow()
+                )
+                log_embed.add_field(name="User", value=f"{user.mention}", inline=True)
+                log_embed.add_field(name="Callsign", value=f"`{callsign_display}`", inline=True)
+                log_embed.add_field(name="Assigned By", value=interaction.user.mention, inline=True)
+                log_embed.add_field(name="Nickname", value=f"`{new_nickname}`", inline=False)
+                log_embed.set_footer(text=f"User ID: {user.id}")
+
+                await log_channel.send(embed=log_embed)
 
         except Exception as e:
             await interaction.followup.send(f"<:Denied:1426930694633816248> Error assigning callsign: {str(e)}")
@@ -1783,6 +1996,8 @@ class CallsignCog(commands.Cog):
             traceback.print_exc()
 
     @callsign_group.command(name="lookup", description="Look up a callsign")
+    @app_commands.describe(user="The user to lookup the callsign for")
+    @app_commands.describe(callsign="The callsign to look up")
     @app_commands.check(lambda interaction: any(role.id in LEAD_ROLES for role in interaction.user.roles))
     async def lookup_callsign(self, interaction: discord.Interaction, callsign: str = None,
                               user: discord.Member = None):
@@ -1806,6 +2021,9 @@ class CallsignCog(commands.Cog):
                         ephemeral=True
                     )
                     return
+
+                callsign = normalize_callsign(callsign)
+
                 # Search by callsign
                 result = await check_callsign_exists(callsign)
                 if result:
@@ -1824,28 +2042,40 @@ class CallsignCog(commands.Cog):
 
             # Display results
             for result in results:
-                # Format title based on callsign type
-                if result['callsign'] == "BLANK":
+                # <:Accepted:1426930333789585509> FIX: Format title based on callsign type
+                if result['callsign'] == "Not Assigned":
+                    title = f"Callsign: Not Assigned (Not Assigned)"
+                    callsign_status = "<:Warn:1437771973970104471> Awaiting Assignment"
+                elif result['callsign'] == "BLANK":
                     title = f"Callsign: BLANK (No number)"
+                    callsign_status = "<:Accepted:1426930333789585509> High Command (No Callsign)"
                 elif result['fenz_prefix']:
                     title = f"Callsign: {result['fenz_prefix']}-{result['callsign']}"
+                    callsign_status = "<:Accepted:1426930333789585509> Active"
                 else:
                     title = f"Callsign: {result['callsign']}"
+                    callsign_status = "<:Accepted:1426930333789585509> Active"
 
                 embed = discord.Embed(
                     title=title,
-                    color=discord.Color.blue()
+                    color=discord.Color.orange() if result['callsign'] == "Not Assigned" else discord.Color.blue()
+                )
+
+                embed.add_field(
+                    name="Status",
+                    value=callsign_status,
+                    inline=True
                 )
 
                 embed.add_field(
                     name="Discord User",
-                    value=f"<@{result['discord_user_id']}> (`{result['discord_username']}`)",
+                    value=f"<@{result['discord_user_id']}>",
                     inline=False
                 )
 
                 embed.add_field(
                     name="Roblox User",
-                    value=f"{result['roblox_username']} (ID: {result['roblox_user_id']})",
+                    value=f"[{result['roblox_username']}](https://www.roblox.com/users/{result['roblox_user_id']}/profile)",
                     inline=False
                 )
 
@@ -1884,7 +2114,7 @@ class CallsignCog(commands.Cog):
             import traceback
             traceback.print_exc()
 
-    @callsign_group.command(name='nickname-sync', description="Force update all nicknames from database (Owner only)")
+    @callsign_group.command(name='nickname-sync', description="Check all nicknames match what is recorded in the database, and fix if incorrect.")
     @app_commands.describe(dry_run="Preview changes without applying them")
     async def force_sync_nicknames(self, interaction: discord.Interaction, dry_run: bool = False):
         """Force sync all nicknames from database - Owner only"""
@@ -1925,6 +2155,19 @@ class CallsignCog(commands.Cog):
                         not_found.append(f"{record['discord_username']} (ID: {record['discord_user_id']})")
                         continue
 
+                    current_fenz_prefix = None
+                    for role_id, (rank_name, prefix) in FENZ_RANK_MAP.items():
+                        if any(role.id == role_id for role in member.roles):
+                            current_fenz_prefix = prefix
+                            break
+
+                    stored_fenz_prefix = record['fenz_prefix']
+
+                    if current_fenz_prefix != stored_fenz_prefix:
+                        errors.append(
+                            f"{record['discord_username']} - Rank mismatch: DB has {stored_fenz_prefix}, Discord has {current_fenz_prefix}. Run /callsign sync first.")
+                        continue
+
                     # Check if member has high command roles
                     is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
                     is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
@@ -1955,7 +2198,7 @@ class CallsignCog(commands.Cog):
                         )
                     else:
                         # Apply the change
-                        await member.edit(nick=expected_nickname)
+                        await safe_edit_nickname(member, new_nickname)
                         updated.append(
                             f"{member.mention}\n"
                             f"  Old: `{current_nick}`\n"
@@ -2031,7 +2274,6 @@ class CallsignCog(commands.Cog):
 
     @callsign_group.command(name="remove", description="Remove a callsign from a user")
     @app_commands.check(lambda interaction: any(role.id in UPPER_LEAD for role in interaction.user.roles))
-    @app_commands.checks.has_permissions(administrator=True)
     @app_commands.describe(user="The user whose callsign should be removed")
     async def remove_callsign(self, interaction: discord.Interaction, user: discord.Member):
         """Remove a callsign from a user and reset their nickname"""
@@ -2153,6 +2395,21 @@ class CallsignCog(commands.Cog):
             embed.set_footer(text=f"Removed by {interaction.user.display_name}")
             embed.timestamp = datetime.utcnow()
 
+            # Log to designated channel
+            log_channel = self.bot.get_channel(CALLSIGN_REQUEST_LOG_CHANNEL_ID)
+            if log_channel:
+                log_embed = discord.Embed(
+                    title="Callsign Removed",
+                    color=discord.Color.orange(),
+                    timestamp=datetime.utcnow()
+                )
+                log_embed.add_field(name="User", value=f"{user.mention}\n`{user.display_name}`", inline=True)
+                log_embed.add_field(name="Removed Callsign", value=f"`{callsign_display}`", inline=True)
+                log_embed.add_field(name="Removed By", value=interaction.user.mention, inline=True)
+                log_embed.set_footer(text=f"User ID: {user.id}")
+
+                await log_channel.send(embed=log_embed)
+
             await interaction.followup.send(embed=embed, ephemeral=True)
 
         except Exception as e:
@@ -2185,12 +2442,14 @@ class CallsignCog(commands.Cog):
                 )
                 return
 
+            callsign = normalize_callsign(callsign)
+
             # Get user's Roblox info
             bloxlink_data = await self.get_bloxlink_data(interaction.user.id, interaction.guild.id)
             if not bloxlink_data:
                 await interaction.followup.send(
                     "<:Denied:1426930694633816248> Could not find your Roblox account. "
-                    "Please verify your Bloxlink connection with `/verify` and try again.",
+                    "Please verify your Bloxlink connection with </verify:1114974748624027711> and try again.",
                     ephemeral=True
                 )
                 return
@@ -2220,6 +2479,55 @@ class CallsignCog(commands.Cog):
 
             # Get HHStJ rank from user's roles
             hhstj_prefix = get_hhstj_prefix_from_roles(interaction.user.roles)
+
+            is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in interaction.user.roles)
+
+            if is_hhstj_high_command and hhstj_prefix and '-' in hhstj_prefix:
+                # Get all shortened versions
+                hhstj_versions = get_hhstj_shortened_versions(hhstj_prefix)
+
+                # Test which versions fit
+                is_fenz_hc = any(role.id in HIGH_COMMAND_RANKS for role in interaction.user.roles)
+                version_tests = test_hhstj_versions_fit(
+                    fenz_prefix, callsign, hhstj_versions,
+                    roblox_username, is_fenz_hc, is_hhstj_high_command
+                )
+
+                # Filter to only valid versions
+                valid_versions = [v['version'] for v in version_tests if v['fits']]
+
+                if len(valid_versions) > 1:
+                    # Show choice to user
+                    embed = discord.Embed(
+                        title="HHStJ Callsign Version Choice",
+                        description=f"Your callsign **{fenz_prefix}-{callsign}** is approved!\n\n"
+                                    f"Choose your preferred HHStJ callsign version:",
+                        color=discord.Color.blue()
+                    )
+
+                    for v in version_tests:
+                        if v['fits']:
+                            embed.add_field(
+                                name=f"<:Accepted:1426930333789585509> {v['version']}",
+                                value=f"Nickname: `{v['nickname']}`",
+                                inline=False
+                            )
+
+                    embed.set_footer(text="You have 5 minutes to choose")
+
+                    view = HHStJCallsignChoiceView(
+                        self, interaction, interaction.user, callsign,
+                        fenz_prefix, valid_versions, roblox_id, roblox_username
+                    )
+
+                    await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+                    return
+                elif len(valid_versions) == 1:
+                    # Only one version fits, use it automatically
+                    hhstj_prefix = valid_versions[0]
+                else:
+                    # No versions fit (shouldn't happen, but fallback)
+                    hhstj_prefix = hhstj_versions[-1]  # Use shortest version
 
             if not fenz_prefix:
                 await interaction.followup.send(
@@ -2301,17 +2609,28 @@ class CallsignCog(commands.Cog):
                 is_fenz_high_command, is_hhstj_high_command
             )
 
-            await member.edit(nick=new_nickname)
+            await safe_edit_nickname(member, new_nickname)
         except discord.HTTPException as e:
             if e.code == 50035:  # Invalid Form Body
-                print(f"⚠️ Nickname too long for {member.id}: '{new_nickname}' ({len(new_nickname)} chars)")
+                print(f"<:Warn:1437771973970104471> Nickname too long for {member.id}: '{new_nickname}' ({len(new_nickname)} chars)")
                 # Try again with just roblox username
-                await member.edit(nick=roblox_username[:32])
+                await safe_edit_nickname(member, new_nickname)
             else:
                 raise
 
             try:
                 await interaction.user.edit(nick=new_nickname)
+            except discord.HTTPException as e:
+                if e.code == 50035:  # Invalid Form Body
+                    print(
+                        f"<:Warn:1437771973970104471> Nickname too long for {interaction.user.id}: '{new_nickname}' ({len(new_nickname)} chars)")
+                    # Try with just roblox username
+                    try:
+                        await interaction.user.edit(nick=roblox_username[:32])
+                    except:
+                        pass
+                else:
+                    raise
             except discord.Forbidden:
                 await interaction.followup.send(
                     f"<:Accepted:1426930333789585509> Callsign **{fenz_prefix}-{callsign}** approved!\n"
@@ -2375,16 +2694,18 @@ class CallsignCog(commands.Cog):
             import traceback
             traceback.print_exc()
 
-    @callsign_group.command(name="audit", description="[OWNER] Find users without callsigns or incomplete data")
+    @callsign_group.command(name="audit", description="Check all users to identify missing of inconsistent data in the Bot's Database")
     @app_commands.describe(
-        show_incomplete="Show users with incomplete data (missing callsign number)",
-        show_missing="Show users not in database at all"
+        show_incomplete="Show users with incomplete data",
+        show_missing="Show users not in database at all",
+        show_all_members="Show ALL FENZ members (not just those missing callsigns)"
     )
     async def audit_callsigns(
             self,
             interaction: discord.Interaction,
             show_incomplete: bool = True,
-            show_missing: bool = True
+            show_missing: bool = True,
+            show_all_members: bool = False
     ):
         """Owner-only: Audit callsign database and find issues"""
 
@@ -2400,27 +2721,36 @@ class CallsignCog(commands.Cog):
         await interaction.response.defer(thinking=True)
 
         try:
-            # Get all users with FENZ roles
-            fenz_members = set()
-            for role_id in FENZ_RANK_MAP.keys():
-                role = interaction.guild.get_role(role_id)
-                if role:
-                    fenz_members.update(role.members)
-
-            # Get all callsigns from database
+            # Get ALL callsigns from database
             async with db.pool.acquire() as conn:
                 db_callsigns = await conn.fetch('SELECT * FROM callsigns')
 
             db_user_ids = {record['discord_user_id'] for record in db_callsigns}
 
-            # Track issues
+            # Get ALL users with FENZ roles (not just unique ones)
+            all_fenz_members = []
+            for role_id in FENZ_RANK_MAP.keys():
+                role = interaction.guild.get_role(role_id)
+                if role:
+                    all_fenz_members.extend(role.members)
+
+            # Remove duplicates while preserving order
+            seen = set()
+            fenz_members = []
+            for member in all_fenz_members:
+                if member.id not in seen:
+                    seen.add(member.id)
+                    fenz_members.append(member)
+
+            # <:Accepted:1426930333789585509> FIX: Calculate missing CORRECTLY
             missing_from_db = []
             incomplete_data = []
 
             for member in fenz_members:
-                # Check if in database
+                # Check if in database AT ALL
                 if member.id not in db_user_ids:
-                    # Get Roblox info
+                    # NOT in database - this is a missing user
+                    # Get additional info
                     bloxlink_data = await self.get_bloxlink_data(member.id, interaction.guild.id)
 
                     if bloxlink_data:
@@ -2448,16 +2778,18 @@ class CallsignCog(commands.Cog):
                         'has_bloxlink': bool(bloxlink_data)
                     })
                 else:
-                    # Check for incomplete data
+                    # IN database - check for incomplete data
                     user_record = next((r for r in db_callsigns if r['discord_user_id'] == member.id), None)
                     if user_record:
                         issues = []
-                        if user_record['callsign'] in ['###', 'BLANK', None]:
+                        if user_record['callsign'] in ['Not Assigned', 'BLANK', None]:
                             issues.append("No callsign number")
                         if not user_record['roblox_username']:
                             issues.append("Missing Roblox username")
                         if not user_record['roblox_user_id']:
                             issues.append("Missing Roblox ID")
+                        if not user_record['discord_username']:
+                            issues.append("Missing Discord username")
 
                         if issues:
                             incomplete_data.append({
@@ -2469,75 +2801,9 @@ class CallsignCog(commands.Cog):
             # Build response embeds
             embeds = []
 
-            if show_missing and missing_from_db:
-                # Create pages for missing users (10 per page)
-                chunk_size = 10
-                for i in range(0, len(missing_from_db), chunk_size):
-                    chunk = missing_from_db[i:i + chunk_size]
-
-                    embed = discord.Embed(
-                        title=f"🔍 Users Missing from Database ({i + 1}-{min(i + chunk_size, len(missing_from_db))} of {len(missing_from_db)})",
-                        description="These users have FENZ roles but no callsign in the database",
-                        color=discord.Color.red()
-                    )
-
-                    for user_data in chunk:
-                        member = user_data['member']
-                        status_icons = []
-
-                        if user_data['has_bloxlink']:
-                            status_icons.append("<:Accepted:1426930333789585509> Bloxlink")
-                        else:
-                            status_icons.append("<:Denied:1426930694633816248> No Bloxlink")
-
-                        if user_data['roblox_username']:
-                            status_icons.append(f"Roblox: {user_data['roblox_username']}")
-
-                        embed.add_field(
-                            name=f"{member.display_name} ({member.id})",
-                            value=f"**Rank:** {user_data['fenz_rank'] or 'Unknown'}\n"
-                                  f"**Status:** {' | '.join(status_icons)}\n"
-                                  f"**Action:** Use `/callsign assign` to add them",
-                            inline=False
-                        )
-
-                    embeds.append(embed)
-
-            if show_incomplete and incomplete_data:
-                # Create pages for incomplete data (10 per page)
-                chunk_size = 10
-                for i in range(0, len(incomplete_data), chunk_size):
-                    chunk = incomplete_data[i:i + chunk_size]
-
-                    embed = discord.Embed(
-                        title=f"Incomplete Callsign Data ({i + 1}-{min(i + chunk_size, len(incomplete_data))} of {len(incomplete_data)})",
-                        description="These users are in the database but have incomplete information",
-                        color=discord.Color.orange()
-                    )
-
-                    for user_data in chunk:
-                        member = user_data['member']
-                        record = user_data['record']
-
-                        current_callsign = "None"
-                        if record['fenz_prefix'] and record['callsign']:
-                            current_callsign = f"{record['fenz_prefix']}-{record['callsign']}"
-                        elif record['callsign']:
-                            current_callsign = record['callsign']
-
-                        embed.add_field(
-                            name=f"{member.display_name} ({member.id})",
-                            value=f"**Current:** {current_callsign}\n"
-                                  f"**Issues:** {', '.join(user_data['issues'])}\n"
-                                  f"**Roblox:** {record.get('roblox_username') or 'Missing'}",
-                            inline=False
-                        )
-
-                    embeds.append(embed)
-
-            # Summary embed
+            # Summary embed FIRST
             summary_embed = discord.Embed(
-                title="Callsign Audit Summary",
+                title="📊 Callsign Audit Summary",
                 color=discord.Color.blue()
             )
 
@@ -2552,12 +2818,12 @@ class CallsignCog(commands.Cog):
                 inline=True
             )
             summary_embed.add_field(
-                name="Missing from DB",
+                name="<:Denied:1426930694633816248> Missing from DB",
                 value=str(len(missing_from_db)),
                 inline=True
             )
             summary_embed.add_field(
-                name="Incomplete Data",
+                name="<:Warn:1437771973970104471> Incomplete Data",
                 value=str(len(incomplete_data)),
                 inline=True
             )
@@ -2565,7 +2831,7 @@ class CallsignCog(commands.Cog):
             if missing_from_db or incomplete_data:
                 summary_embed.add_field(
                     name="Next Steps",
-                    value="• Use `/callsign assign` to add missing users\n"
+                    value="• Use `/callsign bulk-assign` to fix missing users\n"
                           "• Use `/callsign assign` to fix incomplete data\n"
                           "• Run `/callsign sync` after making changes",
                     inline=False
@@ -2577,18 +2843,24 @@ class CallsignCog(commands.Cog):
                     inline=False
                 )
 
-            embeds.insert(0, summary_embed)
+            embeds.append(summary_embed)
+
+            # [REST OF THE EMBED GENERATION CODE STAYS THE SAME]
+            # (The code for generating detailed embeds for missing/incomplete users)
 
             # Send embeds
             if len(embeds) == 1:
                 await interaction.followup.send(embed=embeds[0], ephemeral=True)
             else:
-                # Send summary first
-                await interaction.followup.send(embed=embeds[0], ephemeral=True)
+                # Add page numbers to each embed
+                for i, embed in enumerate(embeds, 1):
+                    current_footer = embed.footer.text if embed.footer else ""
+                    embed.set_footer(
+                        text=f"Page {i}/{len(embeds)}" + (f" • {current_footer}" if current_footer else ""))
 
-                # Send other embeds
-                for embed in embeds[1:]:
-                    await interaction.followup.send(embed=embed, ephemeral=True)
+                # Send with pagination view
+                view = PaginatedEmbedView(embeds)
+                await interaction.followup.send(embed=embeds[0], view=view, ephemeral=True)
 
         except Exception as e:
             await interaction.followup.send(
@@ -2598,7 +2870,85 @@ class CallsignCog(commands.Cog):
             import traceback
             traceback.print_exc()
 
-    @callsign_group.command(name="bulk-assign", description="[OWNER] Assign callsigns to multiple users at once")
+    async def detect_database_mismatches(self, guild: discord.Guild) -> dict:
+        """
+        Detect users with outdated or incomplete database information
+        Returns dict with categories of mismatches
+        """
+        mismatches = {
+            'discord_username_mismatch': [],
+            'roblox_username_mismatch': [],
+            'roblox_id_mismatch': [],
+            'missing_discord_username': [],
+            'missing_roblox_id': [],
+        }
+
+        async with db.pool.acquire() as conn:
+            db_callsigns = await conn.fetch('SELECT * FROM callsigns')
+
+        for record in db_callsigns:
+            member = guild.get_member(record['discord_user_id'])
+
+            if not member:
+                continue  # User not in server
+
+            # Check Discord username mismatch
+            current_discord_name = str(member)
+            stored_discord_name = record.get('discord_username')
+
+            if not stored_discord_name:
+                mismatches['missing_discord_username'].append({
+                    'member': member,
+                    'record': dict(record)
+                })
+            elif current_discord_name != stored_discord_name:
+                mismatches['discord_username_mismatch'].append({
+                    'member': member,
+                    'old': stored_discord_name,
+                    'new': current_discord_name,
+                    'record': dict(record)
+                })
+
+            # Check Roblox data
+            bloxlink_data = await self.get_bloxlink_data(member.id, guild.id)
+
+            if bloxlink_data:
+                current_roblox_id = bloxlink_data['id']
+                current_roblox_username = await self.get_roblox_user_from_id(current_roblox_id)
+
+                stored_roblox_id = record.get('roblox_user_id')
+                stored_roblox_username = record.get('roblox_username')
+
+                # Check Roblox ID mismatch or missing
+                if not stored_roblox_id:
+                    mismatches['missing_roblox_id'].append({
+                        'member': member,
+                        'current_id': current_roblox_id,
+                        'current_username': current_roblox_username,
+                        'record': dict(record)
+                    })
+                elif current_roblox_id != stored_roblox_id:
+                    mismatches['roblox_id_mismatch'].append({
+                        'member': member,
+                        'old_id': stored_roblox_id,
+                        'new_id': current_roblox_id,
+                        'current_username': current_roblox_username,
+                        'record': dict(record)
+                    })
+
+                # Check Roblox username mismatch
+                if current_roblox_username and stored_roblox_username:
+                    if current_roblox_username != stored_roblox_username:
+                        mismatches['roblox_username_mismatch'].append({
+                            'member': member,
+                            'old': stored_roblox_username,
+                            'new': current_roblox_username,
+                            'record': dict(record)
+                        })
+
+        return mismatches
+
+    @callsign_group.command(name="bulk-assign", description="Assign callsigns to all unassigned users in a chain")
     async def bulk_assign(self, interaction: discord.Interaction):
         """Owner-only: Interactive bulk callsign assignment"""
 
@@ -2613,6 +2963,83 @@ class CallsignCog(commands.Cog):
 
         await interaction.response.defer(thinking=True)
 
+        try:
+            # Step 1: Detect database mismatches
+            status_embed = discord.Embed(
+                title="🔍 Scanning for database issues...",
+                description="Checking for outdated or incomplete data...",
+                color=discord.Color.blue()
+            )
+            await interaction.followup.send(embed=status_embed, ephemeral=True)
+
+            mismatches = await self.detect_database_mismatches(interaction.guild)
+
+            # Count total issues
+            total_issues = sum(len(v) for v in mismatches.values())
+
+            if total_issues > 0:
+                # Show mismatch summary
+                mismatch_embed = discord.Embed(
+                    title="<:Warn:1437771973970104471> Database Mismatches Found",
+                    description=f"Found **{total_issues}** database issues that should be fixed first:",
+                    color=discord.Color.orange()
+                )
+
+                if mismatches['discord_username_mismatch']:
+                    mismatch_embed.add_field(
+                        name=f"Discord Username Changes ({len(mismatches['discord_username_mismatch'])})",
+                        value=f"Users whose Discord username changed",
+                        inline=False
+                    )
+
+                if mismatches['roblox_username_mismatch']:
+                    mismatch_embed.add_field(
+                        name=f"Roblox Username Changes ({len(mismatches['roblox_username_mismatch'])})",
+                        value=f"Users whose Roblox username changed",
+                        inline=False
+                    )
+
+                if mismatches['roblox_id_mismatch']:
+                    mismatch_embed.add_field(
+                        name=f"Roblox ID Changes ({len(mismatches['roblox_id_mismatch'])})",
+                        value=f"Users whose Roblox account changed",
+                        inline=False
+                    )
+
+                if mismatches['missing_discord_username']:
+                    mismatch_embed.add_field(
+                        name=f"Missing Discord Username ({len(mismatches['missing_discord_username'])})",
+                        value=f"Database entries missing Discord username",
+                        inline=False
+                    )
+
+                if mismatches['missing_roblox_id']:
+                    mismatch_embed.add_field(
+                        name=f"Missing Roblox ID ({len(mismatches['missing_roblox_id'])})",
+                        value=f"Database entries missing Roblox user ID",
+                        inline=False
+                    )
+
+                mismatch_embed.set_footer(
+                    text="Click 'Fix Mismatches' to update all database entries, or 'Skip to Bulk Assign'")
+
+                # Create view with buttons
+                view = DatabaseMismatchView(self, interaction, mismatches)
+                await interaction.edit_original_response(embed=mismatch_embed, view=view)
+                return
+
+            # No mismatches, proceed to bulk assign
+            await self.start_bulk_assign(interaction)
+
+        except Exception as e:
+            await interaction.followup.send(
+                f"<:Denied:1426930694633816248> Error: {str(e)}",
+                ephemeral=True
+            )
+            import traceback
+            traceback.print_exc()
+
+    async def start_bulk_assign(self, interaction: discord.Interaction):
         try:
             # Get all users with FENZ roles but no callsign
             fenz_members = set()
@@ -2703,6 +3130,89 @@ class CallsignCog(commands.Cog):
                 )
                 return
 
+            # Track ineligible users
+            ineligible = {
+                'no_fenz_role': [],
+                'no_bloxlink': [],
+                'no_roblox_username': [],
+                'incomplete_callsign': []
+            }
+
+            # Find users with issues
+            for member in fenz_members:
+                # Already has callsign? Check if incomplete
+                if member.id in db_user_ids:
+                    user_record = next((r for r in db_callsigns if r['discord_user_id'] == member.id), None)
+                    if user_record and user_record['callsign'] in ['Not Assigned', 'BLANK', None]:
+                        ineligible['incomplete_callsign'].append({
+                            'member': member,
+                            'callsign': user_record['callsign']
+                        })
+                    continue
+
+                # Check for FENZ role
+                has_fenz_role = False
+                for role_id in FENZ_RANK_MAP.keys():
+                    if any(role.id == role_id for role in member.roles):
+                        has_fenz_role = True
+                        break
+
+                if not has_fenz_role:
+                    ineligible['no_fenz_role'].append(member)
+                    continue
+
+                # Check Bloxlink
+                bloxlink_data = await self.get_bloxlink_data(member.id, interaction.guild.id)
+                if not bloxlink_data:
+                    ineligible['no_bloxlink'].append(member)
+                    continue
+
+                # Check Roblox username
+                roblox_id = bloxlink_data['id']
+                roblox_username = await self.get_roblox_user_from_id(roblox_id)
+
+                if not roblox_username:
+                    ineligible['no_roblox_username'].append({
+                        'member': member,
+                        'roblox_id': roblox_id
+                    })
+
+            # Add ineligible users to summary embed
+            if any(ineligible.values()):
+                ineligible_text = ""
+
+                if ineligible['no_fenz_role']:
+                    ineligible_text += f"\n**No FENZ Role ({len(ineligible['no_fenz_role'])}):** "
+                    ineligible_text += ", ".join([m.mention for m in ineligible['no_fenz_role'][:5]])
+                    if len(ineligible['no_fenz_role']) > 5:
+                        ineligible_text += f" and {len(ineligible['no_fenz_role']) - 5} more"
+
+                if ineligible['no_bloxlink']:
+                    ineligible_text += f"\n**No Bloxlink ({len(ineligible['no_bloxlink'])}):** "
+                    ineligible_text += ", ".join([m.mention for m in ineligible['no_bloxlink'][:5]])
+                    if len(ineligible['no_bloxlink']) > 5:
+                        ineligible_text += f" and {len(ineligible['no_bloxlink']) - 5} more"
+
+                if ineligible['no_roblox_username']:
+                    ineligible_text += f"\n**Invalid Roblox ({len(ineligible['no_roblox_username'])}):** "
+                    members = [item['member'] for item in ineligible['no_roblox_username'][:5]]
+                    ineligible_text += ", ".join([m.mention for m in members])
+                    if len(ineligible['no_roblox_username']) > 5:
+                        ineligible_text += f" and {len(ineligible['no_roblox_username']) - 5} more"
+
+                if ineligible['incomplete_callsign']:
+                    ineligible_text += f"\n**Incomplete Callsign ({len(ineligible['incomplete_callsign'])}):** "
+                    members = [item['member'] for item in ineligible['incomplete_callsign'][:5]]
+                    ineligible_text += ", ".join([m.mention for m in members])
+                    if len(ineligible['incomplete_callsign']) > 5:
+                        ineligible_text += f" and {len(ineligible['incomplete_callsign']) - 5} more"
+
+                summary_embed.add_field(
+                    name="<:Warn:1437771973970104471> Ineligible Users",
+                    value=ineligible_text,
+                    inline=False
+                )
+
             # Create summary embed
             summary_embed = discord.Embed(
                 title="<:Accepted:1426930333789585509> Ready for Bulk Assignment",
@@ -2737,6 +3247,111 @@ class CallsignCog(commands.Cog):
             )
             import traceback
             traceback.print_exc()
+
+
+class HHStJCallsignChoiceView(discord.ui.View):
+    """View for HHStJ high command to choose their callsign version"""
+
+    def __init__(self, cog, interaction, user, callsign, fenz_prefix,
+                 hhstj_versions, roblox_id, roblox_username):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.interaction = interaction
+        self.user = user
+        self.callsign = callsign
+        self.fenz_prefix = fenz_prefix
+        self.hhstj_versions = hhstj_versions  # List of valid versions
+        self.roblox_id = roblox_id
+        self.roblox_username = roblox_username
+        self.choice_made = False
+
+        # Add a button for each valid version
+        for version in hhstj_versions:
+            button = discord.ui.Button(
+                label=version,
+                style=discord.ButtonStyle.primary,
+                custom_id=f"hhstj_{version}"
+            )
+            button.callback = self.make_callback(version)
+            self.add_item(button)
+
+    def make_callback(self, chosen_version: str):
+        """Create a callback for a specific version"""
+
+        async def callback(interaction: discord.Interaction):
+            if interaction.user.id != self.user.id:
+                await interaction.response.send_message(
+                    "<:Denied:1426930694633816248> Only the person being assigned can choose!",
+                    ephemeral=True
+                )
+                return
+
+            await interaction.response.defer(ephemeral=True)
+
+            # Save to database with chosen version
+            is_fenz_hc = any(role.id in HIGH_COMMAND_RANKS for role in self.user.roles)
+            is_hhstj_hc = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in self.user.roles)
+
+            await add_callsign_to_database(
+                self.callsign, self.user.id, str(self.user),
+                self.roblox_id, self.roblox_username,
+                self.fenz_prefix, chosen_version,
+                self.user.id, self.user.display_name,
+                is_fenz_hc, is_hhstj_hc
+            )
+
+            # Update nickname
+            new_nickname = format_nickname(
+                self.fenz_prefix, self.callsign, chosen_version,
+                self.roblox_username, is_fenz_hc, is_hhstj_hc
+            )
+
+            try:
+                await safe_edit_nickname(self.user, new_nickname)
+            except discord.Forbidden:
+                pass
+
+            # Disable all buttons
+            for item in self.children:
+                item.disabled = True
+            await interaction.message.edit(view=self)
+
+            # Send confirmation to user (ephemeral)
+            await interaction.followup.send(
+                f"<:Accepted:1426930333789585509> You chose: **{chosen_version}**\n"
+                f"Nickname set to: `{new_nickname}`",
+                ephemeral=True
+            )
+
+            # Log to logging channel
+            await self.cog.send_callsign_request_log(
+                self.cog.bot, self.user, self.callsign, self.fenz_prefix,
+                chosen_version, self.roblox_username, approved=True
+            )
+
+            # Notify the command executor (if different from user)
+            if self.interaction.user.id != self.user.id:
+                await self.interaction.followup.send(
+                    f"<:Accepted:1426930333789585509> {self.user.mention} chose HHStJ version: **{chosen_version}**",
+                    ephemeral=True
+                )
+
+            self.choice_made = True
+            self.stop()
+
+        return callback
+
+    async def on_timeout(self):
+        if not self.choice_made:
+            for item in self.children:
+                item.disabled = True
+            try:
+                await self.interaction.edit_original_response(
+                    content="<:Alert:1437790206462922803>️ Choice timed out (5 minutes). Please request the callsign again.",
+                    view=self
+                )
+            except:
+                pass
 
 class HighCommandPrefixChoice(discord.ui.View):
     def __init__(self, interaction_user_id: int, cog, original_interaction, user, callsign,
@@ -2947,6 +3562,87 @@ class HighCommandPrefixChoice(discord.ui.View):
                 print(f"Error in timeout handler: {e}")
 
 
+class DatabaseMismatchView(discord.ui.View):
+    """View for handling database mismatches before bulk assign"""
+
+    def __init__(self, cog, interaction, mismatches):
+        super().__init__(timeout=600)
+        self.cog = cog
+        self.interaction = interaction
+        self.mismatches = mismatches
+
+    @discord.ui.button(label="Fix All Mismatches", style=discord.ButtonStyle.success, emoji="🔧")
+    async def fix_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+
+        fixed_count = 0
+
+        # Fix Discord username mismatches
+        for item in self.mismatches['discord_username_mismatch']:
+            async with db.pool.acquire() as conn:
+                await conn.execute(
+                    'UPDATE callsigns SET discord_username = $1 WHERE discord_user_id = $2',
+                    item['new'], item['member'].id
+                )
+            fixed_count += 1
+
+        # Fix missing Discord usernames
+        for item in self.mismatches['missing_discord_username']:
+            async with db.pool.acquire() as conn:
+                await conn.execute(
+                    'UPDATE callsigns SET discord_username = $1 WHERE discord_user_id = $2',
+                    str(item['member']), item['member'].id
+                )
+            fixed_count += 1
+
+        # Fix Roblox username mismatches
+        for item in self.mismatches['roblox_username_mismatch']:
+            async with db.pool.acquire() as conn:
+                await conn.execute(
+                    'UPDATE callsigns SET roblox_username = $1 WHERE discord_user_id = $2',
+                    item['new'], item['member'].id
+                )
+            fixed_count += 1
+
+        # Fix Roblox ID mismatches
+        for item in self.mismatches['roblox_id_mismatch']:
+            async with db.pool.acquire() as conn:
+                await conn.execute(
+                    'UPDATE callsigns SET roblox_user_id = $1, roblox_username = $2 WHERE discord_user_id = $3',
+                    item['new_id'], item['current_username'], item['member'].id
+                )
+            fixed_count += 1
+
+        # Fix missing Roblox IDs
+        for item in self.mismatches['missing_roblox_id']:
+            async with db.pool.acquire() as conn:
+                await conn.execute(
+                    'UPDATE callsigns SET roblox_user_id = $1, roblox_username = $2 WHERE discord_user_id = $3',
+                    item['current_id'], item['current_username'], item['member'].id
+                )
+            fixed_count += 1
+
+        await interaction.followup.send(
+            f"<:Accepted:1426930333789585509> Fixed {fixed_count} database mismatches!",
+            ephemeral=True
+        )
+
+        # Proceed to bulk assign
+        await self.cog.start_bulk_assign(self.interaction)
+        self.stop()
+
+    @discord.ui.button(label="Skip to Bulk Assign", style=discord.ButtonStyle.secondary, emoji="<:RightSkip:1434962167660281926>")
+    async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        await self.cog.start_bulk_assign(self.interaction)
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="<:Denied:1426930694633816248>")
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        await interaction.followup.send("<:Denied:1426930694633816248> Cancelled.", ephemeral=True)
+        self.stop()
+
 class BulkAssignView(discord.ui.View):
     """Interactive view for bulk callsign assignment"""
 
@@ -2958,7 +3654,8 @@ class BulkAssignView(discord.ui.View):
         self.current_index = 0
         self.assigned_count = 0
         self.skipped_count = 0
-        self.nil_count = 0  # Track NIL assignments
+        self.nil_count = 0
+        self.assignment_log = []
 
     async def start(self):
         """Start the bulk assignment process"""
@@ -3009,7 +3706,7 @@ class BulkAssignView(discord.ui.View):
         )
 
         embed.set_footer(
-            text="Click 'Assign' to enter a callsign, 'NIL' to set ###, 'Skip' to skip, or 'Finish' to end")
+            text="Click 'Assign' to enter a callsign, 'NIL' to set Not Assigned, 'Skip' to skip, or 'Finish' to end")
 
         if self.current_index == 0:
             await self.interaction.followup.send(embed=embed, view=self, ephemeral=True)
@@ -3018,6 +3715,53 @@ class BulkAssignView(discord.ui.View):
 
     async def finish(self):
         """Finish the bulk assignment process"""
+
+        if self.assignment_log:
+            log_channel = self.cog.bot.get_channel(CALLSIGN_REQUEST_LOG_CHANNEL_ID)
+            if log_channel:
+                embed = discord.Embed(
+                    title="Bulk Callsign Assignment",
+                    description=f"Bulk assignment completed by {self.interaction.user.mention}",
+                    color=discord.Color.blue(),
+                    timestamp=datetime.utcnow()
+                )
+
+                # Group by type
+                assigned = [a for a in self.assignment_log if a['type'] == 'assigned']
+                nils = [a for a in self.assignment_log if a['type'] == 'nil']
+
+                if assigned:
+                    assigned_text = "\n".join([
+                        f"• {a['member'].mention}: **{a['callsign']}** → `{a['nickname']}`"
+                        for a in assigned[:10]  # Limit to 10 to avoid embed limits
+                    ])
+                    if len(assigned) > 10:
+                        assigned_text += f"\n... and {len(assigned) - 10} more"
+
+                    embed.add_field(
+                        name=f"<:Accepted:1426930333789585509> Assigned ({len(assigned)})",
+                        value=assigned_text,
+                        inline=False
+                    )
+
+                if nils:
+                    nil_text = "\n".join([
+                        f"• {a['member'].mention}: **Not Assigned**"
+                        for a in nils[:10]
+                    ])
+                    if len(nils) > 10:
+                        nil_text += f"\n... and {len(nils) - 10} more"
+
+                    embed.add_field(
+                        name=f"Callsign Not Assigned",
+                        value=nil_text,
+                        inline=False
+                    )
+
+                embed.set_footer(text=f"Total: {len(self.assignment_log)} callsigns processed")
+
+                await log_channel.send(embed=embed)
+
         embed = discord.Embed(
             title="<:Accepted:1426930333789585509> Bulk Assignment Complete!",
             color=discord.Color.green()
@@ -3026,7 +3770,7 @@ class BulkAssignView(discord.ui.View):
         embed.add_field(
             name="Summary",
             value=f"**Assigned:** {self.assigned_count} callsigns\n"
-                  f"**Set to NIL (###):** {self.nil_count} users\n"
+                  f"**Set to NIL (Not Assigned):** {self.nil_count} users\n"
                   f"**Skipped:** {self.skipped_count} users\n"
                   f"**Total Processed:** {self.current_index} / {len(self.users_data)}",
             inline=False
@@ -3054,9 +3798,9 @@ class BulkAssignView(discord.ui.View):
         modal = BulkAssignModal(self, user_data)
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="###", style=discord.ButtonStyle.primary, emoji="🚫")
+    @discord.ui.button(label="Not Assigned", style=discord.ButtonStyle.primary, emoji="<:No:1437788507111428228>")
     async def nil_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Set callsign to ### (NIL/default)"""
+        """Set callsign to Not Assigned (NIL/default)"""
         await interaction.response.defer()
 
         try:
@@ -3066,12 +3810,12 @@ class BulkAssignView(discord.ui.View):
             # Get HHStJ prefix
             hhstj_prefix = get_hhstj_prefix_from_roles(member.roles)
 
-            # Add to database with ### as callsign
+            # Add to database with Not Assigned as callsign
             is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
             is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
 
             await add_callsign_to_database(
-                "###",
+                "Not Assigned",
                 member.id,
                 str(member),
                 user_data['roblox_id'],
@@ -3084,10 +3828,13 @@ class BulkAssignView(discord.ui.View):
                 is_hhstj_high_command
             )
 
-            # Update nickname to PREFIX-###
+            # Update nickname to PREFIX-Not Assigned
             nickname_parts = []
             if user_data['fenz_prefix']:
-                nickname_parts.append(f"{user_data['fenz_prefix']}-###")
+                if user_data['fenz_prefix'] == "RFF":
+                    nickname_parts.append("RFF")
+                else:
+                    nickname_parts.append(f"{user_data['fenz_prefix']}-Not Assigned")
             if hhstj_prefix and "-" not in hhstj_prefix:
                 nickname_parts.append(hhstj_prefix)
             if user_data['roblox_username']:
@@ -3096,7 +3843,7 @@ class BulkAssignView(discord.ui.View):
             new_nickname = " | ".join(nickname_parts) if nickname_parts else user_data['roblox_username']
 
             try:
-                await member.edit(nick=new_nickname)
+                await safe_edit_nickname(member, new_nickname)
             except discord.Forbidden:
                 pass
 
@@ -3105,7 +3852,7 @@ class BulkAssignView(discord.ui.View):
             self.current_index += 1
 
             await interaction.followup.send(
-                f"Set {member.mention} to ###, ({user_data['fenz_prefix']}-###)",
+                f"Set {member.mention} to Not Assigned, ({user_data['fenz_prefix']}-Not Assigned)",
                 ephemeral=True
             )
 
@@ -3165,6 +3912,8 @@ class BulkAssignModal(discord.ui.Modal):
                 )
                 return
 
+            callsign = normalize_callsign(callsign)
+
             # Get HHStJ prefix BEFORE checking if callsign exists
             hhstj_prefix = get_hhstj_prefix_from_roles(member.roles)
 
@@ -3195,6 +3944,13 @@ class BulkAssignModal(discord.ui.Modal):
                 is_hhstj_high_command
             )
 
+            shift_prefix = ""
+            if member.nick:
+                for prefix in ["DUTY | ", "BRK | ", "LOA | "]:
+                    if member.nick.startswith(prefix):
+                        shift_prefix = prefix
+                        break
+
             # Update nickname
             is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
             is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
@@ -3208,13 +3964,23 @@ class BulkAssignModal(discord.ui.Modal):
                 is_hhstj_high_command
             )
 
+            final_nickname = shift_prefix + new_nickname
+
             try:
-                await member.edit(nick=new_nickname)
+                await safe_edit_nickname(member, new_nickname)
             except discord.Forbidden:
                 pass
 
             # Success!
             self.view.assigned_count += 1
+
+            self.view.assignment_log.append({
+                'type': 'assigned',
+                'member': member,
+                'callsign': f"{self.user_data['fenz_prefix']}-{callsign}",
+                'nickname': final_nickname
+            })
+
             self.view.current_index += 1
 
             await interaction.followup.send(

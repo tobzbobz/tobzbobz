@@ -83,7 +83,7 @@ class JishakuCog(commands.Cog):
 
         return " ".join(parts)
 
-    @py_group.command(name="eval", description="Execute Python code (Owner only)")
+    @py_group.command(name="eval", description="Execute arbitrary Python code")
     async def py_eval(self, interaction: discord.Interaction):
         """Open a modal to execute arbitrary Python code"""
         if interaction.user.id != OWNER_ID:
@@ -130,7 +130,7 @@ class JishakuCog(commands.Cog):
             exec(to_compile, env)
         except Exception as e:
             embed = discord.Embed(
-                title="⚠️ Compilation Error",
+                title="<:Warn:1437771973970104471> Compilation Error",
                 description=f"```py\n{e.__class__.__name__}: {e}\n```",
                 color=discord.Color.red()
             )
@@ -166,7 +166,7 @@ class JishakuCog(commands.Cog):
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @py_group.command(name="shell", description="Execute a shell command on the bot host (Owner only)")
+    @py_group.command(name="shell", description="Execute a shell command on the bot host")
     async def py_shell(self, interaction: discord.Interaction):
         """Open a modal to execute shell commands"""
         if interaction.user.id != OWNER_ID:
@@ -197,7 +197,7 @@ class JishakuCog(commands.Cog):
                 process.kill()
                 await interaction.followup.send(
                     embed=discord.Embed(
-                        title="⏱️ Command Timeout",
+                        title="<:Alert:1437790206462922803> Command Timeout",
                         description="Command execution exceeded 30 seconds and was killed.",
                         color=discord.Color.red()
                     ),
@@ -242,7 +242,7 @@ class JishakuCog(commands.Cog):
             )
             await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @py_group.command(name="stats", description="Show runtime diagnostics and cache information (Owner only)")
+    @py_group.command(name="stats", description="Show runtime diagnostics and cache information")
     async def py_stats(self, interaction: discord.Interaction):
         """Display bot statistics and system information"""
         if interaction.user.id != OWNER_ID:
@@ -335,7 +335,7 @@ class JishakuCog(commands.Cog):
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @py_group.command(name="tasks", description="List active event loop handles and requests (Owner only)")
+    @py_group.command(name="tasks", description="List active event loop handles and requests")
     async def py_tasks(self, interaction: discord.Interaction):
         """Display all active asyncio tasks"""
         if interaction.user.id != OWNER_ID:
@@ -416,7 +416,7 @@ class JishakuCog(commands.Cog):
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @py_group.command(name="sync", description="Sync database changes to the bot without restarting (Owner only)")
+    @py_group.command(name="sync", description="Sync database changes to the bot without restarting")
     async def py_sync(self, interaction: discord.Interaction):
         """Reload bot data and resync caches from the database"""
         if interaction.user.id != OWNER_ID:
@@ -463,7 +463,7 @@ class JishakuCog(commands.Cog):
         if reloaded:
             embed.add_field(name="<:Accepted:1426930333789585509> Reloaded", value="\n".join(reloaded)[:1000], inline=False)
         if failed:
-            embed.add_field(name="⚠️ Failed", value="\n".join(failed)[:1000], inline=False)
+            embed.add_field(name="<:Warn:1437771973970104471> Failed", value="\n".join(failed)[:1000], inline=False)
         if not reloaded and not failed:
             embed.description = "No reloadable methods found."
 
@@ -471,7 +471,7 @@ class JishakuCog(commands.Cog):
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @py_group.command(name="reload", description="Reload a specific cog (Owner only)")
+    @py_group.command(name="reload", description="Reload a specific cog")
     @app_commands.describe(cog="The name of the cog to reload")
     async def py_reload(self, interaction: discord.Interaction, cog: str):
         """Reload a specific cog"""
@@ -495,7 +495,7 @@ class JishakuCog(commands.Cog):
             )
         except commands.ExtensionNotLoaded:
             embed = discord.Embed(
-                title="⚠️ Not Loaded",
+                title="<:Warn:1437771973970104471> Not Loaded",
                 description=f"Cog `{cog}` is not currently loaded. Use `/py load` instead.",
                 color=discord.Color.orange()
             )

@@ -236,13 +236,13 @@ class StatusCog(commands.Cog):
 
         # Confirm submission
         embed = discord.Embed(
-            title="✅ Status Submitted",
+            title="<:Accepted:1426930333789585509> Status Submitted",
             description=f"Your status suggestion has been submitted for review!\n\n**Suggestion:** {suggestion}",
             color=discord.Color.green()
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="status-view", description="Review pending status submissions (Owner only)")
+    @app_commands.command(name="status-view", description="Review pending status submissions")
     @app_commands.default_permissions(administrator=True)
     async def view_status(self, interaction: discord.Interaction):
         """View and approve/deny status submissions"""
@@ -257,7 +257,7 @@ class StatusCog(commands.Cog):
         # Check if there are pending submissions
         if not self.pending_statuses:
             await interaction.response.send_message(
-                "✅ No pending status submissions!",
+                "<:Accepted:1426930333789585509> No pending status submissions!",
                 ephemeral=True
             )
             return
@@ -306,7 +306,7 @@ class StatusCog(commands.Cog):
         try:
             user = await self.bot.fetch_user(user_id)
             approve_embed = discord.Embed(
-                title="✅ Status Approved!",
+                title="<:Accepted:1426930333789585509> Status Approved!",
                 description=f"Your status suggestion has been approved and added to the rotation!\n\n**Status:** {status_text}",
                 color=discord.Color.green()
             )
@@ -319,7 +319,7 @@ class StatusCog(commands.Cog):
             pass
 
         # Update the original interaction
-        await interaction.response.send_message("✅ Status approved!", ephemeral=True)
+        await interaction.response.send_message("<:Accepted:1426930333789585509> Status approved!", ephemeral=True)
 
         # Try to update the review view if possible
         try:
@@ -373,7 +373,7 @@ class StatusCog(commands.Cog):
         """Refresh the status view after approval/denial"""
         if not self.pending_statuses:
             await interaction.response.edit_message(
-                content="✅ All status submissions reviewed!",
+                content="<:Accepted:1426930333789585509> All status submissions reviewed!",
                 embed=None,
                 view=None
             )
@@ -471,13 +471,13 @@ class StatusIndividualReviewView(discord.ui.View):
         self.cog = cog
         self.index = index
 
-    @discord.ui.button(label="✅ Approve", style=discord.ButtonStyle.green)
+    @discord.ui.button(label="<:Accepted:1426930333789585509> Approve", style=discord.ButtonStyle.green)
     async def approve_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Show modal for optional reason
         modal = ReasonModal(self.cog, self.index, is_approval=True)
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="❌ Deny", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="<:Denied:1426930694633816248> Deny", style=discord.ButtonStyle.red)
     async def deny_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Show modal for optional reason
         modal = ReasonModal(self.cog, self.index, is_approval=False)

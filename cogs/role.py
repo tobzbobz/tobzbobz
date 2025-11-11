@@ -53,9 +53,9 @@ class RolesPaginator(discord.ui.View):
 class RoleCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        print("✅ RoleCog initialized")
+        print("<:Accepted:1426930333789585509> RoleCog initialized")
 
-    @app_commands.command(name="roles", description="View server roles or get detailed info about a specific role")
+    @app_commands.command(name="roles", description="View server roles; Get detailed info on specific server roles")
     @app_commands.describe(role="Optional: Specify a role name or ID to view detailed info")
     async def roles(self, interaction: discord.Interaction, role: str = None):
         """Display all server roles or detailed info about a specific role"""
@@ -64,7 +64,7 @@ class RoleCog(commands.Cog):
 
             # Defer the response to prevent timeout
             await interaction.response.defer()
-            print("✅ Response deferred")
+            print("<:Accepted:1426930333789585509> Response deferred")
 
             # Check if user has one of the allowed roles
             allowed_role_ids = [
@@ -105,7 +105,7 @@ class RoleCog(commands.Cog):
                     )
                     return
 
-                print(f"✅ Found role: {target_role.name}, building embed...")
+                print(f"<:Accepted:1426930333789585509> Found role: {target_role.name}, building embed...")
 
                 # Get members with this role
                 members_with_role = target_role.members
@@ -125,8 +125,8 @@ class RoleCog(commands.Cog):
                 embed.add_field(name="Color", value=f"{str(target_role.color)}", inline=True)
                 embed.add_field(name="Position", value=f"{target_role.position}", inline=True)
                 embed.add_field(name="Members", value=f"{member_count}", inline=True)
-                embed.add_field(name="Mentionable", value="✅" if target_role.mentionable else "<:Denied:1426930694633816248>", inline=True)
-                embed.add_field(name="Hoisted", value="✅" if target_role.hoist else "<:Denied:1426930694633816248>", inline=True)
+                embed.add_field(name="Mentionable", value="<:Accepted:1426930333789585509>" if target_role.mentionable else "<:Denied:1426930694633816248>", inline=True)
+                embed.add_field(name="Hoisted", value="<:Accepted:1426930333789585509>" if target_role.hoist else "<:Denied:1426930694633816248>", inline=True)
 
                 perms = target_role.permissions
                 key_perms = []
@@ -199,10 +199,10 @@ class RoleCog(commands.Cog):
                     view = RolesPaginator(pages, interaction.user.id)
                     msg = await interaction.followup.send(embed=pages[0], view=view)
                     view.message = msg
-                    print("✅ Sent with pagination")
+                    print("<:Accepted:1426930333789585509> Sent with pagination")
                 else:
                     msg = await interaction.followup.send(embed=pages[0])
-                    print("✅ Sent successfully")
+                    print("<:Accepted:1426930333789585509> Sent successfully")
 
                 # Auto-delete after 5 minutes
                 await asyncio.sleep(300)
@@ -300,18 +300,18 @@ class RoleCog(commands.Cog):
                 view = RolesPaginator(pages, interaction.user.id)
                 msg = await interaction.followup.send(embed=pages[0], view=view)
                 view.message = msg
-                print("✅ Sent with pagination")
+                print("<:Accepted:1426930333789585509> Sent with pagination")
             else:
                 msg = await interaction.followup.send(embed=pages[0])
-                print("✅ Sent single page")
+                print("<:Accepted:1426930333789585509> Sent single page")
 
             # Auto-delete after 5 minutes
             await asyncio.sleep(300)
             try:
                 await msg.delete()
-                print("🗑️ Auto-deleted roles message")
+                print("<:Wipe:1434954284851658762> Auto-deleted roles message")
             except:
-                print("⚠️ Could not delete message (may already be deleted)")
+                print("<:Warn:1437771973970104471> Could not delete message (may already be deleted)")
 
         except Exception as e:
             print(f"ERROR in roles command <:Denied:1426930694633816248>: {e}")
@@ -328,4 +328,4 @@ class RoleCog(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(RoleCog(bot))
-    print("✅ RoleCog setup complete")
+    print("<:Accepted:1426930333789585509> RoleCog setup complete")

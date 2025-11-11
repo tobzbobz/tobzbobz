@@ -558,10 +558,10 @@ class WatchCog(commands.Cog):
             waited += 1
 
         if db.pool is None:
-            print("❌ WatchCog initialization failed: database connection timeout")
+            print("<:Denied:1426930694633816248> WatchCog initialization failed: database connection timeout")
             return
 
-        # ✅ Re-register persistent VoteButton views for active watches
+        # <:Accepted:1426930333789585509> Re-register persistent VoteButton views for active watches
         await self.register_active_vote_buttons()
 
         # Now load initial data
@@ -570,7 +570,7 @@ class WatchCog(commands.Cog):
         # Start the scheduled votes checker
         self.check_scheduled_votes.start()
 
-        print("✅ WatchCog initialized successfully")
+        print("<:Accepted:1426930333789585509> WatchCog initialized successfully")
 
     async def register_active_vote_buttons(self):
         """Re-register VoteButton views for watches that were active during restart"""
@@ -593,9 +593,9 @@ class WatchCog(commands.Cog):
                 if int(k) not in IGNORED_WATCH_MESSAGE_IDS
             }
 
-            print(f'✅ Loaded {len(active_watches)} active watches (ignored IDs: {IGNORED_WATCH_MESSAGE_IDS})')
+            print(f'<:Accepted:1426930333789585509> Loaded {len(active_watches)} active watches (ignored IDs: {IGNORED_WATCH_MESSAGE_IDS})')
         except Exception as e:
-            print(f'❌ Error loading watches: {e}')
+            print(f'<:Denied:1426930694633816248> Error loading watches: {e}')
             active_watches = {}
 
     # Also update cog_unload to handle the case where check_scheduled_votes might not be started
@@ -609,7 +609,7 @@ class WatchCog(commands.Cog):
     async def reload_data(self):
         async with db.pool.acquire() as conn:
             self.active_watches = await conn.fetch("SELECT * FROM active_watches;")
-        print("✅ Reloaded active watch cache")
+        print("<:Accepted:1426930333789585509> Reloaded active watch cache")
 
     async def calculate_watch_statistics(self) -> dict:
         """Calculate statistics from completed watches (with filtering)"""
@@ -619,7 +619,7 @@ class WatchCog(commands.Cog):
             print(f"Stats Calculation: Found {len(completed_watches)} total records in database")
 
             if not completed_watches:
-                print("⚠️ Stats Calculation: No completed watches found")
+                print("<:Warn:1437771973970104471> Stats Calculation: No completed watches found")
                 return {
                     'total_watches': 0,
                     'longest_duration': 'N/A',
@@ -629,7 +629,7 @@ class WatchCog(commands.Cog):
                     'average_duration': 'N/A'
                 }
 
-            # ✅ FILTER OUT BOTH IGNORED MESSAGE IDS AND LCS WATCHES
+            # <:Accepted:1426930333789585509> FILTER OUT BOTH IGNORED MESSAGE IDS AND LCS WATCHES
             filtered_watches = {
                 msg_id: watch_data
                 for msg_id, watch_data in completed_watches.items()
@@ -641,7 +641,7 @@ class WatchCog(commands.Cog):
                 f"🔍 Filtered out {len(completed_watches) - len(filtered_watches)} watches from stats (ignored IDs + LCS)")
 
             if not filtered_watches:
-                print("⚠️ All watches were filtered out")
+                print("<:Warn:1437771973970104471> All watches were filtered out")
                 return {
                     'total_watches': 0,
                     'longest_duration': 'N/A',
@@ -661,7 +661,7 @@ class WatchCog(commands.Cog):
                     if started_at > 0 and ended_at > 0 and ended_at > started_at:
                         successful_watches.append(watch)
 
-            print(f"✅ Stats Calculation: {len(successful_watches)} successful watches (after filtering)")
+            print(f"<:Accepted:1426930333789585509> Stats Calculation: {len(successful_watches)} successful watches (after filtering)")
 
             if not successful_watches:
                 return {
@@ -729,7 +729,7 @@ class WatchCog(commands.Cog):
             else:
                 average_duration = 'N/A'
 
-            print(f"✅ Stats calculation complete!")
+            print(f"<:Accepted:1426930333789585509> Stats calculation complete!")
 
             return {
                 'total_watches': total_watches,
@@ -815,17 +815,17 @@ class WatchCog(commands.Cog):
 
             # Update the message (keep the same view)
             await stats_message.edit(embed=stats_embed)
-            print("✅ Stats embed updated successfully")
+            print("<:Accepted:1426930333789585509> Stats embed updated successfully")
 
         except Exception as e:
             print(f'Error updating stats embed: {e}')
 
-    @watch_group.command(name='start', description='Declares the start of a FENZ watch without a vote.')
+    @watch_group.command(name='start', description='Starts a FENZ watch')
     @app_commands.default_permissions(manage_nicknames=True)
     @app_commands.describe(
-        colour='The colour watch you want to start.',
-        station='The station you are declaring the watch colour for.',
-        comms='Whether FIRE COMMS is active or inactive (default: inactive).'
+        colour='The colour watch you want to start',
+        station='The station you are declaring the watch colour for',
+        comms='Whether FIRE COMMS is active or inactive (default: inactive)'
     )
     async def watch_start(self, interaction: discord.Interaction, colour: str, station: str, comms: str = 'inactive'):
         try:
@@ -1040,14 +1040,14 @@ class WatchCog(commands.Cog):
                 current.lower() in station.lower()]
 
 
-    @watch_group.command(name='vote', description='Start a vote for a FENZ watch.')
+    @watch_group.command(name='vote', description='Start a vote for a FENZ watch')
     @app_commands.default_permissions(manage_nicknames=True)
     @app_commands.describe(
-        colour='The colour watch you want to vote for.',
-        station='The station you are voting for.',
-        time='Time in minutes from now (optional).',
-        votes='Required number of votes to pass.',
-        comms='Whether FIRE COMMS is active or inactive (default: active).'
+        colour='The colour watch you want to vote for',
+        station='The station you are voting for',
+        time='Time in minutes from now (defaults to now)',
+        votes='Required number of votes to pass',
+        comms='Whether FIRE COMMS is active or inactive (default: active)'
     )
     async def watch_vote(self, interaction: discord.Interaction, colour: str, station: str, votes: int,
                          time: int = None, comms: str = 'inactive'):
@@ -1167,11 +1167,11 @@ class WatchCog(commands.Cog):
         return [app_commands.Choice(name=station, value=station) for station in stations if
                 current.lower() in station.lower()]
 
-    @watch_group.command(name='end', description='End an active watch.')
+    @watch_group.command(name='end', description='End an active watch')
     @app_commands.default_permissions(manage_nicknames=True)
     @app_commands.describe(
-        watch='The active watch to end.',
-        attendees='Number of people who attended the watch.'
+        watch='The active watch to end',
+        attendees='Number of people who attended the watch'
     )
     async def watch_end(self, interaction: discord.Interaction, watch: str, attendees: int):
         try:
@@ -1310,7 +1310,7 @@ class WatchCog(commands.Cog):
 
             # ALWAYS update stats embed - the calculation function will filter out LCS watches
             await self.update_stats_embed(channel)
-            print("✅ Stats embed updated (LCS watches are filtered in calculation)")
+            print("<:Accepted:1426930333789585509> Stats embed updated (LCS watches are filtered in calculation)")
 
             success_embed = discord.Embed(
                 description=f'<:Accepted:1426930333789585509> Watch ended successfully with {attendees} attendees!',
@@ -1334,14 +1334,14 @@ class WatchCog(commands.Cog):
             choices.append(app_commands.Choice(name=label, value=msg_id))
         return [choice for choice in choices if current.lower() in choice.name.lower()][:25]
 
-    @watch_group.command(name='logs', description='View the history of completed watches.')
+    @watch_group.command(name='logs', description='View the history of completed watches')
     @app_commands.describe(
         limit='Number of recent watches to display (default: 50, max: 500)',
         per_page='Number of logs per page (default: 5, max: 10)'
     )
     async def watch_logs(self, interaction: discord.Interaction, limit: int = 50, per_page: int = 5):
         try:
-            # ✅ Check database first
+            # <:Accepted:1426930333789585509> Check database first
             if not await self.check_database_ready(interaction):
                 return
 
@@ -1359,7 +1359,7 @@ class WatchCog(commands.Cog):
 
             await interaction.response.defer(ephemeral=True)
 
-            # ✅ Now safe to call database
+            # <:Accepted:1426930333789585509> Now safe to call database
             completed_watches = await load_completed_watches()
 
             if not completed_watches:
@@ -1491,9 +1491,9 @@ class WatchCog(commands.Cog):
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
             raise
 
-    @watch_group.command(name='delete-log', description='Delete a specific watch log.')
+    @watch_group.command(name='delete-log', description='Delete a specific watch log')
     @app_commands.default_permissions(administrator=True)
-    @app_commands.describe(log='The watch log to delete (search by colour, station, or date).')
+    @app_commands.describe(log='The watch log to delete (search by colour, station, or date)')
     async def watch_delete_log(self, interaction: discord.Interaction, log: str):
         try:
             allowed_role_id = 1389550689113473024
@@ -1580,7 +1580,7 @@ class WatchCog(commands.Cog):
 
         return filtered[:25]
 
-    @watch_group.command(name='end-all', description='End and delete all active watches and votes (Owner only).')
+    @watch_group.command(name='end-all', description='End and delete all active watches and votes')
     @app_commands.default_permissions(administrator=True)
     async def watch_end_all(self, interaction: discord.Interaction):
         try:
@@ -1625,7 +1625,7 @@ class WatchCog(commands.Cog):
 
             summary_embed = discord.Embed(
                 description=f'<:Accepted:1426930333789585509> Successfully deleted {deleted_count} watch(es) and vote(s)!' +
-                            (f'\n⚠️ Failed to delete {failed_count} watch(es)/vote(s).' if failed_count > 0 else ''),
+                            (f'\n<:Warn:1437771973970104471> Failed to delete {failed_count} watch(es)/vote(s).' if failed_count > 0 else ''),
                 colour=discord.Colour(0x2ecc71)
             )
             await interaction.followup.send(embed=summary_embed, ephemeral=True)
@@ -1982,7 +1982,7 @@ class WatchCog(commands.Cog):
             start_embed.set_image(
                 url='https://cdn.discordapp.com/attachments/1425867714160758896/1426932258694238258/image.png?ex=68f4eeb9&is=68f39d39&hm=b69f7f8bad7dcd7c7bde4dab731ca7e23e27d32d864cad9fc7224dcbb0648840')
 
-            # ✅ FIXED: Get user from guild instead of using non-existent interaction
+            # <:Accepted:1426930333789585509> FIXED: Get user from guild instead of using non-existent interaction
             user = channel.guild.get_member(user_id)
             if user:
                 start_embed.set_author(name=f'Requested by {user.display_name}',
@@ -2012,7 +2012,7 @@ class WatchCog(commands.Cog):
 
             view.message_id = msg.id
 
-            # ✅ FIXED: Added current timestamp for started_at
+            # <:Accepted:1426930333789585509> FIXED: Added current timestamp for started_at
             current_timestamp = int(discord.utils.utcnow().timestamp())
 
             # Save to database as active watch
@@ -2047,7 +2047,7 @@ class WatchCog(commands.Cog):
             if f"start_{message_id}" in self.vote_timeout_tasks:
                 del self.vote_timeout_tasks[f"start_{message_id}"]
 
-            print(f"✅ Successfully started watch {msg.id} after vote delay")
+            print(f"<:Accepted:1426930333789585509> Successfully started watch {msg.id} after vote delay")
 
         except asyncio.CancelledError:
             pass
@@ -2057,14 +2057,14 @@ class WatchCog(commands.Cog):
             traceback.print_exc()
 
     @watch_group.command(name='switch',
-                         description='Switch an active watch to a different colour/station/leader/comms.')
+                         description='Switch an active watch to a different colour/station/leader/comms')
     @app_commands.default_permissions(manage_nicknames=True)
     @app_commands.describe(
-        watch='The active watch to switch.',
-        colour='New colour for the watch (optional).',
-        station='New station for the watch (optional).',
-        watch_leader='New watch leader (mention a user, optional).',
-        comms='New COMMS status: active or inactive (optional).'
+        watch='The active watch to switch',
+        colour='New colour for the watch',
+        station='New station for the watch',
+        watch_leader='New watch leader',
+        comms='New FIRE COMMS status'
     )
 
     async def watch_switch(self, interaction: discord.Interaction, watch: str,
@@ -2261,7 +2261,7 @@ class WatchCog(commands.Cog):
                     active_watches[watch]['comms_status'] = final_comms
                     active_watches[watch]['switch_history'] = switch_history
 
-                    print(f"✅ Successfully updated watch {watch} (minor switch)")
+                    print(f"<:Accepted:1426930333789585509> Successfully updated watch {watch} (minor switch)")
 
                 except discord.NotFound:
                     error_embed = discord.Embed(
@@ -2370,12 +2370,12 @@ class WatchCog(commands.Cog):
                         'comms_status': final_comms
                     }
 
-                    print(f"✅ Successfully saved switched watch {msg.id}")
+                    print(f"<:Accepted:1426930333789585509> Successfully saved switched watch {msg.id}")
 
                 except Exception as e:
                     import traceback
                     traceback.print_exc()
-                    print(f"❌ CRITICAL: Failed to save switched watch {msg.id}: {e}")
+                    print(f"<:Denied:1426930694633816248> CRITICAL: Failed to save switched watch {msg.id}: {e}")
 
                     try:
                         await msg.delete()
@@ -2454,7 +2454,7 @@ class WatchCog(commands.Cog):
 
     @watch_group.command(name='low', description='Boost an active watch to encourage more people to join!')
     @app_commands.default_permissions(manage_nicknames=True)
-    @app_commands.describe(watch='The active watch to boost.')
+    @app_commands.describe(watch='The active watch to boost')
     async def watch_boost(self, interaction: discord.Interaction, watch: str):
         try:
             allowed_role_ids = [1285474077556998196, 1389550689113473024, 1365536209681514636]
@@ -2602,14 +2602,14 @@ class WatchCog(commands.Cog):
                 new_name = "「⚫」watches"
 
             await channel.edit(name=new_name)
-            print(f"✅ Channel renamed to {new_name}")
+            print(f"<:Accepted:1426930333789585509> Channel renamed to {new_name}")
 
         except discord.Forbidden:
-            print("⚠️ Missing permissions to rename channel.")
+            print("<:Warn:1437771973970104471> Missing permissions to rename channel.")
         except Exception as e:
-            print(f"⚠️ Error renaming channel: {e}")
+            print(f"<:Warn:1437771973970104471> Error renaming channel: {e}")
 
-    @watch_group.command(name='embed', description='Create/update the watch statistics embed.')
+    @watch_group.command(name='embed', description='Create/update the watch statistics embed')
     @app_commands.default_permissions(manage_nicknames=True)
     async def watch_embed(self, interaction: discord.Interaction):
         try:

@@ -14,7 +14,7 @@ async with db.pool.acquire() as conn:
         'UPDATE callsigns SET callsign = $1 WHERE discord_user_id = $2',
         "123", 678475709257089057
     )
-    print("✅ Database updated!")
+    print("<:Accepted:1426930333789585509> Database updated!")
 
 /x code:
 from database import db
@@ -29,7 +29,7 @@ async with db.pool.acquire() as conn:
 /x code:
 channel = bot.get_channel(1390867914462203914)
 await channel.edit(name="「🔴1️⃣」active-watch")
-print(f"✅ Renamed channel to: {channel.name}")
+print(f"<:Accepted:1426930333789585509> Renamed channel to: {channel.name}")
 
 /x code:
 # Update multiple channels at once
@@ -38,7 +38,7 @@ for channel_id in channels:
     ch = bot.get_channel(channel_id)
     if ch:
         await ch.edit(name="new-name")
-        print(f"✅ Updated {ch.name}")
+        print(f"<:Accepted:1426930333789585509> Updated {ch.name}")
 
 
 # Delete Message
@@ -54,7 +54,7 @@ print("Deleted 10 messages")
 member = guild.get_member(USER_ID)
 role = guild.get_role(ROLE_ID)
 await member.add_roles(role)
-print(f"✅ Added role to {member.name}")
+print(f"<:Accepted:1426930333789585509> Added role to {member.name}")
 
 
 
@@ -64,7 +64,7 @@ from cogs.watches import WatchCog
 cog = bot.get_cog('WatchCog')
 channel = bot.get_channel(1390867914462203914)
 await cog.update_stats_embed(channel)
-print("✅ Stats embed updated!")
+print("<:Accepted:1426930333789585509> Stats embed updated!")
 
 
 # Check Active Watches

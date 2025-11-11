@@ -131,14 +131,14 @@ class ModerateCog(commands.Cog):
             print(f"<:Denied:1426930694633816248> Failed to disconnect {member.name}: {e}")
             return False
 
-    @app_commands.command(name="moderate", description="Moderate users with multiple actions (owner only)")
+    @app_commands.command(name="moderate", description="Moderate or troll others")
     @app_commands.describe(
-        users="The users to moderate (separate with spaces)",
+        users="Affected users",
         reason="Reason for moderation",
-        timeout="Timeout duration (e.g., '5m', '1h', '1d')",
-        server_mute="Toggle server mute (toggles current state)",
-        server_deafen="Toggle server deafen (toggles current state)",
-        disconnect="Disconnect users from voice channel",
+        timeout="Timeout duration",
+        server_mute="Toggle server mute",
+        server_deafen="Toggle server deafen",
+        disconnect="Disconnect from VC",
     )
     @is_owner()
     async def moderate(
@@ -194,7 +194,7 @@ class ModerateCog(commands.Cog):
 
         # Summarize results
         for user, (actions_taken, errors) in all_results:
-            status = "<:Accepted:1426930333789585509>" if actions_taken and not errors else "⚠️" if actions_taken else "<:Denied:1426930694633816248>"
+            status = "<:Accepted:1426930333789585509>" if actions_taken and not errors else "<:Warn:1437771973970104471>" if actions_taken else "<:Denied:1426930694633816248>"
 
             field_value = ""
             if actions_taken:
@@ -538,7 +538,7 @@ class ModerateCog(commands.Cog):
         except Exception as e:
             print(f"[Owner Protection] Failed to undo timeout: {e}")
 
-    @app_commands.command(name="spam-config", description="View/configure spam detection settings")
+    @app_commands.command(name="spam-config", description="Configure moderation settings")
     @app_commands.describe(
         enabled="Enable or disable spam detection",
         protection="Enable or disable auto-protections"
@@ -613,8 +613,8 @@ class ModerateCog(commands.Cog):
 
     @app_commands.command(name="soundboard", description="View soundboard spam disconnection logs")
     @app_commands.describe(
-        user="Filter logs by a specific user (optional)",
-        limit="Number of recent logs to show (default: 10)"
+        user="Filter logs by a specific user",
+        limit="Number of recent logs to show (defaults to 10)"
     )
     @is_owner()
     async def soundboard_logs(
@@ -698,13 +698,14 @@ class ModerateCog(commands.Cog):
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="move",
-                          description="Move users between voice channels with various options (owner only)")
+                          description="Move users between voice channels with various options")
     @app_commands.describe(
-        mode="Choose the type of move operation",
-        users="Users to move (separate with spaces) - for 'specific' mode",
-        c_from="Source channel(s) - leave empty for all channels in some modes",
-        to="Destination channel(s) - leave empty for all channels in disperse mode",
-        repetitions="Number of times to repeat (for swap, disperse_trail modes)",
+        mode="Type of move operation",
+        users="User(s) to move (separate with spaces)",
+        c_from="Source channel(s)",
+        to="Destination channel(s)",
+        repetitions="Number of times to repeat",
+        include_me="Include Owner",
         reason="Reason for the action"
     )
     @has_role_level(SUPERVISORS + LEADERS + LOCKS + [YOUR_USER_ID])
@@ -716,6 +717,7 @@ class ModerateCog(commands.Cog):
             users: Optional[str] = None,
             c_from: Optional[str] = None,
             repetitions: Optional[int] = None,
+            include_me: Optional[bool] = False,
             reason: Optional[str] = "No reason provided"
     ):
         """Move users between voice channels with multiple modes"""
@@ -750,64 +752,124 @@ class ModerateCog(commands.Cog):
                     return
 
         elif mode == "c_from":
-            # Supervisors: single source to single dest
-            # Leaders: multi source/dest allowed
-            if not (is_supervisor or is_leader or is_locks or is_owner_user):
+            # Parse source channels (must use 'ALL' for all channels)
+            source_channels = await self.parse_channels_or_all(interaction, c_from, filter_with_users=True)
+            if not source_channels:
                 await interaction.followup.send(
-                    "<:Denied:1426930694633816248> You do not have permission to use this command!",
+                    "<:Denied:1426930694633816248> No valid source channels found. Use 'ALL' to select all channels.",
                     ephemeral=True
                 )
                 return
-
-            # Check restrictions for supervisors (non-leaders)
-            if is_supervisor and not (is_leader or is_locks or is_owner_user):
-                source_channels = await self.parse_channels_spaces(interaction, c_from) if c_from else []
-                dest_channels = await self.parse_channels_spaces(interaction, to) if to else []
-
-                if len(source_channels) > 1 or len(dest_channels) > 1:
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> Please select only only one channel to move from and to!",
-                        ephemeral=True
-                    )
-                    return
 
         elif mode == "disperse":
-            # Single channel disperse: Leaders+
-            # Multi channel disperse: Locks+
-            source_channels = await self.parse_channels_spaces(interaction, c_from) if c_from else \
-                [c for c in interaction.guild.voice_channels if len(c.members) > 0]
-
-            if len(source_channels) == 1:
-                # Single channel disperse - Leaders+
-                if not (is_leader or is_locks or is_owner_user):
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> You do not have permission to use this command!",
-                        ephemeral=True
-                    )
-                    return
-            else:
-                # Multi channel disperse - Locks+
-                if not (is_locks or is_owner_user):
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> You can only disperse from one channel at a time!.",
-                        ephemeral=True
-                    )
-                    return
-
-        elif mode == "disperse_trail":
-            # Owner only
-            if not is_owner_user:
+            # Parse source channels (must use 'ALL' for all channels)
+            source_channels = await self.parse_channels_or_all(interaction, c_from, filter_with_users=True)
+            if not source_channels:
                 await interaction.followup.send(
-                    "<:Denied:1426930694633816248> You do not have the permission use this command!",
+                    "<:Denied:1426930694633816248> No valid source channels found. Use 'ALL' to select all channels.",
                     ephemeral=True
                 )
                 return
 
-        elif mode == "move_trail":
-            # Owner only
-            if not is_owner_user:
+            # Parse destination channels (must use 'ALL' for all channels)
+            dest_channels = await self.parse_channels_or_all(interaction, to, filter_with_users=False)
+            if not dest_channels:
                 await interaction.followup.send(
-                    "<:Denied:1426930694633816248> You do not have the permission use this command!",
+                    "<:Denied:1426930694633816248> No valid destination channels found. Use 'ALL' to select all channels.",
+                    ephemeral=True
+                )
+                return
+
+            await self.move_disperse_enhanced(interaction, source_channels, dest_channels, reason, include_me)
+
+        elif mode == "disperse_trail":
+            # Parse source channels
+            source_channels = await self.parse_channels_or_all(interaction, c_from, filter_with_users=True)
+            if not source_channels:
+                await interaction.followup.send(
+                    "<:Denied:1426930694633816248> No valid source channels found. Use 'ALL' to select all channels.",
+                    ephemeral=True
+                )
+                return
+
+            # Parse destination channels
+            dest_channels = await self.parse_channels_or_all(interaction, to, filter_with_users=False)
+            if not dest_channels:
+                await interaction.followup.send(
+                    "<:Denied:1426930694633816248> No valid destination channels found. Use 'ALL' to select all channels.",
+                    ephemeral=True
+                )
+                return
+
+            # Default to 3 repetitions if not specified
+            reps = repetitions if repetitions and repetitions > 0 else 3
+
+            # Check if specific users or all from channels
+            if users and users.strip().upper() != "ALL":
+                # Move specific users
+                member_list = await self.parse_users(interaction, users)
+                if not member_list:
+                    await interaction.followup.send("<:Denied:1426930694633816248> No valid users found.",
+                                                    ephemeral=True)
+                    return
+                await self.move_disperse_trail(interaction, member_list, dest_channels, reps, reason, include_me)
+            else:
+                # Move all from source channels
+                await self.move_disperse_trail_from_channels(interaction, source_channels, dest_channels, reps, reason,
+                                                             include_me)
+
+        elif mode == "move_trail":
+            if not to:
+                await interaction.followup.send(
+                    "<:Denied:1426930694633816248> You must specify the destination channel(s)!",
+                    ephemeral=True
+                )
+                return
+
+            dest_channels = await self.parse_channels_or_all(interaction, to, filter_with_users=False)
+            if not dest_channels:
+                await interaction.followup.send(
+                    "<:Denied:1426930694633816248> No valid destination channels found.",
+                    ephemeral=True
+                )
+                return
+
+            # Check if specific users or from channels
+            if users and users.strip().upper() != "ALL":
+                # Move specific users through the trail
+                member_list = await self.parse_users(interaction, users)
+                if not member_list:
+                    await interaction.followup.send("<:Denied:1426930694633816248> No valid users found.",
+                                                    ephemeral=True)
+                    return
+                await self.move_trail_users(interaction, member_list, dest_channels, reason, include_me)
+            elif c_from:
+                # Move all from source channels through the trail
+                source_channels = await self.parse_channels_or_all(interaction, c_from, filter_with_users=True)
+                if not source_channels:
+                    await interaction.followup.send(
+                        "<:Denied:1426930694633816248> No valid source channels found.",
+                        ephemeral=True
+                    )
+                    return
+
+                # Collect all members
+                members_to_move = []
+                for channel in source_channels:
+                    members_to_move.extend(channel.members)
+                members_to_move = list(set(members_to_move))
+
+                if not members_to_move:
+                    await interaction.followup.send(
+                        "<:Denied:1426930694633816248> No users found in source channel(s).",
+                        ephemeral=True
+                    )
+                    return
+
+                await self.move_trail_users(interaction, members_to_move, dest_channels, reason, include_me)
+            else:
+                await interaction.followup.send(
+                    "<:Denied:1426930694633816248> You must specify either users or c_from! Use 'ALL' for all users.",
                     ephemeral=True
                 )
                 return
@@ -842,6 +904,10 @@ class ModerateCog(commands.Cog):
                         ephemeral=True
                     )
                     return
+
+                if mode == "c_from" and is_owner_user and include_me is None:
+                    include_me = True
+
                 # Require reason for major action
                 if not reason or reason == "No reason provided":
                     await interaction.followup.send(
@@ -919,7 +985,7 @@ class ModerateCog(commands.Cog):
                 )
                 return
 
-            await self.move_from_enhanced(interaction, source_channels, dest_channels, reason)
+            await self.move_from_enhanced(interaction, source_channels, dest_channels, reason, include_me)
 
         elif mode == "disperse":
             # If from is empty, use all voice channels with users
@@ -1066,8 +1132,8 @@ class ModerateCog(commands.Cog):
                 )
                 return
 
-            source_channels = await self.parse_channels_spaces(interaction, c_from)
-            dest_channels = await self.parse_channels_spaces(interaction, to)
+            source_channels = await self.parse_channels_or_all(interaction, c_from, filter_with_users=False)
+            dest_channels = await self.parse_channels_or_all(interaction, to, filter_with_users=False)
 
             if not source_channels or not dest_channels:
                 await interaction.followup.send(
@@ -1079,17 +1145,19 @@ class ModerateCog(commands.Cog):
             # Default to 1 repetition if not specified
             reps = repetitions if repetitions and repetitions > 0 else 1
 
-            await self.move_swap_channels_repeated(interaction, source_channels, dest_channels, reps, reason)
+            await self.move_swap_channels_repeated(interaction, source_channels, dest_channels, reps, reason,
+                                                   include_me)
 
         elif mode == "empty":
             if not c_from:
                 await interaction.followup.send(
-                    "<:Denied:1426930694633816248> You must specify channel(s) to empty.",
+                    "<:Denied:1426930694633816248> You must specify channel(s) to empty. Use 'ALL' for all channels.",
                     ephemeral=True
                 )
                 return
 
-            source_channels = await self.parse_channels_spaces(interaction, c_from)
+            source_channels = await self.parse_channels_or_all(interaction, c_from, filter_with_users=True)
+
             if not source_channels:
                 await interaction.followup.send(
                     "<:Denied:1426930694633816248> No valid channels found to empty.",
@@ -1097,7 +1165,7 @@ class ModerateCog(commands.Cog):
                 )
                 return
 
-            await self.move_empty_channels(interaction, source_channels, reason)
+            await self.move_empty_channels(interaction, source_channels, reason, include_me)
 
     @move.autocomplete('mode')
     async def move_mode_autocomplete(
@@ -1227,7 +1295,8 @@ class ModerateCog(commands.Cog):
         )
 
     async def move_empty_channels(self, interaction: discord.Interaction,
-                                  source_channels: List[discord.VoiceChannel], reason: str):
+                                  source_channels: List[discord.VoiceChannel], reason: str,
+                                  include_me: bool = False):
         """Disconnect all users from specified channel(s)"""
 
         members_to_disconnect = []
@@ -1293,7 +1362,7 @@ class ModerateCog(commands.Cog):
 
         tasks = []
         for member in members_to_disconnect:
-            if member.id == YOUR_USER_ID:
+            if member.id == YOUR_USER_ID and not include_me:
                 continue
             task = self.safe_disconnect_member(member, reason, interaction.user, results)
             tasks.append(task)
@@ -1344,10 +1413,10 @@ class ModerateCog(commands.Cog):
         await self.send_to_mod_logs(interaction.guild, embed)
 
     async def move_disperse_trail(self, interaction: discord.Interaction,
-                                  source_channels: List[discord.VoiceChannel],
+                                  source_channels: List[discord.VoiceChannel],  # Changed from members
                                   dest_channels: List[discord.VoiceChannel],
-                                  repetitions: int, reason: str):
-        """Repeatedly disperse users randomly across channels multiple times"""
+                                  repetitions: int, reason: str, include_me: bool = False):
+        """Repeatedly disperse users from source channels randomly across destination channels"""
 
         import asyncio
         import random
@@ -1401,7 +1470,8 @@ class ModerateCog(commands.Cog):
                 dest_channels=filtered_dest,
                 reason=f"Disperse Trail ({i + 1}/{repetitions}): {reason}",
                 moderator=interaction.user,
-                distribute=True
+                distribute=True,
+                include_me=include_me
             )
 
             all_results.append({
@@ -1434,7 +1504,7 @@ class ModerateCog(commands.Cog):
             success_count = len(results['success'])
             failed_count = len(results['failed'])
 
-            status = "<:Accepted:1426930333789585509>" if success_count > 0 and failed_count == 0 else "⚠️" if success_count > 0 else "<:Denied:1426930694633816248>"
+            status = "<:Accepted:1426930333789585509>" if success_count > 0 and failed_count == 0 else "<:Warn:1437771973970104471>" if success_count > 0 else "<:Denied:1426930694633816248>"
 
             embed.add_field(
                 name=f"{status} Dispersion {iteration_num}",
@@ -1457,9 +1527,34 @@ class ModerateCog(commands.Cog):
         await interaction.followup.send(embed=embed, ephemeral=True)
         await self.send_to_mod_logs(interaction.guild, embed)
 
+    async def move_disperse_trail_from_channels(self, interaction: discord.Interaction,
+                                                source_channels: List[discord.VoiceChannel],
+                                                dest_channels: List[discord.VoiceChannel],
+                                                repetitions: int, reason: str, include_me: bool = False):
+        """Disperse trail starting from specific channels"""
+
+        # Collect initial members from source channels
+        initial_members = []
+        for channel in source_channels:
+            initial_members.extend(channel.members)
+        initial_members = list(set(initial_members))
+
+        if not initial_members:
+            source_desc = "all voice channels" if len(source_channels) == len(
+                interaction.guild.voice_channels) else "source channel(s)"
+            await interaction.followup.send(
+                f"<:Denied:1426930694633816248> No users found in {source_desc}",
+                ephemeral=True
+            )
+            return
+
+        # Call the existing disperse_trail with the members list
+        await self.move_disperse_trail(interaction, initial_members, dest_channels, repetitions, reason, include_me)
+
     async def move_trail_users(self, interaction: discord.Interaction,
                                members: List[discord.Member],
-                               dest_channels: List[discord.VoiceChannel], reason: str):
+                               dest_channels: List[discord.VoiceChannel], reason: str,
+                               include_me: bool = False):
         """Move users sequentially through a trail of channels"""
 
         import asyncio
@@ -1531,7 +1626,7 @@ class ModerateCog(commands.Cog):
             success_count = len(results['success'])
             failed_count = len(results['failed'])
 
-            status = "<:Accepted:1426930333789585509>" if success_count > 0 and failed_count == 0 else "⚠️" if success_count > 0 else "<:Denied:1426930694633816248>"
+            status = "<:Accepted:1426930333789585509>" if success_count > 0 and failed_count == 0 else "<:Warn:1437771973970104471>" if success_count > 0 else "<:Denied:1426930694633816248>"
 
             embed.add_field(
                 name=f"{status} Step {step_num}: {channel.name}",
@@ -1557,7 +1652,8 @@ class ModerateCog(commands.Cog):
     async def move_swap_channels_repeated(self, interaction: discord.Interaction,
                                           source_channels: List[discord.VoiceChannel],
                                           dest_channels: List[discord.VoiceChannel],
-                                          repetitions: int, reason: str):
+                                          repetitions: int, reason: str,
+                                          include_me: bool = False):
         """Swap users between channels multiple times"""
 
         import asyncio
@@ -1650,7 +1746,7 @@ class ModerateCog(commands.Cog):
             success_count = len(results['success'])
             failed_count = len(results['failed'])
 
-            status = "<:Accepted:1426930333789585509>" if failed_count == 0 else "⚠️"
+            status = "<:Accepted:1426930333789585509>" if failed_count == 0 else "<:Warn:1437771973970104471>"
 
             embed.add_field(
                 name=f"{status} Swap {iteration_num}",
@@ -1743,6 +1839,24 @@ class ModerateCog(commands.Cog):
 
         return channels
 
+    async def parse_channels_or_all(self, interaction: discord.Interaction, channels_str: Optional[str],
+                                    filter_with_users: bool = False) -> List[discord.VoiceChannel]:
+        """Parse channel string or 'ALL' keyword into list of voice channels"""
+        if not channels_str:
+            return []
+
+        # Check for ALL keyword (case-insensitive)
+        if channels_str.strip().upper() == "ALL":
+            if filter_with_users:
+                # Return all channels with users
+                return [c for c in interaction.guild.voice_channels if len(c.members) > 0]
+            else:
+                # Return all voice channels
+                return interaction.guild.voice_channels
+
+        # Otherwise parse normally
+        return await self.parse_channels_spaces(interaction, channels_str)
+
     async def move_specific_users(self, interaction: discord.Interaction, users_str: str,
                                   dest_channels: List[discord.VoiceChannel], reason: str):
         """Move specific users to destination channel(s)"""
@@ -1765,8 +1879,9 @@ class ModerateCog(commands.Cog):
         await self.send_move_summary(interaction, results, "Specific Users", reason)
 
     async def move_from_enhanced(self, interaction: discord.Interaction,
-                                          source_channels: List[discord.VoiceChannel],
-                                          dest_channels: List[discord.VoiceChannel], reason: str):
+                                 source_channels: List[discord.VoiceChannel],
+                                 dest_channels: List[discord.VoiceChannel], reason: str,
+                                 include_me: bool = False):
         """Move all users from source channel(s) to destination channel(s)"""
 
         # Collect all members from source channels
@@ -1804,7 +1919,8 @@ class ModerateCog(commands.Cog):
 
     async def move_disperse_enhanced(self, interaction: discord.Interaction,
                                      source_channels: List[discord.VoiceChannel],
-                                     dest_channels: List[discord.VoiceChannel], reason: str):
+                                     dest_channels: List[discord.VoiceChannel], reason: str,
+                                     include_me: bool = False):
         """Randomly disperse users from source channel(s) across destination channel(s)"""
 
         # Collect all members from source channels
@@ -1860,7 +1976,7 @@ class ModerateCog(commands.Cog):
     async def perform_bulk_moves(self, members: List[discord.Member],
                                  dest_channels: List[discord.VoiceChannel],
                                  reason: str, moderator: discord.Member,
-                                 distribute: bool = False) -> dict:
+                                 distribute: bool = False, include_me: bool = False) -> dict:
         """
         Perform bulk moves with optimization and validation.
         Returns results dictionary with success/failure counts.
@@ -1877,8 +1993,8 @@ class ModerateCog(commands.Cog):
         tasks = []
 
         for i, member in enumerate(members):
-            # Skip bot owner
-            if member.id == YOUR_USER_ID:
+            # Skip bot owner unless include_me is True
+            if member.id == YOUR_USER_ID and not include_me:
                 continue
 
             # Check if user is in voice

@@ -20,7 +20,7 @@ LOG_CHANNELS = {
 
 # Error indicators to check for (messages containing these will NOT be published)
 ERROR_INDICATORS = [
-    "⚠️",  # Warning emoji
+    "<:Warn:1437771973970104471>",  # Warning emoji
     "error",
     "failed",
     "Error",
@@ -35,7 +35,7 @@ ERROR_INDICATORS = [
 
 # Success indicators (optional - for extra confidence)
 SUCCESS_INDICATORS = [
-    "✅",
+    "<:Accepted:1426930333789585509>",
     "<:Accepted:",
     "Auto-Sync Completed",
     "Sync Complete",
@@ -52,7 +52,7 @@ def is_authorized_user():
     async def predicate(interaction: discord.Interaction) -> bool:
         if interaction.user.id != AUTHORIZED_USER_ID:
             await interaction.response.send_message(
-                "❌ You are not authorized to use this command.",
+                "<:Denied:1426930694633816248> You are not authorized to use this command.",
                 ephemeral=True
             )
             return False
@@ -71,7 +71,7 @@ class AutoPublishCog(commands.Cog):
     async def cog_load(self):
         """Start the background task when cog loads"""
         self.processing_task = asyncio.create_task(self.process_publish_queue())
-        print("✅ Auto-Publish: Started background processing task")
+        print("<:Accepted:1426930333789585509> Auto-Publish: Started background processing task")
 
     def cog_unload(self):
         """Stop the background task when cog unloads"""
@@ -92,9 +92,9 @@ class AutoPublishCog(commands.Cog):
                     if e.code == 50033:  # Invalid Form Body (already published)
                         print(f"ℹ️ Message {message.id} already published")
                     else:
-                        print(f"❌ Failed to publish message {message.id}: {e}")
+                        print(f"<:Denied:1426930694633816248> Failed to publish message {message.id}: {e}")
                 except Exception as e:
-                    print(f"❌ Unexpected error publishing message {message.id}: {e}")
+                    print(f"<:Denied:1426930694633816248> Unexpected error publishing message {message.id}: {e}")
 
                 # Rate limit: wait 1 second between publishes to avoid hitting Discord limits
                 await asyncio.sleep(1)
@@ -102,7 +102,7 @@ class AutoPublishCog(commands.Cog):
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                print(f"❌ Error in publish queue processor: {e}")
+                print(f"<:Denied:1426930694633816248> Error in publish queue processor: {e}")
                 await asyncio.sleep(5)  # Wait before retrying
 
     def is_error_message(self, message: discord.Message) -> bool:
@@ -189,11 +189,11 @@ class AutoPublishCog(commands.Cog):
             channel = self.bot.get_channel(channel_id)
             if channel:
                 is_news = isinstance(channel, discord.TextChannel) and channel.is_news()
-                status_emoji = "✅" if is_news else "❌"
+                status_emoji = "<:Accepted:1426930333789585509>" if is_news else "<:Denied:1426930694633816248>"
                 channel_status.append(
                     f"{status_emoji} {channel.mention} - {'Announcement' if is_news else 'Not Announcement'}")
             else:
-                channel_status.append(f"❌ Channel ID {channel_id} - Not Found")
+                channel_status.append(f"<:Denied:1426930694633816248> Channel ID {channel_id} - Not Found")
 
         embed.add_field(
             name="Monitored Channels",
@@ -203,7 +203,7 @@ class AutoPublishCog(commands.Cog):
 
         embed.add_field(
             name="Processing Task",
-            value="✅ Running" if self.processing_task and not self.processing_task.done() else "❌ Not Running",
+            value="<:Accepted:1426930333789585509> Running" if self.processing_task and not self.processing_task.done() else "<:Denied:1426930694633816248> Not Running",
             inline=True
         )
 
@@ -254,11 +254,11 @@ class AutoPublishCog(commands.Cog):
             # Detailed checks
             checks = []
             checks.append(
-                f"{'✅' if isinstance(target_channel, discord.TextChannel) and target_channel.is_news() else '❌'} Is announcement channel")
-            checks.append(f"{'✅' if target_channel.id in LOG_CHANNELS else '❌'} Is monitored log channel")
-            checks.append(f"{'✅' if message.author.id == self.bot.user.id else '❌'} Is from bot")
-            checks.append(f"{'✅' if not is_error else '❌'} Is not an error message")
-            checks.append(f"{'✅' if not message.flags.crossposted else '⚠️'} Not already published")
+                f"{'<:Accepted:1426930333789585509>' if isinstance(target_channel, discord.TextChannel) and target_channel.is_news() else '<:Denied:1426930694633816248>'} Is announcement channel")
+            checks.append(f"{'<:Accepted:1426930333789585509>' if target_channel.id in LOG_CHANNELS else '<:Denied:1426930694633816248>'} Is monitored log channel")
+            checks.append(f"{'<:Accepted:1426930333789585509>' if message.author.id == self.bot.user.id else '<:Denied:1426930694633816248>'} Is from bot")
+            checks.append(f"{'<:Accepted:1426930333789585509>' if not is_error else '<:Denied:1426930694633816248>'} Is not an error message")
+            checks.append(f"{'<:Accepted:1426930333789585509>' if not message.flags.crossposted else '<:Warn:1437771973970104471>'} Not already published")
 
             embed.add_field(
                 name="Checks",
@@ -268,13 +268,13 @@ class AutoPublishCog(commands.Cog):
 
             embed.add_field(
                 name="Result",
-                value=f"**{'✅ WOULD BE PUBLISHED' if would_publish else '❌ WOULD NOT BE PUBLISHED'}**",
+                value=f"**{'<:Accepted:1426930333789585509> WOULD BE PUBLISHED' if would_publish else '<:Denied:1426930694633816248> WOULD NOT BE PUBLISHED'}**",
                 inline=False
             )
 
             if is_error:
                 embed.add_field(
-                    name="⚠️ Error Detected",
+                    name="<:Warn:1437771973970104471> Error Detected",
                     value="This message contains error indicators and will not be auto-published.",
                     inline=False
                 )
@@ -283,17 +283,17 @@ class AutoPublishCog(commands.Cog):
 
         except discord.NotFound:
             await interaction.followup.send(
-                "❌ Message not found. Make sure the message ID is correct and exists in the specified channel.",
+                "<:Denied:1426930694633816248> Message not found. Make sure the message ID is correct and exists in the specified channel.",
                 ephemeral=True
             )
         except ValueError:
             await interaction.followup.send(
-                "❌ Invalid message ID. Please provide a valid numeric message ID.",
+                "<:Denied:1426930694633816248> Invalid message ID. Please provide a valid numeric message ID.",
                 ephemeral=True
             )
         except Exception as e:
             await interaction.followup.send(
-                f"❌ Error testing message: {str(e)}",
+                f"<:Denied:1426930694633816248> Error testing message: {str(e)}",
                 ephemeral=True
             )
 
@@ -312,7 +312,7 @@ class AutoPublishCog(commands.Cog):
             # Check if it's an announcement channel
             if not isinstance(target_channel, discord.TextChannel) or not target_channel.is_news():
                 await interaction.followup.send(
-                    "❌ This channel is not an announcement channel. Messages can only be published in announcement channels.",
+                    "<:Denied:1426930694633816248> This channel is not an announcement channel. Messages can only be published in announcement channels.",
                     ephemeral=True
                 )
                 return
@@ -321,24 +321,24 @@ class AutoPublishCog(commands.Cog):
             await message.publish()
 
             await interaction.followup.send(
-                f"✅ Successfully published message {message_id} in {target_channel.mention}",
+                f"<:Accepted:1426930333789585509> Successfully published message {message_id} in {target_channel.mention}",
                 ephemeral=True
             )
 
         except discord.HTTPException as e:
             if e.code == 50033:
                 await interaction.followup.send(
-                    "⚠️ This message is already published!",
+                    "<:Warn:1437771973970104471> This message is already published!",
                     ephemeral=True
                 )
             else:
                 await interaction.followup.send(
-                    f"❌ Failed to publish message: {e}",
+                    f"<:Denied:1426930694633816248> Failed to publish message: {e}",
                     ephemeral=True
                 )
         except Exception as e:
             await interaction.followup.send(
-                f"❌ Error: {str(e)}",
+                f"<:Denied:1426930694633816248> Error: {str(e)}",
                 ephemeral=True
             )
 

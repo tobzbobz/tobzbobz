@@ -13,7 +13,7 @@ class ImageFetcher(commands.Cog):
         self.user_id = os.getenv("USER_ID")
         self.api_key = os.getenv("API_KEY")
 
-    @app_commands.command(name="other", description="Fetches any number of random images. Locked to the bot owner.")
+    @app_commands.command(name="other", description="Fetches Images")
     async def fetch_image(self, interaction: discord.Interaction, number: int = 1):
         # Check if user is allowed
         if interaction.user.id != self.owner_id:

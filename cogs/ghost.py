@@ -60,7 +60,7 @@ class NumberInputModal(discord.ui.Modal):
 
             # Create confirmation embed
             embed = discord.Embed(
-                title="✅ Processing...",
+                title="<a:Load:1430912797469970444> Processing...",
                 description=f"Sending {number} ghost ping(s)...",
                 color=discord.Color(0x2ecc71)
             )
@@ -83,7 +83,7 @@ class NumberInputModal(discord.ui.Modal):
 
             # Send completion message
             completion_embed = discord.Embed(
-                title="✅ Complete",
+                title="<:Accepted:1426930333789585509> Complete",
                 description=f"Successfully sent {number} ghost ping(s) with {self.emoji}!",
                 color=discord.Color(0x2ecc71)
             )

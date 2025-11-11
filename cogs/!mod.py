@@ -60,7 +60,7 @@ class BanOffenceSelect(discord.ui.Select):
         self.moderator = moderator
         self.cog = cog
         options = [
-            discord.SelectOption(label="SRDM (Staff RDM)", emoji="⚠️"),
+            discord.SelectOption(label="SRDM (Staff RDM)", emoji="<:Warn:1437771973970104471>"),
             discord.SelectOption(label="NSFW", emoji="🔞"),
             discord.SelectOption(label="Glitching", emoji="🐛"),
             discord.SelectOption(label="LTAP (Leaving to Avoid Punishment)", emoji="🚪"),
@@ -162,11 +162,11 @@ class BanDetailsModal(discord.ui.Modal):
                 inline=False
             )
             await self.user.send(embed=embed)
-            dm_status = "✅ Banned successfully"
+            dm_status = "<:Accepted:1426930333789585509> Banned successfully"
         except discord.Forbidden:
-            dm_status = "❌ Ban failed (DMs closed)"
+            dm_status = "<:Denied:1426930694633816248> Ban failed (DMs closed)"
         except Exception as e:
-            dm_status = "❌ Ban failed"
+            dm_status = "<:Denied:1426930694633816248> Ban failed"
 
         await db.log_action(
             guild_id=interaction.guild.id,
@@ -212,11 +212,11 @@ class KickOffenceSelect(discord.ui.Select):
             discord.SelectOption(label="RDM (Random Deathmatch)", emoji="💀"),
             discord.SelectOption(label="SZRDM (Safezone)", emoji="🛡️"),
             discord.SelectOption(label="VDM (Vehicle Deathmatch)", emoji="🚗"),
-            discord.SelectOption(label="SVDM (Staff)", emoji="⚠️"),
+            discord.SelectOption(label="SVDM (Staff)", emoji="<:Warn:1437771973970104471>"),
             discord.SelectOption(label="GTAD (GTA Driving)", emoji="🏎️"),
             discord.SelectOption(label="Staff Evasion", emoji="🏃"),
             discord.SelectOption(label="Trolling", emoji="🤡"),
-            discord.SelectOption(label="NITRP (No Intention to Roleplay)", emoji="❌"),
+            discord.SelectOption(label="NITRP (No Intention to Roleplay)", emoji="<:Denied:1426930694633816248>"),
             discord.SelectOption(label="RTAP (Respawning to Avoid Punishment)", emoji="🔄"),
             discord.SelectOption(label="Staff Impersonation", emoji="👮"),
             discord.SelectOption(label="Banned RP", emoji="🚫"),
@@ -291,7 +291,7 @@ class KickTimeModal(discord.ui.Modal):
         self.add_item(self.kick_time)
 
     async def on_submit(self, interaction: discord.Interaction):
-        # ✅ Get recent kicks from database (last 24 hours)
+        # <:Accepted:1426930333789585509> Get recent kicks from database (last 24 hours)
         recent_kicks = await db.get_recent_logs(
             guild_id=interaction.guild.id,
             action_type='kick',
@@ -347,11 +347,11 @@ class KickTimeModal(discord.ui.Modal):
                     inline=False
                 )
                 await self.user.send(embed=embed)
-                dm_status = "✅ Banned successfully (2nd offense)"
+                dm_status = "<:Accepted:1426930333789585509> Banned successfully (2nd offense)"
             except:
-                dm_status = "❌ Ban failed"
+                dm_status = "<:Denied:1426930694633816248> Ban failed"
 
-            # ✅ Save to database
+            # <:Accepted:1426930333789585509> Save to database
             await db.log_action(
                 guild_id=interaction.guild.id,
                 user_id=self.user.id,
@@ -399,11 +399,11 @@ class KickTimeModal(discord.ui.Modal):
                     inline=False
                 )
                 await self.user.send(embed=embed)
-                dm_status = "✅ Banned successfully (4th offense)"
+                dm_status = "<:Accepted:1426930333789585509> Banned successfully (4th offense)"
             except:
-                dm_status = "❌ Ban failed"
+                dm_status = "<:Denied:1426930694633816248> Ban failed"
 
-            # ✅ Save to database
+            # <:Accepted:1426930333789585509> Save to database
             await db.log_action(
                 guild_id=interaction.guild.id,
                 user_id=self.user.id,
@@ -450,11 +450,11 @@ class KickTimeModal(discord.ui.Modal):
                     inline=False
                 )
                 await self.user.send(embed=embed)
-                dm_status = "✅ Banned successfully (3rd offense)"
+                dm_status = "<:Accepted:1426930333789585509> Banned successfully (3rd offense)"
             except:
-                dm_status = "❌ Ban failed"
+                dm_status = "<:Denied:1426930694633816248> Ban failed"
 
-            # ✅ Save to database
+            # <:Accepted:1426930333789585509> Save to database
             await db.log_action(
                 guild_id=interaction.guild.id,
                 user_id=self.user.id,
@@ -514,11 +514,11 @@ class KickTimeModal(discord.ui.Modal):
                 else:
                     suffix = "th"
 
-                dm_status = f"✅ Kicked successfully ({kick_number}{suffix} offense)"
+                dm_status = f"<:Accepted:1426930333789585509> Kicked successfully ({kick_number}{suffix} offense)"
             except:
-                dm_status = "❌ Kick failed"
+                dm_status = "<:Denied:1426930694633816248> Kick failed"
 
-            # ✅ Save to database
+            # <:Accepted:1426930333789585509> Save to database
             await db.log_action(
                 guild_id=interaction.guild.id,
                 user_id=self.user.id,
@@ -553,7 +553,7 @@ class KickTimeModal(discord.ui.Modal):
             if kick_number > 1:
                 value_text += f"\n**Warning:** This is offense #{kick_number} within 24h"
                 if is_extended_kick and kick_number == 3:
-                    value_text += "\n**⚠️ Next offense will result in a BAN**"
+                    value_text += "\n**<:Warn:1437771973970104471> Next offense will result in a BAN**"
 
             embed.add_field(
                 name=f"{self.action_type}",
@@ -580,7 +580,7 @@ class OffenceSelect(discord.ui.Select):
             discord.SelectOption(label="Unrealistic avatar", emoji="👤"),
             discord.SelectOption(label="Interfering with a mod scene", emoji="🎬"),
             discord.SelectOption(label="Lying to staff", emoji="🤥"),
-            discord.SelectOption(label="FRP (Fail Roleplay)", emoji="❌"),
+            discord.SelectOption(label="FRP (Fail Roleplay)", emoji="<:Denied:1426930694633816248>"),
             discord.SelectOption(label="Meta Gaming", emoji="🎮"),
             discord.SelectOption(label="NLR (New Life Rule)", emoji="🔄"),
             discord.SelectOption(label="Breaking Priority", emoji="⚡"),
@@ -685,19 +685,19 @@ class NoteUserSelect(discord.ui.UserSelect):
                     inline=False
                 )
                 await selected_user.send(embed=embed)
-                dm_status = "✅ Kicked successfully (3 warnings)"
+                dm_status = "<:Accepted:1426930333789585509> Kicked successfully (3 warnings)"
                 action_taken = "kick"
             except:
-                dm_status = "❌ Kick failed"
+                dm_status = "<:Denied:1426930694633816248> Kick failed"
                 action_taken = "kick"
 
-            # ✅ FIXED: Correct infraction_type and duration
+            # <:Accepted:1426930333789585509> FIXED: Correct infraction_type and duration
             await db.log_action(
                 guild_id=interaction.guild.id,
                 user_id=selected_user.id,
                 action='educational_note',
                 details={
-                    'infraction_type': 'kick',  # ✅ Correct - this IS a kick
+                    'infraction_type': 'kick',  # <:Accepted:1426930333789585509> Correct - this IS a kick
                     'reason': 'Reaching three warnings',
                     'duration': '30 minutes',
                     'moderator': str(self.moderator),
@@ -726,19 +726,19 @@ class NoteUserSelect(discord.ui.UserSelect):
                     color=discord.Color.blue()
                 )
                 await selected_user.send(embed=embed)
-                dm_status = "✅ Note sent successfully"
+                dm_status = "<:Accepted:1426930333789585509> Note sent successfully"
                 action_taken = "note"
             except:
-                dm_status = "❌ Note failed"
+                dm_status = "<:Denied:1426930694633816248> Note failed"
                 action_taken = "note"
 
-            # ✅ FIXED: Correct infraction_type, no duration for notes
+            # <:Accepted:1426930333789585509> FIXED: Correct infraction_type, no duration for notes
             await db.log_action(
                 guild_id=interaction.guild.id,
                 user_id=selected_user.id,
                 action='educational_note',
                 details={
-                    'infraction_type': 'note',  # ✅ Correct
+                    'infraction_type': 'note',  # <:Accepted:1426930333789585509> Correct
                     'reason': self.offence,
                     'moderator': str(self.moderator),
                     'moderator_id': self.moderator.id,
@@ -756,19 +756,19 @@ class NoteUserSelect(discord.ui.UserSelect):
                     color=discord.Color.gold()
                 )
                 await selected_user.send(embed=embed)
-                dm_status = "✅ Warning sent successfully"
+                dm_status = "<:Accepted:1426930333789585509> Warning sent successfully"
                 action_taken = "warning"
             except:
-                dm_status = "❌ Warning failed"
+                dm_status = "<:Denied:1426930694633816248> Warning failed"
                 action_taken = "warning"
 
-            # ✅ FIXED: Correct infraction_type
+            # <:Accepted:1426930333789585509> FIXED: Correct infraction_type
             await db.log_action(
                 guild_id=interaction.guild.id,
                 user_id=selected_user.id,
                 action='educational_note',
                 details={
-                    'infraction_type': 'warning',  # ✅ Correct
+                    'infraction_type': 'warning',  # <:Accepted:1426930333789585509> Correct
                     'reason': self.offence,
                     'moderator': str(self.moderator),
                     'moderator_id': self.moderator.id,
@@ -795,19 +795,19 @@ class NoteUserSelect(discord.ui.UserSelect):
                     inline=False
                 )
                 await selected_user.send(embed=embed)
-                dm_status = "✅ Banned successfully"
+                dm_status = "<:Accepted:1426930333789585509> Banned successfully"
                 action_taken = "ban"
             except:
-                dm_status = "❌ Ban failed"
+                dm_status = "<:Denied:1426930694633816248> Ban failed"
                 action_taken = "ban"
 
-            # ✅ FIXED: Correct infraction_type
+            # <:Accepted:1426930333789585509> FIXED: Correct infraction_type
             await db.log_action(
                 guild_id=interaction.guild.id,
                 user_id=selected_user.id,
                 action='educational_note',
                 details={
-                    'infraction_type': 'ban',  # ✅ Correct
+                    'infraction_type': 'ban',  # <:Accepted:1426930333789585509> Correct
                     'reason': self.offence,
                     'duration': 'Permanent',
                     'moderator': str(self.moderator),
@@ -873,7 +873,7 @@ class NoteTimeModal(discord.ui.Modal):
         recent_notes = await db.get_recent_logs(
             guild_id=interaction.guild.id,
             action_type='educational_note',
-            user_id=self.user.id,  # ✅ FIXED: was selected_user.id
+            user_id=self.user.id,  # <:Accepted:1426930333789585509> FIXED: was selected_user.id
             hours=24
         )
         recent_notes = [
@@ -885,7 +885,7 @@ class NoteTimeModal(discord.ui.Modal):
         all_recent_warnings = await db.get_recent_logs(
             guild_id=interaction.guild.id,
             action_type='educational_note',
-            user_id=self.user.id,  # ✅ FIXED
+            user_id=self.user.id,  # <:Accepted:1426930333789585509> FIXED
             hours=24
         )
         all_recent_warnings = [
@@ -911,19 +911,19 @@ class NoteTimeModal(discord.ui.Modal):
                     inline=False
                 )
                 await self.user.send(embed=embed)
-                dm_status = f"✅ Kicked successfully ({offense_number}rd+ offense)"
+                dm_status = f"<:Accepted:1426930333789585509> Kicked successfully ({offense_number}rd+ offense)"
                 action_taken = "kick"
             except:
-                dm_status = "❌ Kick failed"
+                dm_status = "<:Denied:1426930694633816248> Kick failed"
                 action_taken = "kick"
 
-            # ✅ FIXED: Correct variable name and infraction_type
+            # <:Accepted:1426930333789585509> FIXED: Correct variable name and infraction_type
             await db.log_action(
                 guild_id=interaction.guild.id,
-                user_id=self.user.id,  # ✅ FIXED: was selected_user.id
+                user_id=self.user.id,  # <:Accepted:1426930333789585509> FIXED: was selected_user.id
                 action='educational_note',
                 details={
-                    'infraction_type': 'kick',  # ✅ Correct - this IS a kick
+                    'infraction_type': 'kick',  # <:Accepted:1426930333789585509> Correct - this IS a kick
                     'reason': self.offence,
                     'duration': self.time_input.value,
                     'moderator': str(self.moderator),
@@ -972,7 +972,7 @@ class DeleteLogSelect(discord.ui.Select):
                     label=label,
                     description=description,
                     value=value,
-                    emoji="🗑️"
+                    emoji="<:Wipe:1434954284851658762>"
                 )
             )
 
@@ -993,7 +993,7 @@ class DeleteLogSelect(discord.ui.Select):
         selected_index = int(selected_value.split('_')[0])
         selected_log = self.logs[selected_index]
 
-        # ✅ FIXED: Delete from database instead of mod_logs list
+        # <:Accepted:1426930333789585509> FIXED: Delete from database instead of mod_logs list
         try:
             # Delete from database using the log's ID
             result = await db.execute(
@@ -1003,12 +1003,12 @@ class DeleteLogSelect(discord.ui.Select):
             )
 
             if result == 'DELETE 0':
-                await interaction.response.send_message("❌ Error: Log not found in database.", ephemeral=True)
+                await interaction.response.send_message("<:Denied:1426930694633816248> Error: Log not found in database.", ephemeral=True)
                 return
 
             # Create confirmation embed
             embed = discord.Embed(
-                title="✅ Log Deleted Successfully",
+                title="<:Accepted:1426930333789585509> Log Deleted Successfully",
                 color=discord.Color.green()
             )
 
@@ -1037,7 +1037,7 @@ class DeleteLogSelect(discord.ui.Select):
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
         except Exception as e:
-            await interaction.response.send_message(f"❌ Error deleting log: {str(e)}", ephemeral=True)
+            await interaction.response.send_message(f"<:Denied:1426930694633816248> Error deleting log: {str(e)}", ephemeral=True)
 
 class DeleteLogSelectView(discord.ui.View):
     def __init__(self, command_user_id, logs, filter_user):
@@ -1172,7 +1172,7 @@ class ModCog(commands.Cog):
             await ctx.send("You don't have permission to use this command!")
             return
 
-        # ✅ Clear from database
+        # <:Accepted:1426930333789585509> Clear from database
         log_count_result = await db.fetch(
             'SELECT COUNT(*) FROM audit_logs WHERE guild_id = $1',
             ctx.guild.id
@@ -1237,7 +1237,7 @@ class ModCog(commands.Cog):
             await help_message.delete(delay=60)
             return
 
-        # ✅ Get logs from database
+        # <:Accepted:1426930333789585509> Get logs from database
         if user:
             filtered_logs = await db.get_recent_logs(
                 guild_id=ctx.guild.id,
@@ -1326,7 +1326,7 @@ class ModCog(commands.Cog):
                 inline=False
             )
             embed.add_field(
-                name="⚠️ Warning",
+                name="<:Warn:1437771973970104471> Warning",
                 value="Deleted logs cannot be recovered. Use with caution!",
                 inline=False
             )
@@ -1336,7 +1336,7 @@ class ModCog(commands.Cog):
             await help_message.delete(delay=60)
             return
 
-        # ✅ Get logs from database
+        # <:Accepted:1426930333789585509> Get logs from database
         if user:
             filtered_logs = await db.get_recent_logs(
                 guild_id=ctx.guild.id,
@@ -1368,7 +1368,7 @@ class ModCog(commands.Cog):
         user_filter_text = f" for {user.mention}" if user else ""
         embed = discord.Embed(
             title=f"🗑️ Delete Moderation Log{user_filter_text}",
-            description=f"Select a log to delete from the dropdown below.\nShowing {len(displayed_logs)} of {total_logs} actions (Skip: {skip}, Limit: {limit})\n\n⚠️ **Warning:** This action cannot be undone!",
+            description=f"Select a log to delete from the dropdown below.\nShowing {len(displayed_logs)} of {total_logs} actions (Skip: {skip}, Limit: {limit})\n\n<:Warn:1437771973970104471> **Warning:** This action cannot be undone!",
             color=discord.Color.red()
         )
 

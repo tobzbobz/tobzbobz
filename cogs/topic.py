@@ -78,10 +78,6 @@ class TopicCog(commands.Cog):
                                    BIGINT
                                    NOT
                                    NULL,
-                                   new_topic
-                                   TEXT
-                                   NOT
-                                   NULL,
                                    reason
                                    TEXT,
                                    requested_at
@@ -94,16 +90,14 @@ class TopicCog(commands.Cog):
                                    )
                                ''')
 
-    @topic_group.command(name="change", description="Request a topic change from staff")
+    @topic_group.command(name="change", description="Request a topic change")
     @app_commands.describe(
-        new_topic="The new topic you want to set",
         reason="Why you want to change the topic."
     )
     @has_allowed_roles()
     async def topic_change(
             self,
             interaction: discord.Interaction,
-            new_topic: str,
             reason: Optional[str] = None
     ):
         """Request a topic change in the current channel"""
@@ -123,7 +117,7 @@ class TopicCog(commands.Cog):
                 if remaining > 0:
                     remaining_seconds = int(remaining * 60)
                     await interaction.followup.send(
-                        f"⏰ You're on cooldown! Please wait **{remaining_seconds} seconds** before requesting another topic change.",
+                        f"<:Alarm:1437789417652752537> You're on cooldown! Please wait **{remaining_seconds} seconds** before requesting another topic change.",
                         ephemeral=True
                     )
                     return
@@ -150,7 +144,7 @@ class TopicCog(commands.Cog):
         async with db.pool.acquire() as conn:
             await conn.execute('''
                                INSERT INTO topic_change_requests
-                               (user_id, username, channel_id, channel_name, guild_id, new_topic, reason, message_id)
+                               (user_id, username, channel_id, channel_name, guild_id, reason, message_id)
                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                                ''',
                                interaction.user.id,
@@ -158,7 +152,6 @@ class TopicCog(commands.Cog):
                                interaction.channel.id,
                                interaction.channel.name,
                                interaction.guild.id,
-                               new_topic,
                                reason,
                                message.id
                                )
@@ -180,12 +173,6 @@ class TopicCog(commands.Cog):
             name="Channel:",
             value=f"{interaction.channel.mention} (`#{interaction.channel.name}`)",
             inline=True
-        )
-
-        staff_embed.add_field(
-            name="New Topic:",
-            value=f"```{new_topic}```",
-            inline=False
         )
 
         staff_embed.add_field(

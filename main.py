@@ -25,7 +25,7 @@ GUILD_IDS = [1282916959062851634, 1425867713183744023, 1430002479239532747, 1420
 GUILD_COGS = {
     1282916959062851634: ['!mod', 'disclaimer', 'ghost', 'inactive_ticket', 'react', 'say', 'status', 'watches',
                           'wentwrong', 'role', 'ping', 'callsign', 'case','shift','x','autopublish','vc','topic',
-                          'purge','pings','moderation', 'timeout'],
+                          'purge','pings','moderation', 'timeout','role_watcher'],
     1425867713183744023: ['!mod', 'disclaimer', 'ghost', 'inactive_ticket', 'react', 'say', 'status', 'watches',
                           'wentwrong', 'role', 'ping', 'callsign', 'case','shift'],
     1430002479239532747: ['autorole', 'other'],
@@ -126,16 +126,16 @@ class Client(commands.Bot):
                                 self.guild_cog_map[cog_name] = []
                             self.guild_cog_map[cog_name].append(guild_id)
 
-                print(f'✅ Loaded {cog_name}')
+                print(f'<:Accepted:1426930333789585509> Loaded {cog_name}')
             except Exception as e:
                 self.failed_cogs.append(cog_name)
-                print(f'❌ Failed to load {cog_name}: {e}')
+                print(f'<:Denied:1426930694633816248> Failed to load {cog_name}: {e}')
                 traceback.print_exc()  # ← Added to see full error
 
         if self.loaded_cogs:
-            print(f'✅ Loaded cogs: {", ".join(self.loaded_cogs)}')
+            print(f'<:Accepted:1426930333789585509> Loaded cogs: {", ".join(self.loaded_cogs)}')
         if self.failed_cogs:
-            print(f'❌ Failed cogs: {", ".join(self.failed_cogs)}')
+            print(f'<:Denied:1426930694633816248> Failed cogs: {", ".join(self.failed_cogs)}')
 
         if self.guild_cog_map:
             print(f'\n📋 Guild-Cog Mapping:')
@@ -154,12 +154,12 @@ class Client(commands.Bot):
                 reloaded.append(cog_name)
             except Exception as e:
                 failed_reload.append(cog_name)
-                print(f'❌ Failed to reload {cog_name}: {e}')
+                print(f'<:Denied:1426930694633816248> Failed to reload {cog_name}: {e}')
 
         if reloaded:
-            print(f'✅ Reloaded cogs: {", ".join(reloaded)}')
+            print(f'<:Accepted:1426930333789585509> Reloaded cogs: {", ".join(reloaded)}')
         if failed_reload:
-            print(f'❌ Failed to reload: {", ".join(failed_reload)}')
+            print(f'<:Denied:1426930694633816248> Failed to reload: {", ".join(failed_reload)}')
 
     def is_cog_enabled_for_guild(self, cog_name: str, guild_id: int) -> bool:
         """Check if a cog is enabled for a specific guild"""
@@ -199,7 +199,7 @@ class Client(commands.Bot):
 
                 self.tree.clear_commands(guild=None)
                 await self.tree.sync()
-                print('✅ Cleared global commands')
+                print('<:Accepted:1426930333789585509> Cleared global commands')
 
                 cleared_guilds = []
                 for guild_id in GUILD_IDS:
@@ -208,7 +208,7 @@ class Client(commands.Bot):
                     await self.tree.sync(guild=guild)
                     cleared_guilds.append(str(guild_id))
 
-                print(f'✅ Cleared commands for guilds: {", ".join(cleared_guilds)}')
+                print(f'<:Accepted:1426930333789585509> Cleared commands for guilds: {", ".join(cleared_guilds)}')
 
                 await self.reload_all_cogs()
 
@@ -231,7 +231,7 @@ class Client(commands.Bot):
 
                     sync_results.append(f"{guild_id} ({len(synced)} commands){cog_info}")
 
-                print(f'✅ Synced commands to guilds: {", ".join(sync_results)}')
+                print(f'<:Accepted:1426930333789585509> Synced commands to guilds: {", ".join(sync_results)}')
 
             else:
                 sync_results = []
@@ -251,9 +251,9 @@ class Client(commands.Bot):
 
                     sync_results.append(f"{guild_id} ({len(synced)} commands){cog_info}")
 
-                print(f'✅ Synced commands to guilds: {", ".join(sync_results)}')
+                print(f'<:Accepted:1426930333789585509> Synced commands to guilds: {", ".join(sync_results)}')
         except Exception as e:
-            print(f'❌ Error syncing commands: {e}')
+            print(f'<:Denied:1426930694633816248> Error syncing commands: {e}')
             traceback.print_exc()
 
     async def update_status_channel(self, status: str):
@@ -264,7 +264,7 @@ class Client(commands.Bot):
         try:
             status_channel = await self.fetch_channel(STATUS_CHANNEL_ID)
             if not status_channel:
-                print(f'❌ Status channel {STATUS_CHANNEL_ID} not found')
+                print(f'<:Denied:1426930694633816248> Status channel {STATUS_CHANNEL_ID} not found')
                 return
 
             current_name = status_channel.name
@@ -284,17 +284,17 @@ class Client(commands.Bot):
                 return
 
             await status_channel.edit(name=desired_name)
-            print(f'✅ Updated status channel: "{current_name}" → "{desired_name}"')
+            print(f'<:Accepted:1426930333789585509> Updated status channel: "{current_name}" → "{desired_name}"')
 
         except discord.Forbidden:
-            print(f'❌ Missing permissions to edit status channel')
+            print(f'<:Denied:1426930694633816248> Missing permissions to edit status channel')
         except discord.HTTPException as e:
             if e.code == 50035:
                 print(f'⚠️ Rate limited when updating status channel (2 updates per 10 minutes max)')
             else:
-                print(f'❌ HTTP error updating status channel: {e}')
+                print(f'<:Denied:1426930694633816248> HTTP error updating status channel: {e}')
         except Exception as e:
-            print(f'❌ Failed to update status channel: {e}')
+            print(f'<:Denied:1426930694633816248> Failed to update status channel: {e}')
 
     async def on_ready(self):
         print(f'Logged in as {self.user}')
@@ -351,9 +351,9 @@ async def force_sync(ctx):
             sync_results.append(f"{guild_id}: {len(synced)} commands")
 
         result_text = "\n".join(sync_results)
-        await ctx.send(f"✅ Synced commands:\n```{result_text}```")
+        await ctx.send(f"<:Accepted:1426930333789585509> Synced commands:\n```{result_text}```")
     except Exception as e:
-        await ctx.send(f"❌ Sync failed: {e}")
+        await ctx.send(f"<:Denied:1426930694633816248> Sync failed: {e}")
         traceback.print_exc()
 
 
@@ -366,8 +366,8 @@ async def list_cogs(ctx):
     failed = "\n".join([f"• {cog}" for cog in client.failed_cogs]) or "None"
 
     embed = discord.Embed(title="Loaded Cogs", color=discord.Color.blue())
-    embed.add_field(name="✅ Loaded", value=loaded, inline=False)
-    embed.add_field(name="❌ Failed", value=failed, inline=False)
+    embed.add_field(name="<:Accepted:1426930333789585509> Loaded", value=loaded, inline=False)
+    embed.add_field(name="<:Denied:1426930694633816248> Failed", value=failed, inline=False)
     await ctx.send(embed=embed)
 
 

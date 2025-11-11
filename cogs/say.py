@@ -46,7 +46,7 @@ class EditTextModal(discord.ui.Modal, title='Edit Message'):
 
             # Confirm to user
             success_embed = discord.Embed(
-                description='✅ Message edited successfully!',
+                description='<:Accepted:1426930333789585509> Message edited successfully!',
                 colour=discord.Colour(0x2ecc71)
             )
             await interaction.response.send_message(embed=success_embed, ephemeral=True)
@@ -145,7 +145,7 @@ class EmbedModal(discord.ui.Modal, title='Create Embed'):
 
             # Confirm to user
             success_embed = discord.Embed(
-                description='✅ Embed sent successfully!',
+                description='<:Accepted:1426930333789585509> Embed sent successfully!',
                 colour=discord.Colour(0x2ecc71)
             )
             await interaction.response.send_message(embed=success_embed, ephemeral=True)
@@ -263,7 +263,7 @@ class EditEmbedModal(discord.ui.Modal, title='Edit Embed'):
 
             # Confirm to user
             success_embed = discord.Embed(
-                description='✅ Embed edited successfully!',
+                description='<:Accepted:1426930333789585509> Embed edited successfully!',
                 colour=discord.Colour(0x2ecc71)
             )
             await interaction.response.send_message(embed=success_embed, ephemeral=True)
@@ -307,13 +307,13 @@ class SayCog(commands.Cog):
     # Create command group
     say_group = app_commands.Group(name="say", description="Make the bot say something")
 
-    @say_group.command(name='text', description='Send a message (or edit a sent message) from the bot.')
+    @say_group.command(name='text', description='Send a message (or edit a sent message) as the bot')
     @app_commands.default_permissions(administrator=True)
     @app_commands.describe(
-        text='What you want the bot to say.',
-        channel='Channel ID to send the message in.',
-        reply='Message ID to reply to (or edit).',
-        edit='Edit an existing message by the bot instead of sending a new one.'
+        text='What you want the bot to say',
+        channel='Channel ID to send the message in',
+        reply='Message ID to reply to (or edit)',
+        edit='Edit an existing message by the bot instead of sending a new one'
     )
     async def say_text(
             self,
@@ -408,7 +408,7 @@ class SayCog(commands.Cog):
 
                     # Confirm to user
                     success_embed = discord.Embed(
-                        description=f'✅ Message sent as a reply in {target_channel.mention}!',
+                        description=f'<:Accepted:1426930333789585509> Message sent as a reply in {target_channel.mention}!',
                         colour=discord.Colour(0x2ecc71)
                     )
                     await interaction.followup.send(embed=success_embed, ephemeral=True)
@@ -438,7 +438,7 @@ class SayCog(commands.Cog):
 
                     # Confirm to user
                     success_embed = discord.Embed(
-                        description=f'✅ Message sent in {target_channel.mention}!',
+                        description=f'<:Accepted:1426930333789585509> Message sent in {target_channel.mention}!',
                         colour=discord.Colour(0x2ecc71)
                     )
                     await interaction.followup.send(embed=success_embed, ephemeral=True)
@@ -474,14 +474,14 @@ class SayCog(commands.Cog):
             app_commands.Choice(name='Yes', value='yes')
         ]
 
-    @say_group.command(name='embed', description='Send an embed (or edit a sent embed) from the bot.')
+    @say_group.command(name='embed', description='Send an embed (or edit a sent embed) as the bot')
     @app_commands.default_permissions(administrator=True)
     @app_commands.describe(
-        image='Upload an image.',
-        thumbnail='Upload a thumbnail.',
-        channel='Channel ID to send the embed in.',
-        reply='Message ID to reply to (or to edit).',
-        edit='Edit an existing embed by the Bot instead of sending a new one.'
+        image='Upload an image',
+        thumbnail='Upload a thumbnail',
+        channel='Channel ID to send the embed in',
+        reply='Message ID to reply to (or to edit)',
+        edit='Edit an existing embed by the Bot instead of sending a new one'
     )
     async def say_embed(
             self,

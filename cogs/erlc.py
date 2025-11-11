@@ -751,7 +751,7 @@ class ERLC(commands.GroupCog, name="erlc"):
         await interaction.followup.send(embed=embed)
         await self.send_to_channel(interaction.guild_id, embed)
 
-    @app_commands.command(name="players", description="Get list of players in server with optional filters")
+    @app_commands.command(name="players", description="Get list of players in server")
     @app_commands.describe(
         team="Filter by team name",
         callsign="Filter by callsign",
@@ -832,7 +832,7 @@ class ERLC(commands.GroupCog, name="erlc"):
         await interaction.followup.send(embed=embed)
         await self.send_to_channel(interaction.guild_id, embed)
 
-    @app_commands.command(name="vehicles", description="Get list of vehicles in server with optional filters")
+    @app_commands.command(name="vehicles", description="Get list of vehicles in server")
     @app_commands.describe(
         livery="Filter by vehicle livery/texture",
         name="Filter by vehicle name",
@@ -983,7 +983,7 @@ class ERLC(commands.GroupCog, name="erlc"):
         await interaction.followup.send(embed=embed)
         await self.send_to_channel(interaction.guild_id, embed)
 
-    @app_commands.command(name="banned", description="Check server bans or search for a specific player")
+    @app_commands.command(name="banned", description="Check server bans")
     @app_commands.describe(
         player="Optional: Search for a specific player name or Roblox ID"
     )
@@ -1125,7 +1125,7 @@ class ERLC(commands.GroupCog, name="erlc"):
         await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="command", description="Execute a command on the server")
-    @app_commands.describe(command="The command to execute (e.g., :h Hello everyone!)")
+    @app_commands.describe(command="The command to execute")
     @app_commands.default_permissions(administrator=True)
     async def send_command(self, interaction: discord.Interaction, command: str):
         """Send a command to the ER:LC server."""

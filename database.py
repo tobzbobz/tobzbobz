@@ -12,7 +12,7 @@ class Database:
         self.database_url = os.getenv('DATABASE_URL')
 
         if not self.database_url:
-            print('⚠️  DATABASE_URL not set! Bot will not be able to save data.')
+            print('<:Warn:1437771973970104471>  DATABASE_URL not set! Bot will not be able to save data.')
 
     async def connect(self):
         """Connect to the database"""
@@ -61,7 +61,7 @@ class Database:
         async with self.pool.acquire() as conn:
             try:
                 if not callsign or not callsign.strip():
-                    print(f'⚠️ Attempted to set empty callsign for user {user_id}')
+                    print(f'<:Warn:1437771973970104471> Attempted to set empty callsign for user {user_id}')
                     return False
                 await conn.execute(
                     '''INSERT INTO callsigns (guild_id, user_id, callsign, set_by)
@@ -224,7 +224,7 @@ class Database:
                 )
                 return True
             except Exception as e:
-                print(f"❌ Error saving active watch: {e}")
+                print(f"<:Denied:1426930694633816248> Error saving active watch: {e}")
                 raise
 
     async def add_completed_watch(self, message_id: int, guild_id: int, channel_id: int,
@@ -255,7 +255,7 @@ class Database:
                     else:
                         started_at_dt = started_at
                 else:
-                    print(f"⚠️ Warning: Invalid started_at type {type(started_at)}, using current time")
+                    print(f"<:Warn:1437771973970104471> Warning: Invalid started_at type {type(started_at)}, using current time")
                     started_at_dt = datetime.now(timezone.utc)
 
                 # Convert ended_at to timezone-aware datetime
@@ -267,7 +267,7 @@ class Database:
                     else:
                         ended_at_dt = ended_at
                 else:
-                    print(f"⚠️ Warning: Invalid ended_at type {type(ended_at)}, using current time")
+                    print(f"<:Warn:1437771973970104471> Warning: Invalid ended_at type {type(ended_at)}, using current time")
                     ended_at_dt = datetime.now(timezone.utc)
 
                 print(f"💾 Saving completed watch {message_id}")
@@ -307,10 +307,10 @@ class Database:
                     votes_received, votes_required, has_voters_embed,
                     original_colour, original_station, switch_history
                 )
-                print(f"✅ Successfully saved completed watch {message_id}")
+                print(f"<:Accepted:1426930333789585509> Successfully saved completed watch {message_id}")
                 return True
             except Exception as e:
-                print(f'❌ Error adding completed watch: {e}')
+                print(f'<:Denied:1426930694633816248> Error adding completed watch: {e}')
                 import traceback
                 traceback.print_exc()
                 return False
@@ -344,7 +344,7 @@ class Database:
                     'related_messages': row.get('related_messages', [row['message_id']]),
                     'comms_status': row.get('comms_status', 'inactive')
                 }
-            return watches  # ✅ MOVED OUTSIDE THE LOOP
+            return watches  # <:Accepted:1426930333789585509> MOVED OUTSIDE THE LOOP
 
     async def remove_active_watch(self, message_id: int):
         """Remove an active watch"""
@@ -496,10 +496,10 @@ class Database:
                     'UPDATE active_watches SET related_messages = $1 WHERE message_id = $2',
                     related_messages, message_id
                 )
-                print(f"✅ Updated related_messages for watch {message_id}")
+                print(f"<:Accepted:1426930333789585509> Updated related_messages for watch {message_id}")
                 return True
             except Exception as e:
-                print(f"❌ Error updating related_messages: {e}")
+                print(f"<:Denied:1426930694633816248> Error updating related_messages: {e}")
                 return False
 
     async def update_active_watch(self, message_id: int, user_id: int = None,
@@ -550,10 +550,10 @@ class Database:
                 query = f"UPDATE active_watches SET {', '.join(updates)} WHERE message_id = ${param_count}"
 
                 await conn.execute(query, *params)
-                print(f"✅ Updated active watch {message_id}")
+                print(f"<:Accepted:1426930333789585509> Updated active watch {message_id}")
                 return True
             except Exception as e:
-                print(f"❌ Error updating active watch: {e}")
+                print(f"<:Denied:1426930694633816248> Error updating active watch: {e}")
                 import traceback
                 traceback.print_exc()
                 return False

@@ -35,7 +35,7 @@ def has_case_log_permission():
         user_role_ids = {role.id for role in interaction.user.roles}
         if not user_role_ids.intersection(CASE_LOG_ROLES):
             await interaction.response.send_message(
-                "❌ You don't have permission to use this command.",
+                "<:Denied:1426930694633816248> You don't have permission to use this command.",
                 ephemeral=True
             )
             return False
@@ -112,14 +112,14 @@ class CaseLogCog(commands.Cog):
 
         embed.add_field(
             name="‎",
-            value=f"*Logged by {interaction.user.mention}*",  # ✅ Changed to mention instead of display_name
+            value=f"*Logged by {interaction.user.mention}*",  # <:Accepted:1426930333789585509> Changed to mention instead of display_name
             inline=False
         )
 
         # Get the target channel
         target_channel = self.bot.get_channel(CASE_LOG_CHANNEL_ID)
         if not target_channel:
-            await interaction.followup.send("❌ Case log channel not found!", ephemeral=True)
+            await interaction.followup.send("<:Denied:1426930694633816248> Case log channel not found!", ephemeral=True)
             return
 
         # Send the embed to the target channel
@@ -127,7 +127,7 @@ class CaseLogCog(commands.Cog):
 
         # Confirm to the user
         await interaction.followup.send(
-            f"✅ Case logged successfully in {target_channel.mention}",
+            f"<:Accepted:1426930333789585509> Case logged successfully in {target_channel.mention}",
             ephemeral=True
         )
 
@@ -145,7 +145,7 @@ class CaseLogCog(commands.Cog):
         if proof_urls:
             urls = [url.strip() for url in proof_urls.split(',') if url.strip()]
             if urls:
-                proof_content += "\n".join(f"{url}" for url in urls)  # ✅ Fixed: use "\n".join() instead of join()
+                proof_content += "\n".join(f"{url}" for url in urls)  # <:Accepted:1426930333789585509> Fixed: use "\n".join() instead of join()
                 has_proof = True
 
         # Add attachment if provided
@@ -161,7 +161,7 @@ class CaseLogCog(commands.Cog):
                 has_proof = True
             except Exception as e:
                 print(f"Error uploading attachment to thread: {e}")
-                await thread.send(f"⚠️ Error uploading attachment: {e}")
+                await thread.send(f"<:Warn:1437771973970104471> Error uploading attachment: {e}")
         elif has_proof:
             await thread.send(proof_content)
 
