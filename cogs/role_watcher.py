@@ -2,7 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Union
 import os
 
 # Configuration
@@ -14,7 +14,8 @@ try:
 
     DATABASE_AVAILABLE = True
 except ImportError:
-    print("<:Warn:1437771973970104471> Warning: database.py not found. Role monitoring will not persist across restarts.")
+    print(
+        "<:Warn:1437771973970104471> Warning: database.py not found. Role monitoring will not persist across restarts.")
     DATABASE_AVAILABLE = False
     db = None
 
@@ -185,8 +186,13 @@ class RoleWatcherCog(commands.Cog):
 
         try:
             channel = guild.get_channel(channel_id)
-            if not channel or not isinstance(channel, discord.TextChannel):
+            if not channel:
                 print(f"<:Warn:1437771973970104471> Warning: Channel {channel_id} not found for role {role.name}")
+                return
+
+            # Check if it's a text-based channel (includes voice channel text chats)
+            if not isinstance(channel, (discord.TextChannel, discord.VoiceChannel, discord.StageChannel)):
+                print(f"<:Warn:1437771973970104471> Warning: Channel {channel_id} is not a text-based channel")
                 return
 
             # Create embed
@@ -283,7 +289,7 @@ class RoleWatcherCog(commands.Cog):
         action="Action to perform",
         role="Role to monitor/configure",
         user="User to add/remove",
-        channel="Channel for alerts"
+        channel="Channel for alerts (or type 'CURRENT' for this channel)"
     )
     @is_owner()
     async def role_monitor_config(
@@ -292,7 +298,7 @@ class RoleWatcherCog(commands.Cog):
             action: str,
             role: Optional[discord.Role] = None,
             user: Optional[discord.Member] = None,
-            channel: Optional[discord.TextChannel] = None
+            channel: Optional[Union[discord.TextChannel, discord.VoiceChannel, discord.StageChannel]] = None
     ):
         """Configure role monitoring system"""
 
@@ -413,7 +419,7 @@ class RoleWatcherCog(commands.Cog):
 
             if not channel:
                 await interaction.response.send_message(
-                    "<:Denied:1426930694633816248> Please specify a channel for alerts.",
+                    "<:Denied:1426930694633816248> Please specify a channel for alerts (or type 'CURRENT').",
                     ephemeral=True
                 )
                 return
@@ -423,6 +429,40 @@ class RoleWatcherCog(commands.Cog):
 
             await interaction.response.send_message(
                 f"<:Accepted:1426930333789585509> Set alert channel for {role.mention} to {channel.mention}.",
+                ephemeral=True
+            )
+
+        elif action == "set-role-channel-current":
+            if not role:
+                await interaction.response.send_message(
+                    "<:Denied:1426930694633816248> Please specify a role to configure.",
+                    ephemeral=True
+                )
+                return
+
+            if role.id not in MONITORED_ROLES:
+                await interaction.response.send_message(
+                    f"<:Denied:1426930694633816248> {role.mention} is not being monitored. Add authorized users first.",
+                    ephemeral=True
+                )
+                return
+
+            # Use the current channel
+            current_channel = interaction.channel
+
+            # Verify it's a text-based channel
+            if not isinstance(current_channel, (discord.TextChannel, discord.VoiceChannel, discord.StageChannel)):
+                await interaction.response.send_message(
+                    "<:Denied:1426930694633816248> This channel cannot receive messages.",
+                    ephemeral=True
+                )
+                return
+
+            MONITORED_ROLES[role.id]['channel_id'] = current_channel.id
+            await save_config()
+
+            await interaction.response.send_message(
+                f"<:Accepted:1426930333789585509> Set alert channel for {role.mention} to this channel ({current_channel.mention}).",
                 ephemeral=True
             )
 
@@ -541,6 +581,7 @@ class RoleWatcherCog(commands.Cog):
             app_commands.Choice(name="List Monitored Roles", value="list"),
             app_commands.Choice(name="Toggle User Authorization", value="toggle"),
             app_commands.Choice(name="Set Role Alert Channel", value="set-role-channel"),
+            app_commands.Choice(name="Set Alert Channel to CURRENT", value="set-role-channel-current"),
             app_commands.Choice(name="Toggle User in Ping List", value="toggle-ping-user"),
             app_commands.Choice(name="Clear Ping List (use whitelist)", value="clear-ping-users"),
             app_commands.Choice(name="Toggle Role Monitoring", value="toggle-monitoring"),

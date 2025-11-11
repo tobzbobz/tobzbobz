@@ -186,7 +186,7 @@ class VoteButton(discord.ui.View):
                         watch_start_timestamp = int(watch_start_time.timestamp())
 
                     # Create watch start embed (skip the "Vote Passed" intermediate step)
-                    start_embed = discord.Embed(title=f'🚨 {self.colour} Watch Announcement 🚨', colour=embed_colour)
+                    start_embed = discord.Embed(title=f'{self.colour} Watch Announcement', colour=embed_colour)
                     start_embed.add_field(name='Station', value=f'`{self.station}`', inline=True)
 
                     if self.time_minutes:
@@ -1207,38 +1207,27 @@ class WatchCog(commands.Cog):
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
                 await db.remove_active_watch(int(watch))
                 del active_watches[watch]
-
-                # Only update stats if not LCS
-                if watch_data.get('colour', '').upper() != 'LCS':
-                    await self.update_stats_embed(channel)
                 return
 
-            # Get the original message
-            try:
-                original_message = await channel.fetch_message(int(watch))
-            except discord.NotFound:
-                error_embed = discord.Embed(
-                    description='<:Denied:1426930694633816248> Watch message not found! It may have been deleted.',
-                    colour=discord.Colour(0xf24d4d)
-                )
-                await interaction.followup.send(embed=error_embed, ephemeral=True)
-                await db.remove_active_watch(int(watch))
-                del active_watches[watch]
-                return
-
-            # DELETE ALL USER MESSAGES (keep bot messages) since watch started
+            # DELETE ALL MESSAGES (except stats embed) - Fixed logic
             try:
                 deleted_count = 0
-                async for message in channel.history(after=discord.Object(id=int(watch)), limit=None):
-                    if not message.author.bot:
-                        try:
-                            await message.delete()
-                            deleted_count += 1
-                        except (discord.Forbidden, discord.NotFound):
-                            pass
-                print(f'Deleted {deleted_count} user messages from watch')
+                async for message in channel.history(limit=None):  # Changed from limit=100 to limit=None
+                    try:
+                        # Skip ONLY the persistent stats embed
+                        if message.author.bot and message.embeds:
+                            if any(embed.title and ("Watch Statistics" in embed.title or "FENZ Watches" in embed.title)
+                                   for embed in message.embeds):
+                                continue
+
+                        await message.delete()
+                        deleted_count += 1
+                        await asyncio.sleep(0.2)  # Small delay to avoid rate limits
+                    except (discord.Forbidden, discord.NotFound):
+                        pass
+                print(f'Deleted {deleted_count} messages from watch channel')
             except Exception as e:
-                print(f'Error deleting user messages: {e}')
+                print(f'Error deleting messages: {e}')
 
             # CREATE NEW ENDED EMBED
             colour_map = {
@@ -1250,7 +1239,7 @@ class WatchCog(commands.Cog):
             embed_colour = colour_map.get(watch_data["colour"], discord.Colour.orange())
 
             embed = discord.Embed(
-                title=f'🚨 {watch_data["colour"]} Watch - ENDED 🚨',
+                title=f'{watch_data["colour"]} Watch Ended',
                 colour=embed_colour
             )
             embed.add_field(
@@ -2214,7 +2203,7 @@ class WatchCog(commands.Cog):
                 try:
                     original_message = await channel.fetch_message(int(watch))
 
-                    embed = discord.Embed(title=f'🚨 {final_colour} Watch Announcement 🚨', colour=embed_colour)
+                    embed = discord.Embed(title=f'{final_colour} Watch Ongoing', colour=embed_colour)
                     embed.add_field(name='Station', value=f'`{final_station}`', inline=True)
                     embed.add_field(name='Time', value=f'<t:{watch_data["started_at"]}:R>', inline=True)
                     embed.add_field(name='Watch Leader', value=f'<@{final_leader_id}>\n‎', inline=True)
@@ -2293,7 +2282,7 @@ class WatchCog(commands.Cog):
                         except Exception as e:
                             print(f'Error deleting boost message {msg_id}: {e}')
 
-                embed = discord.Embed(title=f'🚨 {final_colour} Watch Announcement 🚨', colour=embed_colour)
+                embed = discord.Embed(title=f'{final_colour} Watch Ongoing', colour=embed_colour)
                 embed.add_field(name='Station', value=f'`{final_station}`', inline=True)
                 embed.add_field(name='Time', value=f'<t:{watch_data["started_at"]}:R>', inline=True)
                 embed.add_field(name='Watch Leader', value=f'<@{final_leader_id}>\n‎', inline=True)
