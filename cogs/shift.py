@@ -13,6 +13,7 @@ import json
 
 CACHE_TTL_SECONDS = 300
 LONG_BREAK_THRESHOLD_SECONDS = 1200
+LONG_BREAK_THRESHOLD_MINUTES = LONG_BREAK_THRESHOLD_SECONDS / 60
 SHIFT_LIST_ITEMS_PER_PAGE = 4
 
 OWNER_USER_ID = 678475709257089057
@@ -397,6 +398,7 @@ class ShiftManagementCog(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
+        self.db = db
         self._role_cache = {}
         self._quota_cache = {}
         self._quota_cache_time = None
@@ -420,15 +422,18 @@ class ShiftManagementCog(commands.Cog):
         if not self.weekly_reset_task.is_running():
             self.weekly_reset_task.start()
 
+        if not self.check_long_breaks.is_running():
+            self.check_long_breaks.start()
+
         # Clean up stale shifts
         await self.cleanup_stale_shifts(self.bot)
 
-    @tasks.loop(time=time(hour=0, minute=0, tzinfo=pytz.timezone('Pacific/Auckland')))
+    @tasks.loop(time=time(hour=22, minute=0, tzinfo=pytz.timezone('Pacific/Auckland')))
     async def weekly_reset_task(self):
-        """Check if it's Monday midnight NZST and run weekly reset"""
+        """Check if it's Sunday 10 PM NZST and run weekly reset"""
         now = datetime.now(NZST)
 
-        if now.weekday() == 0:  # Monday
+        if now.weekday() == 6:  # Sunday (0=Monday, 6=Sunday)
             print(f"Running weekly shift reset at {now}")
 
             try:
@@ -1232,9 +1237,9 @@ class ShiftManagementCog(commands.Cog):
 
         return ", ".join(parts)
 
-    @shift_group.command(name="test_weekly_reset", description="[ADMIN] Test weekly reset (dev only)")
+    @shift_group.command(name="test_weekly_reset", description="[ADMIN] Test weekly reset (dev only - dry run)")
     async def test_weekly_reset(self, interaction: discord.Interaction):
-        """Test command to manually trigger weekly reset"""
+        """Test command to simulate weekly reset WITHOUT making permanent changes"""
         await interaction.response.defer(ephemeral=True)
 
         if not self.has_super_admin_permission(interaction.user):
@@ -1245,40 +1250,92 @@ class ShiftManagementCog(commands.Cog):
             return
 
         try:
-            # Get next wave number ONCE (same as the actual weekly reset)
+            # Get next wave number (READ ONLY)
             async with db.pool.acquire() as conn:
                 max_wave = await conn.fetchval(
                     'SELECT MAX(wave_number) FROM shifts WHERE wave_number IS NOT NULL'
                 )
                 next_wave = (max_wave or 0) + 1
 
-            # Show initial status
-            await interaction.followup.send(
-                f"🔄 **Starting Weekly Reset Test**\n"
-                f"Creating Wave {next_wave}...",
-                ephemeral=True
+                # COUNT shifts that WOULD be archived (READ ONLY)
+                current_week = self.weekly_manager.get_current_week_monday()
+
+                completed_shift_count = await conn.fetchval(
+                    '''SELECT COUNT(*)
+                       FROM shifts
+                       WHERE week_identifier = $1
+                         AND wave_number IS NULL
+                         AND end_time IS NOT NULL''',
+                    current_week
+                )
+
+                # COUNT active shifts that WOULD be force-ended (READ ONLY)
+                active_shift_count = await conn.fetchval(
+                    'SELECT COUNT(*) FROM shifts WHERE end_time IS NULL'
+                )
+
+                # COUNT users that WOULD appear in report (READ ONLY)
+                report_users = await conn.fetch(
+                    '''SELECT DISTINCT discord_user_id, type
+                       FROM shifts
+                       WHERE wave_number IS NULL
+                         AND end_time IS NOT NULL
+                         AND week_identifier = $1''',
+                    current_week
+                )
+
+            # Build detailed report
+            embed = discord.Embed(
+                title="📋 **Weekly Reset Test (Dry Run)**",
+                description=f"**Simulating Wave {next_wave} Creation**\n"
+                            f"*No permanent changes will be made*",
+                color=discord.Color.blue()
             )
 
-            # 1️⃣ Archive current week's completed shifts
-            await self.weekly_manager.archive_current_week_to_wave()
-
-            # 2️⃣ Force-end active shifts
-            await self.weekly_manager.force_end_active_shifts(next_wave)
-
-            # 3️⃣ Generate report for the completed wave
-            await self.weekly_manager.generate_weekly_report(next_wave)
-
-            await interaction.followup.send(
-                f"<:Accepted:1426930333789585509> **Weekly Reset Test Completed!**\n"
-                f"✅ Wave {next_wave} created\n"
-                f"✅ Active shifts force-ended\n"
-                f"✅ Weekly report generated and sent\n\n"
-                f"Check <#{WEEKLY_REPORT_CHANNELS[0]}> for the leaderboard.",
-                ephemeral=True
+            embed.add_field(
+                name="1️⃣ Archive Completed Shifts",
+                value=f"Would archive **{completed_shift_count}** completed shifts to Wave {next_wave}",
+                inline=False
             )
+
+            embed.add_field(
+                name="2️⃣ Force-End Active Shifts",
+                value=f"Would force-end **{active_shift_count}** active shifts and assign to Wave {next_wave}",
+                inline=False
+            )
+
+            # Group report users by type
+            users_by_type = {}
+            for user in report_users:
+                type_name = user['type']
+                if type_name not in users_by_type:
+                    users_by_type[type_name] = []
+                users_by_type[type_name].append(user['discord_user_id'])
+
+            report_lines = []
+            for type_name, user_ids in users_by_type.items():
+                report_lines.append(f"**{type_name}:** {len(user_ids)} users")
+
+            embed.add_field(
+                name="3️⃣ Generate Weekly Report",
+                value="\n".join(report_lines) if report_lines else "No users to report",
+                inline=False
+            )
+
+            embed.add_field(
+                name="📤 Report Destination",
+                value=f"Would send to channels: {', '.join([f'<#{ch}>' for ch in WEEKLY_REPORT_CHANNELS])}",
+                inline=False
+            )
+
+            embed.set_footer(text="⚠️ DRY RUN - No actual changes made to database")
+            embed.timestamp = datetime.utcnow()
+
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
         except Exception as e:
             await interaction.followup.send(
-                f"<:Denied:1426930694633816248> Error: {str(e)}",
+                f"<:Denied:1426930694633816248> Error during test: {str(e)}",
                 ephemeral=True
             )
             import traceback
@@ -1924,6 +1981,11 @@ class ShiftManagementCog(commands.Cog):
                     continue
 
                 quota_info = quota_infos.get(row['discord_user_id'], {'has_quota': False, 'bypass_type': None})
+
+                # Skip users without quota requirements OR with 0-second quotas
+                if not quota_info['has_quota'] or quota_info.get('quota_seconds', 0) == 0:
+                    continue
+
                 quota_status = ""
                 if quota_info['has_quota']:
                     if quota_info['bypass_type']:
@@ -2100,7 +2162,6 @@ class ShiftManagementCog(commands.Cog):
                     callsign_map = {}
 
             if not active_shifts:
-
                 embed = discord.Embed(
                     title="**<:Clock:1434949269554597978> Active Shifts**",
                     description='No active shifts.',
@@ -2108,12 +2169,12 @@ class ShiftManagementCog(commands.Cog):
                 )
 
                 embed.set_author(
-                    name=interaction.guild.name,  # Use guild name instead
+                    name=interaction.guild.name,
                     icon_url=interaction.guild.icon.url if interaction.guild.icon else None
                 )
 
                 await interaction.followup.send(embed=embed)
-
+                return
 
             # Categorize by shift type
             shifts_by_type = {}
@@ -2369,7 +2430,8 @@ class ShiftManagementCog(commands.Cog):
                 name="Current Shift",
                 value=f"**Status:** <:Idle:1434949872968273940> On Break\n"
                       f"**Started:** <t:{int(shift['start_time'].timestamp())}:R>\n"
-                      f"**Break Started:** <t:{int(shift['pause_start'].timestamp())}:R>",
+                      f"**Break Started:** <t:{int(shift['pause_start'].timestamp())}:R>\n\n"
+                      f"*Breaks over {LONG_BREAK_THRESHOLD_MINUTES} will automatically end your shift.*",  # ADD THIS LINE
                 inline=False
             )
 
@@ -2453,6 +2515,21 @@ class ShiftManagementCog(commands.Cog):
                         inline=False
                     )
 
+                value_parts = [
+                    f"**Status:** <:Offline:1434951694319620197> Ended",
+                    f"**Total Time:** {self.format_duration(active_duration)}"
+                ]
+
+                # Only add break info if there was actually break time
+                if pause_duration > 0:
+                    value_parts.append(f"**Break Time:** {self.format_duration(timedelta(seconds=pause_duration))}")
+
+                embed.add_field(
+                    name="<:Clock:1434949269554597978> Last Shift",
+                    value="\n".join(value_parts),
+                    inline=False
+                )
+
         embed.set_footer(text=f"Shift Type: {shift['type']}")
 
         # Create view with Start button for next shift
@@ -2508,57 +2585,66 @@ class ShiftManagementCog(commands.Cog):
             'average_duration': total_duration / len(shifts) if len(shifts) > 0 else timedelta(0)
         }
 
-        embed = discord.Embed(
-            title="<:Checklist:1434948670226432171> **All Time Information**",
-            description=f"**Shift Count:** {str(stats['count'])}\n**Total Duration:** {self.format_duration(stats['total_duration'])}\n**Average Duration:** {self.format_duration(stats['average_duration'])}",
-            color=discord.Color(0x000000)
-        )
+        if not active_shift:
+            embed = discord.Embed(
+                title="<:Checklist:1434948670226432171> **All Time Information**",
+                description=f"**Shift Count:** {str(stats['count'])}\n**Total Duration:** {self.format_duration(stats['total_duration'])}\n**Average Duration:** {self.format_duration(stats['average_duration'])}",
+                color=discord.Color(0x000000)
+            )
+        else:
+            # If active shift, just show a simple status embed
+            embed = discord.Embed(
+                title="Shift Management",
+                color=discord.Color(0x000000)
+            )
+
         embed.set_author(
             name=f"Shift Management: {user.display_name}",
             icon_url=user.display_avatar.url
         )
 
         # Add quota info if available
-        member = interaction.guild.get_member(user.id)
-        if member:
-            quota_info = await self.get_quota_info(user)
-            if quota_info['has_quota']:
-                if quota_info['bypass_type']:
-                    if quota_info['bypass_type'] == 'RA':
-                        status_text = f"<:Accepted:1426930333789585509> **{quota_info['percentage']:.1f}%** (RA - 50% Required)"
+        if not active_shift:
+            member = interaction.guild.get_member(user.id)
+            if member:
+                quota_info = await self.get_quota_info(user)
+                if quota_info['has_quota']:
+                    if quota_info['bypass_type']:
+                        if quota_info['bypass_type'] == 'RA':
+                            status_text = f"<:Accepted:1426930333789585509> **{quota_info['percentage']:.1f}%** (RA - 50% Required)"
+                        else:
+                            status_text = f"<:Accepted:1426930333789585509> **100%** ({quota_info['bypass_type']} Bypass)"
                     else:
-                        status_text = f"<:Accepted:1426930333789585509> **100%** ({quota_info['bypass_type']} Bypass)"
-                else:
-                    status_emoji = "<:Accepted:1426930333789585509>" if quota_info[
-                        'completed'] else "<:Denied:1426930694633816248>"
-                    status_text = f"{status_emoji} **{quota_info['percentage']:.1f}%**"
+                        status_emoji = "<:Accepted:1426930333789585509>" if quota_info[
+                            'completed'] else "<:Denied:1426930694633816248>"
+                        status_text = f"{status_emoji} **{quota_info['percentage']:.1f}%**"
 
-                embed.add_field(
-                    name="Quota Progress",
-                    value=f"> {status_text} of {self.format_duration(timedelta(seconds=quota_info['quota_seconds']))}",
-                    inline=False
-                )
+                    embed.add_field(
+                        name="Quota Progress",
+                        value=f"> {status_text} of {self.format_duration(timedelta(seconds=quota_info['quota_seconds']))}",
+                        inline=False
+                    )
 
-        if show_last_shift and not active_shift:
-            last_shift = await self.get_last_shift(user.id)
-            if last_shift:
-                last_duration = last_shift['end_time'] - last_shift['start_time']
-                active_duration = last_duration - timedelta(seconds=last_shift.get('pause_duration', 0))
-                pause_duration = last_shift.get('pause_duration', 0)
+            if show_last_shift:
+                last_shift = await self.get_last_shift(user.id)
+                if last_shift:
+                    last_duration = last_shift['end_time'] - last_shift['start_time']
+                    active_duration = last_duration - timedelta(seconds=last_shift.get('pause_duration', 0))
+                    pause_duration = last_shift.get('pause_duration', 0)
 
-                value_parts = [
-                    f"**Status:** <:Offline:1434951694319620197> Ended",
-                    f"**Total Time:** {self.format_duration(active_duration)}"
-                ]
+                    value_parts = [
+                        f"**Status:** <:Offline:1434951694319620197> Ended",
+                        f"**Total Time:** {self.format_duration(active_duration)}"
+                    ]
 
-                if pause_duration > 0:
-                    value_parts.append(f"**Break Time:** {self.format_duration(timedelta(seconds=pause_duration))}")
+                    if pause_duration > 0:
+                        value_parts.append(f"**Break Time:** {self.format_duration(timedelta(seconds=pause_duration))}")
 
-                embed.add_field(
-                    name="<:Clock:1434949269554597978> Last Shift",
-                    value="\n".join(value_parts),
-                    inline=False
-                )
+                    embed.add_field(
+                        name="<:Clock:1434949269554597978> Last Shift",
+                        value="\n".join(value_parts),
+                        inline=False
+                    )
 
         # Show shift status if active
         if active_shift:
@@ -2674,6 +2760,89 @@ class ShiftManagementCog(commands.Cog):
         embed.timestamp = datetime.utcnow()
 
         await channel.send(embed=embed)
+
+    # Add this method to ShiftManagementCog class (around line 800)
+    @tasks.loop(minutes=5)  # Check every 5 minutes
+    async def check_long_breaks(self):
+        """Automatically end shifts with breaks over threshold"""
+        try:
+            async with db.pool.acquire() as conn:
+                # Find all shifts on break for longer than threshold
+                threshold_time = datetime.utcnow() - timedelta(seconds=LONG_BREAK_THRESHOLD_SECONDS)
+
+                long_breaks = await conn.fetch(
+                    '''SELECT *
+                       FROM shifts
+                       WHERE pause_start IS NOT NULL
+                         AND pause_start < $1
+                         AND end_time IS NULL''',
+                    threshold_time
+                )
+
+                for shift in long_breaks:
+                    # Calculate final pause duration
+                    pause_duration = shift.get('pause_duration', 0)
+                    pause_duration += (datetime.utcnow() - shift['pause_start']).total_seconds()
+
+                    # Close break session
+                    current_sessions = await conn.fetchval(
+                        'SELECT break_sessions FROM shifts WHERE id = $1',
+                        shift['id']
+                    )
+
+                    sessions = json.loads(current_sessions) if current_sessions else []
+                    if sessions and sessions[-1]['end'] is None:
+                        final_duration = (datetime.utcnow() - shift['pause_start']).total_seconds()
+                        sessions[-1]['end'] = datetime.utcnow().isoformat()
+                        sessions[-1]['duration'] = final_duration
+
+                    # End the shift
+                    await conn.execute(
+                        '''UPDATE shifts
+                           SET end_time       = $1,
+                               pause_duration = $2,
+                               pause_start    = NULL,
+                               break_sessions = $3
+                           WHERE id = $4''',
+                        datetime.utcnow(),
+                        pause_duration,
+                        json.dumps(sessions),
+                        shift['id']
+                    )
+
+                    # Clean up roles/nicknames
+                    guild = self.bot.get_guild(shift.get('guild_id'))
+                    if guild:
+                        member = guild.get_member(shift['discord_user_id'])
+                        if member:
+                            await self.update_nickname_for_shift_status(member, 'off')
+                            await self.update_duty_roles(member, shift['type'], 'off')
+
+                            # Log the auto-termination
+                            completed_shift = dict(shift)
+                            completed_shift['end_time'] = datetime.utcnow()
+                            completed_shift['pause_duration'] = pause_duration
+
+                            await self.log_shift_event(
+                                guild,
+                                'end',
+                                member,
+                                completed_shift,
+                                admin=guild.me,  # ADD THIS - passes the bot as the admin
+                                details=f"Auto-terminated: Break exceeded {LONG_BREAK_THRESHOLD_SECONDS // 60} minutes"
+                            )
+
+                    print(f"Auto-terminated shift {shift['id']} due to long break")
+
+        except Exception as e:
+            print(f"Error in check_long_breaks: {e}")
+            import traceback
+            traceback.print_exc()
+
+    @check_long_breaks.before_loop
+    async def before_check_long_breaks(self):
+        """Wait until bot is ready before starting the task"""
+        await self.bot.wait_until_ready()
 
 class QuotaConflictView(discord.ui.View):
     """Confirmation view for overwriting existing quotas"""
@@ -2970,12 +3139,6 @@ class ShiftActiveView(discord.ui.View):
                 self.cog.update_duty_roles(self.user, self.shift['type'], 'off')
             )
 
-            pause_duration = self.shift.get('pause_duration', 0)
-            if self.shift.get('pause_start'):
-                pause_duration += (datetime.utcnow() - self.shift['pause_start']).total_seconds()
-
-
-            # Close any open break sessions
             async with db.pool.acquire() as conn:
                 current_sessions = await conn.fetchval(
                     'SELECT break_sessions FROM shifts WHERE id = $1',
@@ -2990,12 +3153,33 @@ class ShiftActiveView(discord.ui.View):
                     sessions[-1]['end'] = datetime.utcnow().isoformat()
                     sessions[-1]['duration'] = final_duration
 
-                    # Update break_sessions before ending
+                    # Calculate pause_duration INCLUDING this final break
+                    pause_duration = self.shift.get('pause_duration', 0) + final_duration
+
+                    # Update break_sessions AND pause_duration in ONE query
                     await conn.execute(
-                        'UPDATE shifts SET break_sessions = $1 WHERE id = $2',
+                        '''UPDATE shifts
+                           SET break_sessions = $1,
+                               pause_duration = $2
+                           WHERE id = $3''',
                         json.dumps(sessions),
+                        pause_duration,
                         self.shift['id']
                     )
+                else:
+                    # No open break, just use existing pause_duration
+                    pause_duration = self.shift.get('pause_duration', 0)
+
+            # NOW end the shift with correct pause_duration
+            async with db.pool.acquire() as conn:
+                await conn.execute(
+                    '''UPDATE shifts
+                       SET end_time    = $1,
+                           pause_start = NULL
+                       WHERE id = $2''',
+                    datetime.utcnow(),
+                    self.shift['id']
+                )
 
             # Get the completed shift for logging
             completed_shift = dict(self.shift)
@@ -3190,11 +3374,6 @@ class ShiftBreakView(discord.ui.View):
                 self.cog.update_duty_roles(self.user, self.shift['type'], 'off')
             )
 
-            pause_duration = self.shift.get('pause_duration', 0)
-            if self.shift.get('pause_start'):
-                pause_duration += (datetime.utcnow() - self.shift['pause_start']).total_seconds()
-
-            # Close any open break sessions
             async with db.pool.acquire() as conn:
                 current_sessions = await conn.fetchval(
                     'SELECT break_sessions FROM shifts WHERE id = $1',
@@ -3209,12 +3388,33 @@ class ShiftBreakView(discord.ui.View):
                     sessions[-1]['end'] = datetime.utcnow().isoformat()
                     sessions[-1]['duration'] = final_duration
 
-                    # Update break_sessions before ending
+                    # Calculate pause_duration INCLUDING this final break
+                    pause_duration = self.shift.get('pause_duration', 0) + final_duration
+
+                    # Update break_sessions AND pause_duration in ONE query
                     await conn.execute(
-                        'UPDATE shifts SET break_sessions = $1 WHERE id = $2',
+                        '''UPDATE shifts
+                           SET break_sessions = $1,
+                               pause_duration = $2
+                           WHERE id = $3''',
                         json.dumps(sessions),
+                        pause_duration,
                         self.shift['id']
                     )
+                else:
+                    # No open break, just use existing pause_duration
+                    pause_duration = self.shift.get('pause_duration', 0)
+
+            # NOW end the shift with correct pause_duration
+            async with db.pool.acquire() as conn:
+                await conn.execute(
+                    '''UPDATE shifts
+                       SET end_time    = $1,
+                           pause_start = NULL
+                       WHERE id = $2''',
+                    datetime.utcnow(),
+                    self.shift['id']
+                )
 
             # Get the completed shift for logging
             completed_shift = dict(self.shift)
@@ -3461,22 +3661,22 @@ class AdminShiftControlView(discord.ui.View):
 
             if is_on_break:
                 # Resume button
-                resume_btn = discord.ui.Button(label="Resume Shift", style=discord.ButtonStyle.success, emoji="<:Play:1434957147829047467>")
+                resume_btn = discord.ui.Button(label="Resume", style=discord.ButtonStyle.success, emoji="<:Play:1434957147829047467>")
                 resume_btn.callback = self.resume_callback
                 self.add_item(resume_btn)
             else:
                 # Pause button
-                pause_btn = discord.ui.Button(label="Pause Shift", style=discord.ButtonStyle.primary, emoji="<:Pause:1434982402593390632>")
+                pause_btn = discord.ui.Button(label="Pause", style=discord.ButtonStyle.primary, emoji="<:Pause:1434982402593390632>")
                 pause_btn.callback = self.pause_callback
                 self.add_item(pause_btn)
 
             # Stop button
-            stop_btn = discord.ui.Button(label="Stop Shift", style=discord.ButtonStyle.danger, emoji="<:Reset:1434959478796714074>")
+            stop_btn = discord.ui.Button(label="Stop", style=discord.ButtonStyle.danger, emoji="<:Reset:1434959478796714074>")
             stop_btn.callback = self.stop_callback
             self.add_item(stop_btn)
         else:
             # Start button
-            start_btn = discord.ui.Button(label="Start Shift", style=discord.ButtonStyle.success, emoji="<:Play:1434957147829047467>")
+            start_btn = discord.ui.Button(label="Start", style=discord.ButtonStyle.success, emoji="<:Play:1434957147829047467>")
             start_btn.callback = self.start_callback
             self.add_item(start_btn)
 
@@ -3537,7 +3737,7 @@ class AdminShiftControlView(discord.ui.View):
                 # Get current break_sessions
                 current_sessions = await conn.fetchval(
                     'SELECT break_sessions FROM shifts WHERE id = $1',
-                    self.shift['id']
+                    self.active_shift['id']
                 )
 
                 # Parse and update the last session
@@ -3554,7 +3754,7 @@ class AdminShiftControlView(discord.ui.View):
                        WHERE id = $3''',
                     total_pause,
                     json.dumps(sessions),
-                    self.shift['id']
+                    self.active_shift['id']
                 )
 
             await self.cog.update_nickname_for_shift_status(self.target_user, 'break')
@@ -3588,14 +3788,14 @@ class AdminShiftControlView(discord.ui.View):
         await interaction.response.defer()
 
         try:
-            pause_duration = (datetime.utcnow() - self.shift['pause_start']).total_seconds()
-            total_pause = self.shift.get('pause_duration', 0) + pause_duration
+            pause_duration = (datetime.utcnow() - self.active_shift['pause_start']).total_seconds()
+            total_pause = self.active_shift.get('pause_duration', 0) + pause_duration
 
             async with db.pool.acquire() as conn:
                 # Get current break_sessions
                 current_sessions = await conn.fetchval(
                     'SELECT break_sessions FROM shifts WHERE id = $1',
-                    self.shift['id']
+                    self.active_shift['id']
                 )
 
                 # Parse and update the last session
@@ -3612,7 +3812,7 @@ class AdminShiftControlView(discord.ui.View):
                        WHERE id = $3''',
                     total_pause,
                     json.dumps(sessions),
-                    self.shift['id']
+                    self.active_shift['id']
                 )
 
             await self.cog.update_nickname_for_shift_status(self.target_user, 'duty')
@@ -3647,6 +3847,11 @@ class AdminShiftControlView(discord.ui.View):
         await interaction.response.defer()
 
         try:
+            # ADD THIS: Send temporary status message
+            status_msg = await interaction.followup.send(
+                "<a:Load:1430912797469970444> Stopping shift...",
+                ephemeral=True
+            )
             pause_duration = self.active_shift.get('pause_duration', 0)
             if self.active_shift.get('pause_start'):
                 pause_duration += (datetime.utcnow() - self.active_shift['pause_start']).total_seconds()
@@ -3678,12 +3883,12 @@ class AdminShiftControlView(discord.ui.View):
                 admin=self.admin
             )
 
-            await interaction.followup.send(
-                f"⏹️ Stopped shift for {self.target_user.mention}",
-                ephemeral=True
-            )
-
             await self.cog.show_admin_shift_panel(interaction, self.target_user, self.type, show_last_shift=True)
+            try:
+                await status_msg.delete()
+            except:
+                pass
+
         except Exception as e:
             await interaction.followup.send(
                 f"<:Denied:1426930694633816248> Error: {str(e)}",
@@ -3700,20 +3905,20 @@ class AdminActionsSelect(discord.ui.Select):
         self.shift_type = type
 
         options = [
-            discord.SelectOption(label="Shift List", description="View shift history", emoji="<:List:1434953240155525201>"),
-            discord.SelectOption(label="Modify Shift", description="Modify shift duration", emoji="<:Modify:1434954278362939632>"),
+            discord.SelectOption(label="View Shift List", description="View all shifts for this user, all time.", emoji="<:List:1434953240155525201>"),
+            discord.SelectOption(label="Modify Shift", description="Add, remove, set or reset shift duration.", emoji="<:Modify:1434954278362939632>"),
             discord.SelectOption(label="Delete Shift", description="Delete a shift", emoji="<:Reset:1434959478796714074>"),
-            discord.SelectOption(label="Clear User Shifts", description="Clear all shifts", emoji="<:Wipe:1434954284851658762>")
+            discord.SelectOption(label="Clear User Shifts", description="Clear all shifts in this shift type for this user.", emoji="<:Wipe:1434954284851658762>")
         ]
 
-        super().__init__(placeholder="Select an action...", options=options, min_values=1, max_values=1)
+        super().__init__(placeholder="Shift Actions", options=options, min_values=1, max_values=1)
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
 
         selection = self.values[0]
 
-        if selection == "Shift List":
+        if selection == "View Shift List":
             await self.show_shift_list(interaction)
         elif selection == "Modify Shift":
             # Check if user has active shift
@@ -3895,6 +4100,44 @@ class AdminActionsSelect(discord.ui.Select):
 
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
+
+class PageJumpModal(discord.ui.Modal):
+    """Modal for jumping to specific page"""
+
+    def __init__(self, view, total_pages: int):
+        super().__init__(title="Jump to Page")
+        self.view = view
+        self.total_pages = total_pages
+
+        self.add_item(discord.ui.TextInput(
+            label=f"Page Number (1-{total_pages})",
+            placeholder=f"Enter page number",
+            required=True,
+            max_length=5
+        ))
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+
+        try:
+            page_num = int(self.children[0].value)
+
+            if page_num < 1 or page_num > self.total_pages:
+                await interaction.followup.send(
+                    f"<:Denied:1426930694633816248> Page must be between 1 and {self.total_pages}.",
+                    ephemeral=True
+                )
+                return
+
+            # Convert to 0-indexed and show page
+            await self.view.show_page(interaction, page_num - 1)
+
+        except ValueError:
+            await interaction.followup.send(
+                "<:Denied:1426930694633816248> Please enter a valid page number.",
+                ephemeral=True
+            )
+
 class ShiftListView(discord.ui.View):
     """Paginated shift list view"""
     ITEMS_PER_PAGE = 4
@@ -3921,9 +4164,7 @@ class ShiftListView(discord.ui.View):
                 pass
 
     async def get_shifts(self):
-        """Fetch all completed shifts for current week"""
-        current_week = WeeklyShiftManager.get_current_week_monday()
-
+        """Fetch all completed shifts (all time)"""
         async with db.pool.acquire() as conn:
             self.shifts = await conn.fetch(
                 '''SELECT *
@@ -3931,11 +4172,68 @@ class ShiftListView(discord.ui.View):
                    WHERE discord_user_id = $1
                      AND type = $2
                      AND end_time IS NOT NULL
-                     AND week_identifier = $3
                    ORDER BY end_time DESC''',
-                self.target_user.id, self.type, current_week
+                self.target_user.id, self.type
             )
         self.total_pages = max(1, math.ceil(len(self.shifts) / self.ITEMS_PER_PAGE))
+
+    def _create_navigation_buttons(self):
+        """Create navigation buttons based on current page"""
+        # Clear existing buttons
+        self.clear_items()
+
+        # Only show buttons if more than one page
+        if self.total_pages <= 1:
+            return
+
+        # First page button - only show if not on first page
+        if self.current_page > 0:
+            first_btn = discord.ui.Button(
+                emoji="<:LeftSkip:1434962162064822343>",
+                style=discord.ButtonStyle.secondary,
+                custom_id="first"
+            )
+            first_btn.callback = self.first_button_callback
+            self.add_item(first_btn)
+
+        # Previous button - only show if not on first page
+        if self.current_page > 0:
+            prev_btn = discord.ui.Button(
+                emoji="<:LeftArrow:1434962165215002777>",
+                style=discord.ButtonStyle.secondary,
+                custom_id="prev"
+            )
+            prev_btn.callback = self.prev_button_callback
+            self.add_item(prev_btn)
+
+        # Page indicator (always show if multiple pages)
+        page_btn = discord.ui.Button(
+            label=f"{self.current_page + 1}/{self.total_pages}",
+            style=discord.ButtonStyle.primary,
+            custom_id="page"
+        )
+        page_btn.callback = self.page_jump_callback
+        self.add_item(page_btn)
+
+        # Next button - only show if not on last page
+        if self.current_page < self.total_pages - 1:
+            next_btn = discord.ui.Button(
+                emoji="<:RightArrow:1434962170147246120>",
+                style=discord.ButtonStyle.secondary,
+                custom_id="next"
+            )
+            next_btn.callback = self.next_button_callback
+            self.add_item(next_btn)
+
+        # Last page button - only show if not on last page
+        if self.current_page < self.total_pages - 1:
+            last_btn = discord.ui.Button(
+                emoji="<:RightSkip:1434962167660281926>",
+                style=discord.ButtonStyle.secondary,
+                custom_id="last"
+            )
+            last_btn.callback = self.last_button_callback
+            self.add_item(last_btn)
 
     async def show_page(self, interaction: discord.Interaction, page: int):
         await self.get_shifts()
@@ -3980,22 +4278,10 @@ class ShiftListView(discord.ui.View):
 
         embed.set_footer(text=f"Shift Type: {self.type} • Page {self.current_page + 1}/{self.total_pages}")
 
-        # Update buttons
-        for item in self.children:
-            if isinstance(item, discord.ui.Button):
-                if item.custom_id == "first":
-                    item.disabled = self.current_page == 0
-                elif item.custom_id == "prev":
-                    item.disabled = self.current_page == 0
-                elif item.custom_id == "page":
-                    item.label = f"{self.current_page + 1}/{self.total_pages}"
-                elif item.custom_id == "next":
-                    item.disabled = self.current_page >= self.total_pages - 1
-                elif item.custom_id == "last":
-                    item.disabled = self.current_page >= self.total_pages - 1
+        # CREATE NAVIGATION BUTTONS DYNAMICALLY
+        self._create_navigation_buttons()
 
         if interaction.response.is_done():
-            # Already responded, use followup
             await interaction.followup.send(embed=embed, view=self, ephemeral=True)
         else:
             await interaction.response.send_message(embed=embed, view=self, ephemeral=True)
@@ -4009,30 +4295,27 @@ class ShiftListView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(emoji="<:LeftSkip:1434962162064822343>", style=discord.ButtonStyle.secondary, custom_id="first")
-    async def first_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    # CHANGE ALL BUTTON METHODS TO CALLBACKS
+    async def first_button_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
         await self.show_page(interaction, 0)
 
-    @discord.ui.button(emoji="<:LeftArrow:1434962165215002777>", style=discord.ButtonStyle.secondary, custom_id="prev")
-    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def prev_button_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
         await self.show_page(interaction, self.current_page - 1)
 
-    @discord.ui.button(label="1/7", style=discord.ButtonStyle.primary, custom_id="page", disabled=True)
-    async def page_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        pass
-
-    @discord.ui.button(emoji="<:RightArrow:1434962170147246120>", style=discord.ButtonStyle.secondary, custom_id="next")
-    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def next_button_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
         await self.show_page(interaction, self.current_page + 1)
 
-    @discord.ui.button(emoji="<:RightSkip:1434962167660281926>", style=discord.ButtonStyle.secondary, custom_id="last")
-    async def last_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def last_button_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
         await self.show_page(interaction, self.total_pages - 1)
 
+    async def page_jump_callback(self, interaction: discord.Interaction):
+        """Show modal for jumping to specific page"""
+        modal = PageJumpModal(self, self.total_pages)
+        await interaction.response.send_modal(modal)
 
 class ResetTimeConfirmModal(discord.ui.Modal):
     """Modal for confirming reset time action"""
@@ -4142,79 +4425,6 @@ class ModifyShiftSelectView(discord.ui.View):
         modal = ShiftIDModal(self.cog, self.admin, self.target_user, "modify")
         await interaction.response.send_modal(modal)
 
-    async def show_modify_panel(self, interaction: discord.Interaction, shift: dict):
-        """Show the modify options for a shift"""
-        duration = shift['end_time'] - shift['start_time']
-        active_duration = duration - timedelta(seconds=shift.get('pause_duration', 0))
-
-        embed = discord.Embed(
-            title="Modify Shift",
-            description=f"**Status:** <:Offline:1434951694319620197> Ended\n**Duration:** {self.cog.format_duration(active_duration)}",
-            color=discord.Color(0x000000)
-        )
-
-        # Add author as the TARGET USER (whose shift is being modified)
-        embed.set_author(
-            name=f"Shift Management: @{self.target_user.display_name}",
-            icon_url=self.target_user.display_avatar.url
-        )
-
-        embed.set_footer(text=f"Shift ID: {shift['id']} • Shift Type: {shift['type']}")
-
-        view = ModifyShiftActionsView(self.cog, self.admin, self.target_user, shift)
-
-        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-
-class ModifyShiftActionsView(discord.ui.View):
-    """View for modifying a shift"""
-
-    def __init__(self, cog: ShiftManagementCog, admin: discord.Member, target_user: discord.Member, shift: dict):
-        super().__init__(timeout=120)
-        self.cog = cog
-        self.admin = admin
-        self.target_user = target_user
-        self.shift = shift
-        self.message = None
-
-    async def on_timeout(self):
-        """Clean up when view times out"""
-        for item in self.children:
-            item.disabled = True
-        if self.message:
-            try:
-                await self.message.edit(view=self)
-            except:
-                pass
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.admin.id:
-            await interaction.response.send_message(
-                "<:Denied:1426930694633816248> This is not your admin panel!",
-                ephemeral=True
-            )
-            return False
-        return True
-
-    @discord.ui.button(label="Add Time", emoji="<:Add:1434959063329931396>", style=discord.ButtonStyle.success)
-    async def add_time_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = TimeModifyModal(self.cog, self.admin, self.target_user, self.shift, "add")
-        await interaction.response.send_modal(modal)
-
-    @discord.ui.button(label="Remove Time", emoji="<:Remove:1434959215830499470>", style=discord.ButtonStyle.danger)
-    async def remove_time_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = TimeModifyModal(self.cog, self.admin, self.target_user, self.shift, "remove")
-        await interaction.response.send_modal(modal)
-
-    @discord.ui.button(label="Set Time", emoji="<:Set:1434959334273712219>", style=discord.ButtonStyle.primary)
-    async def set_time_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = TimeModifyModal(self.cog, self.admin, self.target_user, self.shift, "set")
-        await interaction.response.send_modal(modal)
-
-    @discord.ui.button(label="Reset Time", emoji="<:Reset:1434959478796714074>", style=discord.ButtonStyle.secondary)
-    async def reset_time_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = ResetTimeConfirmModal(self.cog, self.admin, self.target_user, self.shift)
-        await interaction.response.send_modal(modal)
-
     async def populate_shift_dropdown(self):
         """Add a dropdown with recent shifts"""
         # Fetch recent shifts
@@ -4289,6 +4499,80 @@ class ModifyShiftActionsView(discord.ui.View):
         # For DeleteShiftSelectView
         elif hasattr(self, 'show_delete_confirm'):
             await self.show_delete_confirm(interaction, shift_dict)
+
+
+    async def show_modify_panel(self, interaction: discord.Interaction, shift: dict):
+        """Show the modify options for a shift"""
+        duration = shift['end_time'] - shift['start_time']
+        active_duration = duration - timedelta(seconds=shift.get('pause_duration', 0))
+
+        embed = discord.Embed(
+            title="Modify Shift",
+            description=f"**Status:** <:Offline:1434951694319620197> Ended\n**Duration:** {self.cog.format_duration(active_duration)}",
+            color=discord.Color(0x000000)
+        )
+
+        # Add author as the TARGET USER (whose shift is being modified)
+        embed.set_author(
+            name=f"Shift Management: @{self.target_user.display_name}",
+            icon_url=self.target_user.display_avatar.url
+        )
+
+        embed.set_footer(text=f"Shift ID: {shift['id']} • Shift Type: {shift['type']}")
+
+        view = ModifyShiftActionsView(self.cog, self.admin, self.target_user, shift)
+
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+class ModifyShiftActionsView(discord.ui.View):
+    """View for modifying a shift"""
+
+    def __init__(self, cog: ShiftManagementCog, admin: discord.Member, target_user: discord.Member, shift: dict):
+        super().__init__(timeout=120)
+        self.cog = cog
+        self.admin = admin
+        self.target_user = target_user
+        self.shift = shift
+        self.message = None
+
+    async def on_timeout(self):
+        """Clean up when view times out"""
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except:
+                pass
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.admin.id:
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> This is not your admin panel!",
+                ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Add Time", emoji="<:Add:1434959063329931396>", style=discord.ButtonStyle.success)
+    async def add_time_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = TimeModifyModal(self.cog, self.admin, self.target_user, self.shift, "add")
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="Remove Time", emoji="<:Remove:1434959215830499470>", style=discord.ButtonStyle.danger)
+    async def remove_time_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = TimeModifyModal(self.cog, self.admin, self.target_user, self.shift, "remove")
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="Set Time", emoji="<:Set:1434959334273712219>", style=discord.ButtonStyle.primary)
+    async def set_time_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = TimeModifyModal(self.cog, self.admin, self.target_user, self.shift, "set")
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="Reset Time", emoji="<:Reset:1434959478796714074>", style=discord.ButtonStyle.secondary)
+    async def reset_time_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = ResetTimeConfirmModal(self.cog, self.admin, self.target_user, self.shift)
+        await interaction.response.send_modal(modal)
 
 class TimeModifyModal(discord.ui.Modal):
     """Modal for modifying shift time"""
@@ -4721,7 +5005,7 @@ class ClearShiftsScopeView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="Current Wave", style=discord.ButtonStyle.primary, emoji="📅")
+    @discord.ui.button(label="Current Wave", style=discord.ButtonStyle.primary, emoji="📍")
     async def current_wave_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
 
@@ -4766,7 +5050,7 @@ class ClearShiftsScopeView(discord.ui.View):
 
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
-    @discord.ui.button(label="Previous Waves", style=discord.ButtonStyle.primary, emoji="📆")
+    @discord.ui.button(label="Previous Waves", style=discord.ButtonStyle.primary, emoji="🔙")
     async def previous_waves_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         # DON'T defer here - we're showing a modal which requires response
         # await interaction.response.defer()  # REMOVE THIS LINE
