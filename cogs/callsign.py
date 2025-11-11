@@ -2803,7 +2803,7 @@ class CallsignCog(commands.Cog):
 
             # Summary embed FIRST
             summary_embed = discord.Embed(
-                title="📊 Callsign Audit Summary",
+                title="Callsign Audit Summary",
                 color=discord.Color.blue()
             )
 
@@ -3177,6 +3177,13 @@ class CallsignCog(commands.Cog):
                         'roblox_id': roblox_id
                     })
 
+            # Create summary embed
+            summary_embed = discord.Embed(
+                title="<:Accepted:1426930333789585509> Ready for Bulk Assignment",
+                description=f"Found **{len(users_without_callsigns)}** members eligible for callsign assignment.",
+                color=discord.Color.green()
+            )
+
             # Add ineligible users to summary embed
             if any(ineligible.values()):
                 ineligible_text = ""
@@ -3212,13 +3219,6 @@ class CallsignCog(commands.Cog):
                     value=ineligible_text,
                     inline=False
                 )
-
-            # Create summary embed
-            summary_embed = discord.Embed(
-                title="<:Accepted:1426930333789585509> Ready for Bulk Assignment",
-                description=f"Found **{len(users_without_callsigns)}** members eligible for callsign assignment.",
-                color=discord.Color.green()
-            )
 
             # Show breakdown by rank
             rank_breakdown = {}
