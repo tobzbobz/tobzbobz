@@ -1334,7 +1334,7 @@ class ShiftManagementCog(commands.Cog):
             embed.set_footer(text="<:Warn:1437771973970104471> DRY RUN - No actual changes made to database")
             embed.timestamp = datetime.utcnow()
 
-            await interaction.delete_original_response()
+            
             await interaction.followup.send(embed=embed, ephemeral=True)
 
         except Exception as e:
@@ -1843,7 +1843,7 @@ class ShiftManagementCog(commands.Cog):
                 )
                 embed.set_footer(text=f"Hidden roles will not appear in weekly leaderboards for {type.value}")
 
-                await interaction.delete_original_response()
+                
 
                 await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -2025,7 +2025,7 @@ class ShiftManagementCog(commands.Cog):
 
             embed.set_footer(text=f"Shift Type: {type.value}")
 
-            await interaction.delete_original_response()
+            
 
             await interaction.edit_original_response(embed=embed)
 
@@ -2138,7 +2138,7 @@ class ShiftManagementCog(commands.Cog):
             # Check if user has an active shift
             active_shift = await self.get_active_shift(interaction.user.id)
 
-            await interaction.delete_original_response()
+            
 
             if active_shift:
                 # User has an active shift - show shift status
@@ -2285,7 +2285,7 @@ class ShiftManagementCog(commands.Cog):
                         inline=False
                     )
 
-            await interaction.delete_original_response()
+            
 
             await interaction.edit_original_response(embed=embed)
 
@@ -2362,7 +2362,7 @@ class ShiftManagementCog(commands.Cog):
                 return
 
             # Show admin control panel
-            await interaction.delete_original_response()
+            
 
             await self.show_admin_shift_panel(interaction, user, type.value)
 
@@ -2945,7 +2945,7 @@ class QuotaConflictView(discord.ui.View):
             except discord.HTTPException:
                 pass  # Other HTTP error, ignore
 
-            await interaction.delete_original_response()
+            
 
             self.stop()
 
@@ -2971,7 +2971,7 @@ class QuotaConflictView(discord.ui.View):
         except discord.HTTPException:
             pass  # Other HTTP error, ignore
 
-        await interaction.delete_original_response()
+        
 
         self.stop()
 
@@ -3607,7 +3607,7 @@ class ShiftTypeSelectView(discord.ui.View):
             await interaction.edit_original_response(embed=embed, view=view)
 
             # Note: Don't disable buttons or edit the old message since we're replacing it
-            await interaction.delete_original_response()
+            
 
             self.stop()
 
@@ -3965,7 +3965,7 @@ class AdminActionsSelect(discord.ui.Select):
                                                     ephemeral=True)
 
             await self.show_shift_list(interaction)
-            await interaction.delete_original_response()
+            
 
         elif selection == "Modify Shift":
             await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Retriving Shifts",
@@ -3980,7 +3980,7 @@ class AdminActionsSelect(discord.ui.Select):
                 )
                 return
             await self.show_modify_shift(interaction)
-            await interaction.delete_original_response()
+            
 
         elif selection == "Delete Shift":
             # Check if user has active shift
@@ -4422,7 +4422,7 @@ class ResetTimeConfirmModal(discord.ui.Modal):
                 "Reset shift time to 0"
             )
 
-            await interaction.delete_original_response()
+            
 
             await interaction.followup.send(
                 f"<:Accepted:1426930333789585509> Reset shift time to 0 for {self.target_user.mention} (Shift ID: {self.shift['id']})",
@@ -4806,7 +4806,7 @@ class TimeModifyModal(discord.ui.Modal):
                     f"Removed {self.cog.format_duration(time_delta)} from shift"  # CHANGE THIS
                 )
 
-                await interaction.delete_original_response()
+                
 
                 await interaction.followup.send(
                     f"<:Accepted:1426930333789585509> Removed {self.cog.format_duration(time_delta)} from shift for {self.target_user.mention}",
@@ -4989,7 +4989,7 @@ class DeleteShiftConfirmView(discord.ui.View):
                 ephemeral=True
             )
 
-            await interaction.delete_original_response()
+            
 
             # Disable all buttons
             for item in self.children:
@@ -5348,7 +5348,7 @@ class ClearShiftsConfirmView(discord.ui.View):
                 ephemeral=True
             )
 
-            await interaction.delete_original_response()
+            
 
             # Disable all buttons after clearing
             for item in self.children:
@@ -5640,7 +5640,7 @@ class ResetConfirmView(discord.ui.View):
                 ephemeral=True
             )
 
-            await interaction.delete_original_response()
+            
 
             # Disable all buttons
             for item in self.children:

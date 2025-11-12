@@ -1132,69 +1132,6 @@ class CallsignCog(commands.Cog):
                                 success = await safe_edit_nickname(member, final_nickname)
 
                                 if success:
-                                    # Track niif action == "list":
-                                    #             # List all monitored roles
-                                    #             if not MONITORED_ROLES:
-                                    #                 await interaction.response.send_message(
-                                    #                     "â„¹ï¸ No roles are currently being monitored.",
-                                    #                     ephemeral=True
-                                    #                 )
-                                    #                 return
-                                    #
-                                    #             embed = discord.Embed(
-                                    #                 title="<:Accepted:1426930333789585509> Monitored Roles",
-                                    #                 color=discord.Color.blue(),
-                                    #                 timestamp=datetime.now()
-                                    #             )
-                                    #
-                                    #             for role_id, config in MONITORED_ROLES.items():
-                                    #                 role = interaction.guild.get_role(role_id)
-                                    #                 if not role:
-                                    #                     continue
-                                    #
-                                    #                 # Get whitelist users
-                                    #                 whitelist_mentions = []
-                                    #                 for user_id in config['whitelist']:
-                                    #                     user = interaction.guild.get_member(user_id)
-                                    #                     if user:
-                                    #                         whitelist_mentions.append(user.mention)
-                                    #                     else:
-                                    #                         whitelist_mentions.append(f"<@{user_id}>")
-                                    #
-                                    #                 # Get alert channel
-                                    #                 channel = interaction.guild.get_channel(config.get('channel_id')) if config.get('channel_id') else None
-                                    #                 channel_info = channel.mention if channel else "Not set"
-                                    #
-                                    #                 # Get ping users
-                                    #                 ping_users = config.get('ping_users')
-                                    #                 if ping_users:
-                                    #                     ping_mentions = []
-                                    #                     for user_id in ping_users:
-                                    #                         user = interaction.guild.get_member(user_id)
-                                    #                         if user:
-                                    #                             ping_mentions.append(user.mention)
-                                    #                         else:
-                                    #                             ping_mentions.append(f"<@{user_id}>")
-                                    #                     ping_info = ", ".join(ping_mentions)
-                                    #                 else:
-                                    #                     ping_info = "Whitelist users"
-                                    #
-                                    #                 field_value = (
-                                    #                     f"**Authorized Users:** {', '.join(whitelist_mentions) if whitelist_mentions else 'None'}\n"
-                                    #                     f"**Alert Channel:** {channel_info}\n"
-                                    #                     f"**Ping on Alert:** {ping_info}"
-                                    #                 )
-                                    #
-                                    #                 embed.add_field(
-                                    #                     name=f"{role.mention} ({role.name})",
-                                    #                     value=field_value,
-                                    #                     inline=False
-                                    #                 )
-                                    #
-                                    #             embed.set_footer(text=f"Total: {len(MONITORED_ROLES)} monitored role(s)")
-                                    #             await interaction.response.send_message(embed=embed, ephemeral=True)
-                                    #
-                                    #         elif action == "toggle":ckname change
                                     stats['nickname_changes'].append({
                                         'member': member,
                                         'old': old_nickname,
@@ -1209,22 +1146,16 @@ class CallsignCog(commands.Cog):
                                         'error': f'Failed to set nickname: {final_nickname}'
                                     })
 
-                                # Track nickname change
-                                stats['nickname_changes'].append({
-                                    'member': member,
-                                    'old': old_nickname,
-                                    'new': final_nickname
-                                })
-                                stats['nickname_updates'] += 1
-
                             except discord.Forbidden as e:
-                                # Track permission errors separately for cleaner logging
-                                stats['permission_errors'].append(member)
+                                # Check if user has admin permissions
+                                if not member.guild_permissions.administrator:
+                                    stats['permission_errors'].append(member)
                                 stats['errors'].append({
                                     'member': member,
                                     'username': record['discord_username'],
                                     'error': 'Missing permissions'
                                 })
+
                                 # NEW: Debug logging
                                 print(
                                     f"<:Denied:1426930694633816248> Permission error for {member.display_name} ({member.id}): Cannot edit nickname")
@@ -1348,16 +1279,29 @@ class CallsignCog(commands.Cog):
             summary_embed.add_field(name='Duration', value=f'{sync_duration:.2f}s', inline=True)
 
             if stats['permission_errors']:
-                # Create mentions string (limit to avoid embed length issues)
-                mentions = ' '.join([member.mention for member in stats['permission_errors'][:25]])
-                if len(stats['permission_errors']) > 25:
-                    mentions += f"\n... and {len(stats['permission_errors']) - 25} more"
+                # Only show non-admin permission errors
+                non_admin_errors = [m for m in stats['permission_errors']
+                                    if not m.guild_permissions.administrator]
 
-                summary_embed.add_field(
-                    name=f'Permission Errors ({len(stats["permission_errors"])})',
-                    value=mentions,
-                    inline=False
-                )
+                if non_admin_errors:
+                    mentions = ' '.join([member.mention for member in non_admin_errors[:25]])
+                    if len(non_admin_errors) > 25:
+                        mentions += f"\n... and {len(non_admin_errors) - 25} more"
+
+                    summary_embed.add_field(
+                        name=f'<:Warn:1437771973970104471>️ Permission Errors ({len(non_admin_errors)})',
+                        value=mentions,
+                        inline=False
+                    )
+
+                # Add admin count separately if any
+                admin_count = len(stats['permission_errors']) - len(non_admin_errors)
+                if admin_count > 0:
+                    summary_embed.add_field(
+                        name='ℹ️ Admin Permission Skips',
+                        value=f"{admin_count} administrators (cannot edit their nicknames)",
+                        inline=False
+                    )
 
             # <:Accepted:1426930333789585509> Naughty role stats
             if stats.get('naughty_roles_found', 0) > 0:
@@ -1383,8 +1327,10 @@ class CallsignCog(commands.Cog):
                 for i in range(0, len(stats['nickname_changes']), 5):
                     chunk = stats['nickname_changes'][i:i + 5]
 
+                    # Around line 750-800
                     embed = discord.Embed(
-                        title=f"Nickname Updates ({i + 1}-{min(i + 5, len(stats['nickname_changes']))} of {len(stats['nickname_changes'])})",
+                        title=f"✏️ Nickname Updates ({i + 1}-{min(i + 5, len(stats['nickname_changes']))})",
+                        description=' '.join([change['member'].mention for change in chunk]),  # Mentions here WILL ping
                         color=discord.Color.green()
                     )
 
@@ -2009,7 +1955,7 @@ class CallsignCog(commands.Cog):
                     response += f"\n... and {len(failed_updates) - 10} more"
 
             await interaction.delete_original_response()
-            await interaction.followup.send(response, ephemeral=True, delete_after=60)
+            await interaction.followup.send(response, ephemeral=True)
 
         except Exception as e:
             await interaction.followup.send(f"<:Denied:1426930694633816248> Error during sync: {str(e)}")
@@ -2190,7 +2136,7 @@ class CallsignCog(commands.Cog):
                 f"<:Accepted:1426930333789585509> Assigned callsign {callsign_display} to {user.mention}\n"
                 f"Nickname updated to: `{new_nickname}`\n",
                 ephemeral=True,
-                delete_after=60
+                
             )
 
             # Log to designated channel
@@ -2490,7 +2436,7 @@ class CallsignCog(commands.Cog):
                 embed.set_footer(text="This was a dry run. Run without dry_run=True to apply changes.")
 
             await interaction.delete_original_response()
-            await interaction.followup.send(embed=embed, ephemeral=True, delete_after=60)
+            await interaction.followup.send(embed=embed, ephemeral=True)
 
         except Exception as e:
             await interaction.followup.send(
@@ -2640,7 +2586,7 @@ class CallsignCog(commands.Cog):
                 await log_channel.send(embed=log_embed)
 
             await interaction.delete_original_response()
-            await interaction.followup.send(embed=embed, ephemeral=True, delete_after=60)
+            await interaction.followup.send(embed=embed, ephemeral=True)
 
         except Exception as e:
             await interaction.followup.send(
@@ -2911,7 +2857,7 @@ class CallsignCog(commands.Cog):
             success_embed.timestamp = datetime.utcnow()
 
             await interaction.delete_original_response()
-            await interaction.followup.send(embed=success_embed, ephemeral=True, delete_after=60)
+            await interaction.followup.send(embed=success_embed, ephemeral=True)
 
         except Exception as e:
             await interaction.followup.send(
@@ -3755,7 +3701,7 @@ class HHStJCallsignChoiceView(discord.ui.View):
                 f"<:Accepted:1426930333789585509> You chose: **{chosen_version}**\n"
                 f"Nickname set to: `{new_nickname}`",
                 ephemeral=True,
-                delete_after=60
+                
             )
 
             # Log to logging channel
@@ -3769,7 +3715,7 @@ class HHStJCallsignChoiceView(discord.ui.View):
                 await self.interaction.followup.send(
                     f"<:Accepted:1426930333789585509> {self.user.mention} chose HHStJ version: **{chosen_version}**",
                     ephemeral=True,
-                    delete_after=60
+                    
                 )
 
             self.choice_made = True
@@ -3785,7 +3731,7 @@ class HHStJCallsignChoiceView(discord.ui.View):
                 await self.interaction.edit_original_response(
                     content="<:Alert:1437790206462922803>️ Choice timed out (5 minutes). Please request the callsign again.",
                     view=self,
-                    delete_after=60
+                    
                 )
             except:
                 pass
@@ -3877,7 +3823,7 @@ class HighCommandPrefixChoice(discord.ui.View):
             f"Your callsign is: **{self.fenz_prefix}-{self.callsign}**\n"
             f"Nickname set to: `{new_nickname}`",
             ephemeral=True,
-            delete_after=60
+            
         )
 
         # Send confirmation to admin who assigned it
@@ -3886,7 +3832,7 @@ class HighCommandPrefixChoice(discord.ui.View):
             f"Nickname updated to: `{new_nickname}`\n"
             f"Callsign synced to database and Google Sheets!",
             ephemeral=True,
-            delete_after=60
+            
         )
 
         self.choice_made = True
@@ -3953,7 +3899,7 @@ class HighCommandPrefixChoice(discord.ui.View):
             f"Your callsign is: **{self.callsign}**\n"
             f"Nickname set to: `{new_nickname}`",
             ephemeral=True,
-            delete_after=60
+            
         )
 
         # Send confirmation to admin who assigned it
@@ -3962,7 +3908,7 @@ class HighCommandPrefixChoice(discord.ui.View):
             f"Nickname updated to: `{new_nickname}`\n"
             f"Callsign synced to database and Google Sheets!",
             ephemeral=True,
-            delete_after=60
+            
         )
 
         self.choice_made = True

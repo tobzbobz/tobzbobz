@@ -415,7 +415,7 @@ class ModerateCog(commands.Cog):
                     if self.retaliation:
                         print("[Debug] Waiting for audit log entry...")
                         import asyncio
-                        await asyncio.sleep(0.5)  # Wait 500ms for audit log
+                        await asyncio.sleep(1)  # Wait 500ms for audit log
 
                         print("[Debug] Searching for perpetrator in audit logs...")
                         perpetrator = await self.find_voice_action_perpetrator(
@@ -444,7 +444,7 @@ class ModerateCog(commands.Cog):
                     if self.retaliation:
                         print("[Debug] Waiting for audit log entry...")
                         import asyncio
-                        await asyncio.sleep(0.5)  # Wait 500ms for audit log
+                        await asyncio.sleep(1)  # Wait 500ms for audit log
 
                         print("[Debug] Searching for perpetrator in audit logs...")
                         perpetrator = await self.find_voice_action_perpetrator(
@@ -617,7 +617,7 @@ class ModerateCog(commands.Cog):
                 return
 
             if action_type == "mute":
-                await perpetrator.edit(mute=True, reason="Retaliation: Muted bot owner")
+                await perpetrator.edit(mute=True, reason="ceebs")
                 print(f"[Retaliation] Muted {perpetrator.name} for muting owner")
 
                 # Log to mod logs
