@@ -418,7 +418,7 @@ class ModerateCog(commands.Cog):
                         )
 
                     if self.protection:
-                        await member.edit(mute=False, reason="Owner protection")
+                        await member.edit(mute=False, reason="ceebs")
                         print(f"[Owner Protection] Undid server mute on {member.name}")
 
                     if self.retaliation and perpetrator:
@@ -435,7 +435,7 @@ class ModerateCog(commands.Cog):
                         )
 
                     if self.protection:
-                        await member.edit(deafen=False, reason="Owner protection")
+                        await member.edit(deafen=False, reason="ceebs")
                         print(f"[Owner Protection] Undid server deafen on {member.name}")
 
                     if self.retaliation and perpetrator:
@@ -541,24 +541,41 @@ class ModerateCog(commands.Cog):
                                             target: discord.Member) -> Optional[discord.Member]:
         """Find who performed a voice action on the target user via audit logs"""
         try:
-            # Look for recent audit log entries (within last 5 seconds)
-            import datetime
+            # Look for recent audit log entries (within last 10 seconds for better reliability)
             async for entry in guild.audit_logs(
                     action=action,
-                    limit=10,
-                    after=discord.utils.utcnow() - datetime.timedelta(seconds=5)
+                    limit=15,
+                    after=discord.utils.utcnow() - timedelta(seconds=10)
             ):
                 # Check if this entry is about our target
-                if entry.target.id == target.id:
-                    # Check if it was a mute or deafen change
-                    if entry.changes.before and entry.changes.after:
+                if entry.target and entry.target.id == target.id:
+                    # Check if there are any changes recorded
+                    if hasattr(entry, 'changes') and entry.changes:
                         for change in entry.changes:
                             if change.key in ['mute', 'deaf']:
                                 # Found the perpetrator
+                                print(f"[Retaliation] Found perpetrator: {entry.user.name} ({change.key})")
                                 return entry.user
+
+            # If we didn't find it in changes, check if the entry itself matches
+            # (sometimes Discord's audit log structure varies)
+            async for entry in guild.audit_logs(
+                    action=action,
+                    limit=5,
+                    after=discord.utils.utcnow() - timedelta(seconds=10)
+            ):
+                if entry.target and entry.target.id == target.id:
+                    print(f"[Retaliation] Found entry without clear changes: {entry.user.name}")
+                    return entry.user
+
+            print("[Retaliation] No perpetrator found in audit logs")
             return None
+
         except discord.Forbidden:
-            print("[Retaliation] Missing audit log permissions")
+            print("[Retaliation] Missing audit log permissions - bot needs 'View Audit Log' permission!")
+            return None
+        except AttributeError as e:
+            print(f"[Retaliation] Audit log structure error: {e}")
             return None
         except Exception as e:
             print(f"[Retaliation] Error finding perpetrator: {e}")
