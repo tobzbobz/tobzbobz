@@ -3779,77 +3779,99 @@ class CallsignCog(commands.Cog):
 
                 # Send detailed breakdown of OTHER ineligible users
                 if ineligible['no_bloxlink']:
-                    embed = discord.Embed(
-                        title=f"<:Denied:1426930694633816248> No Bloxlink Connection ({len(ineligible['no_bloxlink'])})",
-                        description="These members haven't linked their Roblox account via Bloxlink.\n"
-                                    "They need to run </verify:1114974748624027711>",
-                        color=discord.Color.orange()
-                    )
-                    for i in range(0, len(ineligible['no_bloxlink']), 10):
-                        chunk = ineligible['no_bloxlink'][i:i + 10]
-                        member_list = "\n".join(
-                            [f"• {item['member'].mention} - `{item['member'].display_name}`" for item in chunk])
+                    # Split into multiple embeds if needed
+                    for i in range(0, len(ineligible['no_bloxlink']), 15):  # Reduced from 10 to 15 per embed
+                        chunk = ineligible['no_bloxlink'][i:i + 15]
+
+                        embed = discord.Embed(
+                            title=f"<:Denied:1426930694633816248> No Bloxlink Connection ({i + 1}-{min(i + 15, len(ineligible['no_bloxlink']))} of {len(ineligible['no_bloxlink'])})",
+                            description="These members haven't linked their Roblox account via Bloxlink.\n"
+                                        "They need to run </verify:1114974748624027711>",
+                            color=discord.Color.orange()
+                        )
+
+                        # Build a single field with all members instead of multiple fields
+                        member_list = "\n".join([
+                            f"• {item['member'].mention} - `{item['member'].display_name}`"
+                            for item in chunk
+                        ])
+
                         embed.add_field(
-                            name=f"Members {i + 1}-{min(i + 10, len(ineligible['no_bloxlink']))}",
-                            value=member_list,
+                            name=f"Members {i + 1}-{min(i + 15, len(ineligible['no_bloxlink']))}",
+                            value=member_list if len(member_list) < 1024 else member_list[:1020] + "...",
                             inline=False
                         )
-                    await interaction.followup.send(embed=embed, ephemeral=True)
+
+                        await interaction.followup.send(embed=embed, ephemeral=True)
 
                 if ineligible['no_roblox_username']:
-                    embed = discord.Embed(
-                        title=f"<:Denied:1426930694633816248> Invalid/Deleted Roblox Account ({len(ineligible['no_roblox_username'])})",
-                        description="These members have a Bloxlink connection, but their Roblox account is invalid or deleted:",
-                        color=discord.Color.orange()
-                    )
-                    for i in range(0, len(ineligible['no_roblox_username']), 10):
-                        chunk = ineligible['no_roblox_username'][i:i + 10]
+                    for i in range(0, len(ineligible['no_roblox_username']), 15):
+                        chunk = ineligible['no_roblox_username'][i:i + 15]
+
+                        embed = discord.Embed(
+                            title=f"<:Denied:1426930694633816248> Invalid/Deleted Roblox Account ({i + 1}-{min(i + 15, len(ineligible['no_roblox_username']))} of {len(ineligible['no_roblox_username'])})",
+                            description="These members have a Bloxlink connection, but their Roblox account is invalid or deleted:",
+                            color=discord.Color.orange()
+                        )
+
                         member_list = "\n".join([
-                            f"• {item['member'].mention} - Roblox ID: `{item['roblox_id']}`"
+                            f"• {item['member'].mention} - ID: `{item['roblox_id']}`"
                             for item in chunk
                         ])
+
                         embed.add_field(
-                            name=f"Members {i + 1}-{min(i + 10, len(ineligible['no_roblox_username']))}",
-                            value=member_list,
+                            name=f"Members {i + 1}-{min(i + 15, len(ineligible['no_roblox_username']))}",
+                            value=member_list if len(member_list) < 1024 else member_list[:1020] + "...",
                             inline=False
                         )
-                    await interaction.followup.send(embed=embed, ephemeral=True)
+
+                        await interaction.followup.send(embed=embed, ephemeral=True)
 
                 if ineligible['no_fenz_role']:
-                    embed = discord.Embed(
-                        title=f"<:Denied:1426930694633816248> No Valid FENZ Rank ({len(ineligible['no_fenz_role'])})",
-                        description="These members don't have any FENZ rank role:",
-                        color=discord.Color.orange()
-                    )
-                    for i in range(0, len(ineligible['no_fenz_role']), 10):
-                        chunk = ineligible['no_fenz_role'][i:i + 10]
-                        member_list = "\n".join(
-                            [f"• {item['member'].mention} - `{item['member'].display_name}`" for item in chunk])
-                        embed.add_field(
-                            name=f"Members {i + 1}-{min(i + 10, len(ineligible['no_fenz_role']))}",
-                            value=member_list,
-                            inline=False
-                        )
-                    await interaction.followup.send(embed=embed, ephemeral=True)
+                    for i in range(0, len(ineligible['no_fenz_role']), 15):
+                        chunk = ineligible['no_fenz_role'][i:i + 15]
 
-                if ineligible['incomplete_callsign']:
-                    embed = discord.Embed(
-                        title=f"<:Warn:1437771973970104471> Incomplete Callsigns ({len(ineligible['incomplete_callsign'])})",
-                        description="These members are already in the database with incomplete callsigns:",
-                        color=discord.Color.orange()
-                    )
-                    for i in range(0, len(ineligible['incomplete_callsign']), 10):
-                        chunk = ineligible['incomplete_callsign'][i:i + 10]
+                        embed = discord.Embed(
+                            title=f"<:Denied:1426930694633816248> No Valid FENZ Rank ({i + 1}-{min(i + 15, len(ineligible['no_fenz_role']))} of {len(ineligible['no_fenz_role'])})",
+                            description="These members don't have any FENZ rank role:",
+                            color=discord.Color.orange()
+                        )
+
                         member_list = "\n".join([
-                            f"• {item['member'].mention} - Status: `{item['callsign']}`"
+                            f"• {item['member'].mention} - `{item['member'].display_name}`"
                             for item in chunk
                         ])
+
                         embed.add_field(
-                            name=f"Members {i + 1}-{min(i + 10, len(ineligible['incomplete_callsign']))}",
-                            value=member_list,
+                            name=f"Members {i + 1}-{min(i + 15, len(ineligible['no_fenz_role']))}",
+                            value=member_list if len(member_list) < 1024 else member_list[:1020] + "...",
                             inline=False
                         )
-                    await interaction.followup.send(embed=embed, ephemeral=True)
+
+                        await interaction.followup.send(embed=embed, ephemeral=True)
+
+                if ineligible['incomplete_callsign']:
+                    for i in range(0, len(ineligible['incomplete_callsign']), 15):
+                        chunk = ineligible['incomplete_callsign'][i:i + 15]
+
+                        embed = discord.Embed(
+                            title=f"<:Warn:1437771973970104471> Incomplete Callsigns ({i + 1}-{min(i + 15, len(ineligible['incomplete_callsign']))} of {len(ineligible['incomplete_callsign'])})",
+                            description="These members are already in the database with incomplete callsigns:",
+                            color=discord.Color.orange()
+                        )
+
+                        member_list = "\n".join([
+                            f"• {item['member'].mention} - `{item['callsign']}`"
+                            for item in chunk
+                        ])
+
+                        embed.add_field(
+                            name=f"Members {i + 1}-{min(i + 15, len(ineligible['incomplete_callsign']))}",
+                            value=member_list if len(member_list) < 1024 else member_list[:1020] + "...",
+                            inline=False
+                        )
+
+                        await interaction.followup.send(embed=embed, ephemeral=True)
                 return
 
             # If we have eligible users, show them and start the interactive assignment
