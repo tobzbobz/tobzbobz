@@ -959,15 +959,16 @@ class ShiftManagementCog(commands.Cog):
                     else:
                         bypass_type = None  # Add this line
                         completed = (active_seconds / max_quota >= 1) if max_quota > 0 else False
-
-                results[user_id] = {
-                    'has_quota': max_quota > 0,
-                    'quota_seconds': max_quota,
-                    'active_seconds': active_seconds,
-                    'percentage': (active_seconds / max_quota * 100) if max_quota > 0 else 0,
-                    'completed': completed,
-                    'bypass_type': bypass_type
-                }
+                if max_quota == 0:
+                    results[user_id] = {
+                        'has_quota': max_quota > 0,
+                        'quota_seconds': max_quota,
+                        'active_seconds': active_seconds,
+                        'percentage': (active_seconds / max_quota * 100) if max_quota > 0 else 0,
+                        'completed': completed,
+                        'bypass_type': bypass_type
+                    }
+                    continue
 
             return results
 
@@ -1091,23 +1092,34 @@ class ShiftManagementCog(commands.Cog):
     async def get_user_quota(self, member: discord.Member, type: str = None) -> int:
         """Get the highest quota from all of a user's roles that have quotas set"""
         max_quota = 0
+        has_zero_quota = False  # Add this flag
+
         for role in member.roles:
             quota = await self.get_quota_for_role(role.id, type)
-            if quota > max_quota:
+            if quota == 0:
+                has_zero_quota = True  # Found a 0-second quota
+            elif quota > max_quota:
                 max_quota = quota
+
+        # If user has any 0-second quota role, return 0 (no requirement)
+        if has_zero_quota:
+            return 0
+
         return max_quota
 
     async def get_quota_info(self, member: discord.Member, type: str = None) -> dict:
         """Get quota information for a user including percentage and bypass status"""
         quota_seconds = await self.get_user_quota(member, type)
 
+        # Special handling for 0-second quotas - they're always completed
         if quota_seconds == 0:
+            active_seconds = await self.get_total_active_time(member.id, type)
             return {
-                'has_quota': False,
+                'has_quota': True,  # Changed from False
                 'quota_seconds': 0,
-                'active_seconds': 0,
-                'percentage': 0,
-                'completed': False,
+                'active_seconds': active_seconds,
+                'percentage': 100,  # Always 100%
+                'completed': True,  # Always completed
                 'bypass_type': None
             }
 
@@ -1242,8 +1254,7 @@ class ShiftManagementCog(commands.Cog):
     @shift_group.command(name="test_weekly_reset", description="[ADMIN] Test weekly reset (dev only - dry run)")
     async def test_weekly_reset(self, interaction: discord.Interaction):
         """Test command to simulate weekly reset WITHOUT making permanent changes"""
-        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Testing",
-                                                ephemeral=True)
+        await interaction.response.defer()
 
         if not self.has_super_admin_permission(interaction.user):
             await interaction.followup.send(
@@ -1373,8 +1384,6 @@ class ShiftManagementCog(commands.Cog):
 
         try:
             if action == "view":
-                await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Getting your Quota",
-                                                        ephemeral=True)
 
                 # View user's own quota
                 quota_info = await self.get_quota_info(interaction.user, type.value if type else None)
@@ -1431,8 +1440,6 @@ class ShiftManagementCog(commands.Cog):
                     )
                     return
 
-                await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Setting Quota",
-                                                        ephemeral=True)
 
                 if not roles:
                     await interaction.followup.send(
@@ -1548,9 +1555,6 @@ class ShiftManagementCog(commands.Cog):
                     )
                     return
 
-                await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Removing Quota",
-                                                        ephemeral=True)
-
                 if not roles:
                     await interaction.followup.send(
                         "<:Denied:1426930694633816248> Please specify role(s) to remove quota from.",
@@ -1624,9 +1628,6 @@ class ShiftManagementCog(commands.Cog):
                         ephemeral=True
                     )
                     return
-
-                await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Viewing Quotas",
-                                                        ephemeral=True)
 
                 # Check if user is admin (to show ignored roles)
                 is_admin = any(role_check.id in QUOTA_ADMIN_ROLES for role_check in interaction.user.roles)
@@ -1735,8 +1736,6 @@ class ShiftManagementCog(commands.Cog):
                     )
                     return
 
-                await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Toggling Visibility",
-                                                        ephemeral=True)
 
                 if not roles:
                     await interaction.followup.send(
@@ -1906,8 +1905,7 @@ class ShiftManagementCog(commands.Cog):
             type: app_commands.Choice[str],
             wave: int = None  # ← Changed to integer parameter
     ):
-        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Retriving Shift Data",
-                                                ephemeral=True)
+        await interaction.response.defer()
 
         # Check permission (keep existing code)
         required_roles = {
@@ -2114,8 +2112,7 @@ class ShiftManagementCog(commands.Cog):
     ])
     async def shift_manage(self, interaction: discord.Interaction, type: app_commands.Choice[str]):
         """Main shift management command"""
-        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Initialising Shift Management",
-                                                ephemeral=True)
+        await interaction.response.defer()
 
         if db.pool is None:
             await interaction.followup.send(
@@ -2158,8 +2155,7 @@ class ShiftManagementCog(commands.Cog):
     @shift_group.command(name="active", description="View all active shifts")
     async def shift_active(self, interaction: discord.Interaction):
         """Show all currently active shifts categorized by type"""
-        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Finding Active Shifts",
-                                                ephemeral=True)
+        await interaction.response.defer()
 
         if db.pool is None:
             await interaction.followup.send(
@@ -2324,8 +2320,7 @@ class ShiftManagementCog(commands.Cog):
             return
 
         """Admin shift management command"""
-        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Opening Admin Panel",
-                                                ephemeral=True)
+        await interaction.response.defer()
 
         # Check admin permission
         if not self.has_admin_permission(interaction.user):
@@ -3961,16 +3956,10 @@ class AdminActionsSelect(discord.ui.Select):
         selection = self.values[0]
 
         if selection == "View Shift List":
-            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Displaying Shift List",
-                                                    ephemeral=True)
-
             await self.show_shift_list(interaction)
             
 
         elif selection == "Modify Shift":
-            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Retriving Shifts",
-                                                    ephemeral=True)
-
             # Check if user has active shift
             active_shift = await self.cog.get_active_shift(self.target_user.id)
             if active_shift:
@@ -4397,9 +4386,6 @@ class ResetTimeConfirmModal(discord.ui.Modal):
                 ephemeral=True
             )
             return
-
-            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Resetting Time",
-                                                ephemeral=True)
 
 
         try:
