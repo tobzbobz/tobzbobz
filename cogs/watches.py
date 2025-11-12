@@ -712,8 +712,8 @@ class WatchCog(commands.Cog):
                     colour_counts[colour] = colour_counts.get(colour, 0) + 1
 
             most_common_colour = max(colour_counts.items(), key=lambda x: x[1])[0] if colour_counts else 'N/A'
-            if len(most_common_colour) > 50:  # Reasonable limit for a colour name
-                most_common_colour = most_common_colour[:47] + "..."
+            if len(most_common_colour) > 8:  # Reasonable limit for a colour name
+                most_common_colour = most_common_colour[:8] + "..."
             print(f"Most common colour: {most_common_colour} (from {len(colour_counts)} unique colours)")
 
             # Most active station
@@ -724,8 +724,8 @@ class WatchCog(commands.Cog):
                     station_counts[station] = station_counts.get(station, 0) + 1
 
             most_active_station = max(station_counts.items(), key=lambda x: x[1])[0] if station_counts else 'N/A'
-            if len(most_active_station) > 50:  # Reasonable limit for a station name
-                most_active_station = most_active_station[:47] + "..."
+            if len(most_active_station) > 12:  # Reasonable limit for a station name
+                most_active_station = most_active_station[:12] + "..."
             print(f"Most active station: {most_active_station} (from {len(station_counts)} unique stations)")
 
             # Average duration
@@ -815,6 +815,8 @@ class WatchCog(commands.Cog):
                 f"**Most Active Station:** {stats['most_active_station']}\n"
                 f"**Average Watch Duration:** {stats['average_duration']}"
             )
+
+            records_value = self.truncate_field_value(records_value)
 
             stats_embed.add_field(
                 name="🏆 | Watch Records",
