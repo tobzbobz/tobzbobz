@@ -434,7 +434,7 @@ class MissedVoteConfirmationView(discord.ui.View):
 
             await interaction.message.edit(embed=embed, view=self)
             await interaction.delete_original_response()
-            await interaction.followup.send('<:Accepted:1426930333789585509> Vote sent successfully!', ephemeral=True, delete_after=60)
+            await interaction.followup.send('<:Accepted:1426930333789585509> Vote sent successfully!', ephemeral=True)
 
         except Exception as e:
             print(f'Error sending missed vote: {e}')
@@ -465,7 +465,7 @@ class MissedVoteConfirmationView(discord.ui.View):
             await interaction.message.edit(embed=embed, view=self)
             await interaction.delete_original_response()
             await interaction.followup.send('<:Accepted:1426930333789585509> Vote cancelled and removed from schedule.',
-                                            ephemeral=True, delete_after=60)
+                                            ephemeral=True)
 
         except Exception as e:
             print(f'Error cancelling missed vote: {e}')
@@ -1024,7 +1024,7 @@ class WatchCog(commands.Cog):
                 description=f'<:Accepted:1426930333789585509> Watch started in {watch_channel.mention}!',
                 colour=discord.Colour(0x2ecc71)
             )
-            await interaction.followup.send(embed=success_embed, ephemeral=True, delete_after=60)
+            await interaction.followup.send(embed=success_embed, ephemeral=True)
             await interaction.delete_original_response()
             await self.update_watch_channel_name(watch_channel, colour, station, 'active')
 
@@ -1153,7 +1153,7 @@ class WatchCog(commands.Cog):
                     colour=discord.Colour(0x2ecc71)
                 )
 
-            await interaction.followup.send(embed=success_embed, ephemeral=True, delete_after=60)
+            await interaction.followup.send(embed=success_embed, ephemeral=True)
             await interaction.delete_original_response()
 
             await self.update_watch_channel_name(watch_channel, colour, station, 'voting')
@@ -1326,7 +1326,7 @@ class WatchCog(commands.Cog):
                 description=f'<:Accepted:1426930333789585509> Watch ended successfully with {attendees} attendees!',
                 colour=discord.Colour(0x2ecc71)
             )
-            await interaction.followup.send(embed=success_embed, ephemeral=True, delete_after=60)
+            await interaction.followup.send(embed=success_embed, ephemeral=True)
             await interaction.delete_original_response()
 
         except Exception as e:
@@ -1549,7 +1549,7 @@ class WatchCog(commands.Cog):
                 colour=discord.Colour(0x2ecc71)
             )
             await interaction.delete_original_response()
-            await interaction.followup.send(embed=success_embed, ephemeral=True, delete_after=60)
+            await interaction.followup.send(embed=success_embed, ephemeral=True)
 
         except Exception as e:
             print(f'Error deleting watch log: {e}')
@@ -1645,7 +1645,7 @@ class WatchCog(commands.Cog):
                 colour=discord.Colour(0x2ecc71)
             )
             await interaction.delete_original_response()
-            await interaction.followup.send(embed=summary_embed, ephemeral=True, delete_after=60)
+            await interaction.followup.send(embed=summary_embed, ephemeral=True)
 
         except Exception as e:
             print(f'Error in end all watches: {e}')
@@ -2422,9 +2422,9 @@ class WatchCog(commands.Cog):
             )
             await interaction.delete_original_response()
             if not interaction.response.is_done():
-                await interaction.response.send_message(embed=error_embed, ephemeral=True, delete_after=60)
+                await interaction.response.send_message(embed=error_embed, ephemeral=True)
             else:
-                await interaction.followup.send(embed=error_embed, ephemeral=True, delete_after=60)
+                await interaction.followup.send(embed=error_embed, ephemeral=True)
             raise
 
     def normalize_switch_history(self, switch_history):
@@ -2582,7 +2582,7 @@ class WatchCog(commands.Cog):
                 colour=discord.Colour(0x2ecc71)
             )
             await interaction.delete_original_response()
-            await interaction.followup.send(embed=success_embed, ephemeral=True, delete_after=60)
+            await interaction.followup.send(embed=success_embed, ephemeral=True)
 
         except Exception as e:
             print(f'Error boosting watch: {e}')
@@ -2728,7 +2728,7 @@ class WatchCog(commands.Cog):
                 colour=discord.Colour(0x2ecc71)
             )
             await interaction.delete_original_response()
-            await interaction.followup.send(embed=success_embed, ephemeral=True, delete_after=60)
+            await interaction.followup.send(embed=success_embed, ephemeral=True)
 
 
         except Exception as e:
