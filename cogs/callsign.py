@@ -8,6 +8,7 @@ import aiohttp
 import os
 from datetime import datetime
 from database import db
+from typing import Optional, Dict, Tuple  # Add this if not present
 import json
 from google_sheets_integration import sheets_manager, COMMAND_RANKS, NON_COMMAND_RANKS
 
@@ -264,7 +265,7 @@ def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_u
     hhstj_priority = has_hhstj_high_command and not has_fenz_high_command
 
     if callsign == "Not Assigned":
-        # ✅ SPECIAL CASE: RFF-Not Assigned → Just "RFF"
+        # <:Accepted:1426930333789585509> SPECIAL CASE: RFF-Not Assigned → Just "RFF"
         if fenz_prefix == "RFF":
             nickname_parts = ["RFF"]
             # Try to add HHStJ if space allows
@@ -389,7 +390,7 @@ def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_u
         if result:
             return result
 
-    # ✅ SPECIAL: RFF with Not Assigned fallback
+    # <:Accepted:1426930333789585509> SPECIAL: RFF with Not Assigned fallback
     if fenz_prefix == "RFF" and callsign == "Not Assigned":
         return "RFF"
 
@@ -450,7 +451,7 @@ def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_u
     return result
 
 
-# ✅ UPDATED: Smart nickname update logic for sync operations
+# <:Accepted:1426930333789585509> UPDATED: Smart nickname update logic for sync operations
 async def smart_update_nickname(member, expected_nickname: str, current_fenz_prefix: str,
                                 current_callsign: str, current_hhstj_prefix: str,
                                 roblox_username: str, is_fenz_hc: bool, is_hhstj_hc: bool) -> bool:
@@ -471,7 +472,7 @@ async def smart_update_nickname(member, expected_nickname: str, current_fenz_pre
     if current_nick_stripped == expected_nick_stripped:
         return False  # No update needed
 
-    # ✅ SPECIAL: RFF-Not Assigned should be just "RFF"
+    # <:Accepted:1426930333789585509> SPECIAL: RFF-Not Assigned should be just "RFF"
     if current_fenz_prefix == "RFF" and current_callsign == "Not Assigned":
         if current_nick_stripped != "RFF":
             try:
@@ -487,7 +488,7 @@ async def smart_update_nickname(member, expected_nickname: str, current_fenz_pre
         try:
             success = await safe_edit_nickname(member, expected_nickname)
             if success:
-                print(f"✅ Restored full nickname for {member.display_name}: '{expected_nickname}'")
+                print(f"<:Accepted:1426930333789585509> Restored full nickname for {member.display_name}: '{expected_nickname}'")
                 return True
         except:
             pass
@@ -507,7 +508,7 @@ async def smart_update_nickname(member, expected_nickname: str, current_fenz_pre
         success = await safe_edit_nickname(member, final_nickname)
         return success
     except Exception as e:
-        print(f"❌ Error updating nickname for {member.display_name}: {e}")
+        print(f"<:Denied:1426930694633816248> Error updating nickname for {member.display_name}: {e}")
         return False
 
 
@@ -721,6 +722,209 @@ async def add_callsign_to_database(callsign: str, discord_user_id: int, discord_
                 approved_by_name,
                 json.dumps(history)
             )
+
+
+class BloxlinkAPI:
+    """Enhanced Bloxlink API handler with retry logic and rate limiting"""
+
+    def __init__(self):
+        self.base_url = "https://api.blox.link/v4/public"
+        self.rate_limit_delay = 1  # 750ms between requests (safer than 500ms)
+        self.last_request_time = 0
+        self.max_retries = 3
+        self.timeout = 15  # Increased from 10s to 15s
+
+    async def _enforce_rate_limit(self):
+        """Ensure we don't exceed rate limits"""
+        current_time = asyncio.get_event_loop().time()
+        time_since_last = current_time - self.last_request_time
+
+        if time_since_last < self.rate_limit_delay:
+            await asyncio.sleep(self.rate_limit_delay - time_since_last)
+
+        self.last_request_time = asyncio.get_event_loop().time()
+
+    async def get_bloxlink_data(
+            self,
+            discord_user_id: int,
+            guild_id: int = None
+    ) -> Tuple[Optional[str], Optional[int], str]:
+        """
+        Get Bloxlink data with retry logic and proper error handling
+
+        Returns:
+            Tuple of (roblox_username, roblox_user_id, status_message)
+            status can be: "success", "not_linked", "rate_limited", "timeout", "api_error"
+        """
+
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                # Enforce rate limiting
+                await self._enforce_rate_limit()
+
+                # Build URL
+                url = f"{self.base_url}/guilds/{guild_id}/discord-to-roblox/{discord_user_id}" if guild_id else \
+                    f"{self.base_url}/discord-to-roblox/{discord_user_id}"
+
+                # Make request with timeout
+                timeout = aiohttp.ClientTimeout(total=self.timeout)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(url) as response:
+
+                        # Success
+                        if response.status == 200:
+                            data = await response.json()
+                            roblox_id = data.get('robloxID')
+
+                            if roblox_id:
+                                # Fetch username from Roblox API
+                                username = await self._get_roblox_username(roblox_id)
+                                return (username, int(roblox_id), "success")
+                            else:
+                                return (None, None, "not_linked")
+
+                        # Rate limited - retry with exponential backoff
+                        elif response.status == 429:
+                            if attempt < self.max_retries:
+                                wait_time = 2 ** attempt  # 2s, 4s, 8s
+                                print(
+                                    f"<:Warn:1437771973970104471>️ Rate limited for user {discord_user_id}, waiting {wait_time}s (attempt {attempt}/{self.max_retries})")
+                                await asyncio.sleep(wait_time)
+                                continue
+                            return (None, None, "rate_limited")
+
+                        # Not found - genuinely not linked
+                        elif response.status == 404:
+                            return (None, None, "not_linked")
+
+                        # Other error
+                        else:
+                            if attempt < self.max_retries:
+                                print(
+                                    f"<:Warn:1437771973970104471> API error {response.status} for user {discord_user_id}, retrying (attempt {attempt}/{self.max_retries})")
+                                await asyncio.sleep(1 * attempt)  # Linear backoff
+                                continue
+                            return (None, None, f"api_error_{response.status}")
+
+            except asyncio.TimeoutError:
+                if attempt < self.max_retries:
+                    print(f"⏱️ Timeout for user {discord_user_id}, retrying (attempt {attempt}/{self.max_retries})")
+                    await asyncio.sleep(2 * attempt)
+                    continue
+                return (None, None, "timeout")
+
+            except Exception as e:
+                if attempt < self.max_retries:
+                    print(f"<:Denied:1426930694633816248> Error for user {discord_user_id}: {e}, retrying (attempt {attempt}/{self.max_retries})")
+                    await asyncio.sleep(1 * attempt)
+                    continue
+                return (None, None, f"error_{type(e).__name__}")
+
+        # All retries exhausted
+        return (None, None, "max_retries_exceeded")
+
+    async def _get_roblox_username(self, roblox_id: int) -> Optional[str]:
+        """Fetch Roblox username from Roblox API with retry logic"""
+        url = f"https://users.roblox.com/v1/users/{roblox_id}"
+
+        for attempt in range(1, 3):  # 2 retries for username fetch
+            try:
+                timeout = aiohttp.ClientTimeout(total=10)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(url) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            return data.get('name', 'Unknown')
+                        elif attempt < 2:
+                            await asyncio.sleep(1)
+                            continue
+                        return 'Unknown'
+            except:
+                if attempt < 2:
+                    await asyncio.sleep(1)
+                    continue
+                return 'Unknown'
+
+        return 'Unknown'
+
+    async def bulk_check_bloxlink(
+            self,
+            discord_user_ids: list,
+            guild_id: int = None,
+            progress_callback=None
+    ) -> Dict[int, Dict]:
+        """
+        Bulk check Bloxlink status for multiple users with proper rate limiting
+
+        Args:
+            discord_user_ids: List of Discord user IDs to check
+            guild_id: Optional guild ID for guild-specific lookups
+            progress_callback: Optional callback function(current, total, status_counts)
+
+        Returns:
+            Dict mapping discord_id -> {
+                'roblox_username': str or None,
+                'roblox_user_id': int or None,
+                'status': str  # success, not_linked, rate_limited, timeout, api_error
+            }
+        """
+        results = {}
+        total = len(discord_user_ids)
+
+        # Status counters
+        status_counts = {
+            'success': 0,
+            'not_linked': 0,
+            'rate_limited': 0,
+            'timeout': 0,
+            'api_error': 0,
+            'other': 0
+        }
+
+        print(f"🔍 Starting bulk Bloxlink check for {total} users...")
+        print(f"⏱️ Estimated time: {int(total * self.rate_limit_delay / 60)} minutes")
+
+        for i, discord_id in enumerate(discord_user_ids, 1):
+            # Get Bloxlink data
+            username, roblox_id, status = await self.get_bloxlink_data(discord_id, guild_id)
+
+            results[discord_id] = {
+                'roblox_username': username,
+                'roblox_user_id': roblox_id,
+                'status': status
+            }
+
+            # Update status counts
+            if status == 'success':
+                status_counts['success'] += 1
+            elif status == 'not_linked':
+                status_counts['not_linked'] += 1
+            elif status == 'rate_limited':
+                status_counts['rate_limited'] += 1
+            elif status == 'timeout':
+                status_counts['timeout'] += 1
+            elif 'api_error' in status or 'error' in status:
+                status_counts['api_error'] += 1
+            else:
+                status_counts['other'] += 1
+
+            # Progress callback
+            if progress_callback:
+                progress_callback(i, total, status_counts)
+
+            # Progress updates every 10 members
+            if i % 10 == 0 or i == total:
+                print(
+                    f"Progress: {i}/{total} | <:Accepted:1426930333789585509> {status_counts['success']} | <:Denied:1426930694633816248> {status_counts['not_linked']} | <:Warn:1437771973970104471> {status_counts['rate_limited']} | ⏱️ {status_counts['timeout']} | 🔴 {status_counts['api_error']}")
+
+        print(f"\n<:Accepted:1426930333789585509> Bulk check complete!")
+        print(f"   Success: {status_counts['success']}")
+        print(f"   Not Linked: {status_counts['not_linked']}")
+        print(f"   Rate Limited: {status_counts['rate_limited']}")
+        print(f"   Timeout: {status_counts['timeout']}")
+        print(f"   API Errors: {status_counts['api_error']}")
+
+        return results
 
 
 class PaginatedEmbedView(discord.ui.View):
@@ -1145,7 +1349,7 @@ class CallsignCog(commands.Cog):
                         # Send enhanced log with DETAILED changes
                         await self.send_detailed_sync_log(self.bot, guild.name, stats, sync_duration)
 
-                        print(f"✅ Auto-sync completed for guild {guild.name}:")
+                        print(f"<:Accepted:1426930333789585509> Auto-sync completed for guild {guild.name}:")
                         print(f"    📊 {stats['total_callsigns']} callsigns synced to Google Sheets")
                         print(
                             f"    👥 {stats['members_found']} members found / {stats['members_not_found']} not in server")
@@ -1157,23 +1361,23 @@ class CallsignCog(commands.Cog):
                             print(f"    🗑️ {stats['removed_inactive']} removed (inactive 7+ days)")
                         if stats['callsigns_reset']:
                             print(f"    🔄 {len(stats['callsigns_reset'])} callsigns reset due to rank changes")
-                        # ✅ NEW: Print naughty role stats
+                        # <:Accepted:1426930333789585509> NEW: Print naughty role stats
                         if stats['naughty_roles_found'] > 0:
                             print(f"    🚨 {stats['naughty_roles_found']} naughty roles found")
                             print(f"    💾 {stats['naughty_roles_stored']} new naughty roles stored")
                             print(f"    ✂️ {stats['naughty_roles_removed']} naughty roles removed")
                         if stats['permission_errors']:
-                            print(f"    ⚠️ {len(stats['permission_errors'])} permission errors")
+                            print(f"    <:Warn:1437771973970104471> {len(stats['permission_errors'])} permission errors")
                         if stats['errors']:
                             non_perm_errors = [e for e in stats['errors'] if e['error'] != 'Missing permissions']
                             if non_perm_errors:
-                                print(f"    ⚠️ {len(non_perm_errors)} other errors occurred")
+                                print(f"    <:Warn:1437771973970104471> {len(non_perm_errors)} other errors occurred")
                         if stats.get('database_mismatches_fixed', 0) > 0:
                             print(f"    🔧 {stats['database_mismatches_fixed']} database mismatches fixed")
                         print(f"    ⏱️ Completed in {sync_duration:.2f}s")
 
             except Exception as e:
-                print(f"❌ Error during auto-sync for {guild.name}: {e}")
+                print(f"<:Denied:1426930694633816248> Error during auto-sync for {guild.name}: {e}")
                 import traceback
                 traceback.print_exc()
 
@@ -1181,7 +1385,7 @@ class CallsignCog(commands.Cog):
                 try:
                     await self.send_sync_log(
                     self.bot,
-                        "❌ Auto-Sync Failed",
+                        "<:Denied:1426930694633816248> Auto-Sync Failed",
                         f"Auto-sync failed for **{guild.name}**",
                         [{'name': 'Error', 'value': f'```{str(e)[:1000]}```', 'inline': False}],
                         discord.Color.red()
@@ -1233,7 +1437,7 @@ class CallsignCog(commands.Cog):
                 admin_count = len(stats['permission_errors']) - len(non_admin_errors)
                 if admin_count > 0:
                     summary_embed.add_field(
-                        name='ℹ️ Admin Permission Skips',
+                        name='Admin Permission Skips',
                         value=f"{admin_count} administrators (cannot edit their nicknames)",
                         inline=False
                     )
@@ -1264,7 +1468,7 @@ class CallsignCog(commands.Cog):
 
                     # Around line 750-800
                     embed = discord.Embed(
-                        title=f"✏️ Nickname Updates ({i + 1}-{min(i + 5, len(stats['nickname_changes']))})",
+                        title=f"Nickname Updates ({i + 1}-{min(i + 5, len(stats['nickname_changes']))})",
                         description=' '.join([change['member'].mention for change in chunk]),  # Mentions here WILL ping
                         color=discord.Color.green()
                     )
@@ -1821,7 +2025,7 @@ class CallsignCog(commands.Cog):
                         current_fenz_prefix = correct_fenz_prefix
                         stats['rank_updates'] += 1
 
-                    # ✅ UPDATE HHSTJ PREFIX WITH PRESERVATION LOGIC
+                    # <:Accepted:1426930333789585509> UPDATE HHSTJ PREFIX WITH PRESERVATION LOGIC
                     if correct_hhstj_prefix != current_hhstj_prefix:
                         # Check if current stored prefix is a valid shortened version
                         if correct_hhstj_prefix and '-' in correct_hhstj_prefix:
@@ -3105,7 +3309,7 @@ class CallsignCog(commands.Cog):
                         prefix = user_record.get('fenz_prefix', '')
 
                         if callsign == "Not Assigned":
-                            value = "**Callsign:** ⚠️ Not Assigned"
+                            value = "**Callsign:** <:Warn:1437771973970104471> Not Assigned"
                         elif callsign == "BLANK":
                             value = f"**Callsign:** {prefix} (No number)"
                         elif prefix:
@@ -3328,6 +3532,11 @@ class CallsignCog(commands.Cog):
             traceback.print_exc()
 
     async def start_bulk_assign(self, interaction: discord.Interaction):
+        """Fixed bulk assign with proper Bloxlink retry logic"""
+
+        # Initialize BloxlinkAPI for retry logic
+        bloxlink_api = BloxlinkAPI()
+
         try:
             # Progress Update 1: Starting scan
             status_embed = discord.Embed(
@@ -3375,103 +3584,128 @@ class CallsignCog(commands.Cog):
                 'no_fenz_role': [],
                 'no_bloxlink': [],
                 'no_roblox_username': [],
-                'incomplete_callsign': []
+                'incomplete_callsign': [],
+                'api_failed': []  # EXTRA 2: Separate category for API failures
             }
 
-            processed = 0
-            batch_size = 10
+            # EXTRA 1: Progress callback for real-time updates
+            async def progress_callback(current, total, status_counts):
+                """Update progress embed every 5 members"""
+                if current % 5 == 0:
+                    progress_percent = int((current / total) * 100)
+                    progress_bar = "█" * (progress_percent // 5) + "░" * (20 - (progress_percent // 5))
 
-            # Process members in batches with progress updates
-            for i in range(0, len(members_without_callsigns), batch_size):
-                batch = members_without_callsigns[i:i + batch_size]
+                    progress_embed = discord.Embed(
+                        title="🔍 Checking Bloxlink Connections",
+                        description=f"**Progress:** {current}/{total} ({progress_percent}%)\n"
+                                    f"`{progress_bar}`\n\n"
+                                    f"<:Accepted:1426930333789585509> **Linked:** {status_counts['success']}\n"
+                                    f"<:Denied:1426930694633816248> **Not Linked:** {status_counts['not_linked']}\n"
+                                    f"<:Warn:1437771973970104471> **API Issues:** {status_counts['rate_limited'] + status_counts['timeout'] + status_counts['api_error']}",
+                        color=discord.Color.blue()
+                    )
 
-                for member in batch:
-                    # Get Bloxlink info
-                    bloxlink_data = await self.get_bloxlink_data(member.id, interaction.guild.id)
+                    progress_embed.set_footer(
+                        text=f"Using enhanced retry logic • ~{int(current * 1.0)} seconds elapsed")
 
-                    if not bloxlink_data:
-                        ineligible['no_bloxlink'].append({
-                            'member': member,
-                            'reason': 'No Bloxlink connection found'
-                        })
-                        processed += 1
-                        continue
+                    try:
+                        await interaction.edit_original_response(embed=progress_embed)
+                    except:
+                        pass
 
-                    roblox_id = bloxlink_data['id']
-                    roblox_username = await self.get_roblox_user_from_id(roblox_id)
+            # EXTRA 3: Process in batches of 20 with cooldown
+            batch_size = 20
+            total_batches = (len(members_without_callsigns) + batch_size - 1) // batch_size
 
-                    if not roblox_username:
-                        ineligible['no_roblox_username'].append({
-                            'member': member,
-                            'roblox_id': roblox_id,
-                            'reason': f'Roblox account {roblox_id} is invalid or deleted'
-                        })
-                        processed += 1
-                        continue
+            for batch_num in range(total_batches):
+                start_idx = batch_num * batch_size
+                end_idx = min(start_idx + batch_size, len(members_without_callsigns))
+                batch = members_without_callsigns[start_idx:end_idx]
 
-                    # Get FENZ rank
-                    fenz_prefix = None
-                    for role_id, (rank_name, prefix) in FENZ_RANK_MAP.items():
-                        if any(role.id == role_id for role in member.roles):
-                            fenz_prefix = prefix
-                            break
-
-                    if not fenz_prefix:
-                        ineligible['no_fenz_role'].append({
-                            'member': member,
-                            'reason': 'No valid FENZ rank role found'
-                        })
-                        processed += 1
-                        continue
-
-                    # User is eligible!
-                    users_without_callsigns.append({
-                        'member': member,
-                        'fenz_prefix': fenz_prefix,
-                        'roblox_id': roblox_id,
-                        'roblox_username': roblox_username
-                    })
-
-                    processed += 1
-
-                # Progress Update: Show progress every batch (every 10 members)
-                progress_percent = int((processed / len(members_without_callsigns)) * 100)
-                progress_bar = "█" * (progress_percent // 5) + "░" * (20 - (progress_percent // 5))
-
-                progress_embed = discord.Embed(
-                    title="<a:Load:1430912797469970444> Scanning Members",
-                    description=f"**Progress:** {processed}/{len(members_without_callsigns)} ({progress_percent}%)\n"
-                                f"`{progress_bar}`\n\n"
-                                f"✅ **Eligible:** {len(users_without_callsigns)}\n"
-                                f"❌ **Ineligible:** {sum(len(v) for v in ineligible.values())}",
+                # Show batch progress
+                batch_progress_embed = discord.Embed(
+                    title=f"🔍 Batch {batch_num + 1}/{total_batches}",
+                    description=f"Checking Bloxlink for members {start_idx + 1}-{end_idx}...",
                     color=discord.Color.blue()
                 )
+                await interaction.edit_original_response(embed=batch_progress_embed)
 
-                if ineligible['no_bloxlink']:
-                    progress_embed.add_field(
-                        name="No Bloxlink",
-                        value=f"{len(ineligible['no_bloxlink'])} members",
-                        inline=True
-                    )
-                if ineligible['no_roblox_username']:
-                    progress_embed.add_field(
-                        name="Invalid Roblox",
-                        value=f"{len(ineligible['no_roblox_username'])} members",
-                        inline=True
-                    )
-                if ineligible['no_fenz_role']:
-                    progress_embed.add_field(
-                        name="No FENZ Role",
-                        value=f"{len(ineligible['no_fenz_role'])} members",
-                        inline=True
-                    )
+                # Get Discord IDs for this batch
+                batch_discord_ids = [m.id for m in batch]
 
-                progress_embed.set_footer(text=f"Checking Bloxlink connections and Roblox accounts...")
+                # EXTRA 1 & 2: Use enhanced Bloxlink API with retry logic and progress
+                bloxlink_results = await bloxlink_api.bulk_check_bloxlink(
+                    batch_discord_ids,
+                    guild_id=interaction.guild.id,
+                    progress_callback=progress_callback
+                )
 
-                try:
-                    await interaction.edit_original_response(embed=progress_embed)
-                except:
-                    pass
+                # Process results
+                for member in batch:
+                    result = bloxlink_results[member.id]
+
+                    # EXTRA 2: Separate genuine "not linked" from API failures
+                    if result['status'] == 'success':
+                        # Successfully got Bloxlink data
+                        roblox_username = result['roblox_username']
+                        roblox_id = result['roblox_user_id']
+
+                        if not roblox_username or roblox_username == 'Unknown':
+                            ineligible['no_roblox_username'].append({
+                                'member': member,
+                                'roblox_id': roblox_id,
+                                'reason': f'Roblox account {roblox_id} is invalid or deleted'
+                            })
+                            continue
+
+                        # Get FENZ rank
+                        fenz_prefix = None
+                        for role_id, (rank_name, prefix) in FENZ_RANK_MAP.items():
+                            if any(role.id == role_id for role in member.roles):
+                                fenz_prefix = prefix
+                                break
+
+                        if not fenz_prefix:
+                            ineligible['no_fenz_role'].append({
+                                'member': member,
+                                'reason': 'No valid FENZ rank role found'
+                            })
+                            continue
+
+                        # User is eligible!
+                        users_without_callsigns.append({
+                            'member': member,
+                            'fenz_prefix': fenz_prefix,
+                            'roblox_id': str(roblox_id),
+                            'roblox_username': roblox_username
+                        })
+
+                    elif result['status'] == 'not_linked':
+                        # Genuinely not linked (404 from Bloxlink)
+                        ineligible['no_bloxlink'].append({
+                            'member': member,
+                            'reason': 'Not linked to Bloxlink - needs to run /verify'
+                        })
+
+                    else:
+                        # EXTRA 2: API failure (rate limit, timeout, error)
+                        # Don't mark as "not linked" - this is an API issue
+                        ineligible['api_failed'].append({
+                            'member': member,
+                            'status': result['status'],
+                            'reason': f"API Error: {result['status']} - May actually be linked, try again"
+                        })
+
+                # EXTRA 3: Cooldown between batches (except last one)
+                if batch_num < total_batches - 1:
+                    cooldown_embed = discord.Embed(
+                        title=f"⏸️ Batch {batch_num + 1}/{total_batches} Complete",
+                        description=f"Cooling down for 5 seconds before next batch...\n"
+                                    f"<:Accepted:1426930333789585509> Processed: {end_idx}/{len(members_without_callsigns)}",
+                        color=discord.Color.blue()
+                    )
+                    await interaction.edit_original_response(embed=cooldown_embed)
+                    await asyncio.sleep(5)
 
             # Progress Update 4: Scan complete
             status_embed.title = "<:Accepted:1426930333789585509> Scan Complete"
@@ -3492,7 +3726,7 @@ class CallsignCog(commands.Cog):
             if not users_without_callsigns:
                 # Create detailed report of why no one is eligible
                 no_eligible_embed = discord.Embed(
-                    title="❌ No Eligible Members Found",
+                    title="<:Denied:1426930694633816248> No Eligible Members Found",
                     description="All members are either already assigned or have issues preventing assignment:",
                     color=discord.Color.red()
                 )
@@ -3508,10 +3742,44 @@ class CallsignCog(commands.Cog):
 
                 await interaction.edit_original_response(embed=no_eligible_embed)
 
-                # Send detailed breakdown of ineligible users
+                # EXTRA 2 & 4: Show API failures separately
+                if ineligible.get('api_failed'):
+                    embed = discord.Embed(
+                        title=f"<:Warn:1437771973970104471> API Failures ({len(ineligible['api_failed'])})",
+                        description="These members couldn't be checked due to API issues.\n"
+                                    "**They may actually be linked** - try running the command again in a few minutes.",
+                        color=discord.Color.orange()
+                    )
+
+                    embed.add_field(
+                        name="💡 What This Means",
+                        value="• Bloxlink API was rate limited or timed out\n"
+                              "• These users might have valid Bloxlink connections\n"
+                              "• Wait 5-10 minutes and try again\n"
+                              "• If persistent, check Bloxlink's status",
+                        inline=False
+                    )
+
+                    for i in range(0, len(ineligible['api_failed']), 10):
+                        chunk = ineligible['api_failed'][i:i + 10]
+                        member_list = "\n".join([
+                            f"• {item['member'].mention} - `{item['reason']}`"
+                            for item in chunk
+                        ])
+                        embed.add_field(
+                            name=f"Members {i + 1}-{min(i + 10, len(ineligible['api_failed']))}",
+                            value=member_list,
+                            inline=False
+                        )
+
+                    # EXTRA 4: Log API failures for manual review
+                    embed.set_footer(text=f"Logged at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
+                    await interaction.followup.send(embed=embed, ephemeral=True)
+
+                # Send detailed breakdown of OTHER ineligible users
                 if ineligible['no_bloxlink']:
                     embed = discord.Embed(
-                        title=f"❌ No Bloxlink Connection ({len(ineligible['no_bloxlink'])})",
+                        title=f"<:Denied:1426930694633816248> No Bloxlink Connection ({len(ineligible['no_bloxlink'])})",
                         description="These members haven't linked their Roblox account via Bloxlink.\n"
                                     "They need to run </verify:1114974748624027711>",
                         color=discord.Color.orange()
@@ -3529,7 +3797,7 @@ class CallsignCog(commands.Cog):
 
                 if ineligible['no_roblox_username']:
                     embed = discord.Embed(
-                        title=f"❌ Invalid/Deleted Roblox Account ({len(ineligible['no_roblox_username'])})",
+                        title=f"<:Denied:1426930694633816248> Invalid/Deleted Roblox Account ({len(ineligible['no_roblox_username'])})",
                         description="These members have a Bloxlink connection, but their Roblox account is invalid or deleted:",
                         color=discord.Color.orange()
                     )
@@ -3548,7 +3816,7 @@ class CallsignCog(commands.Cog):
 
                 if ineligible['no_fenz_role']:
                     embed = discord.Embed(
-                        title=f"❌ No Valid FENZ Rank ({len(ineligible['no_fenz_role'])})",
+                        title=f"<:Denied:1426930694633816248> No Valid FENZ Rank ({len(ineligible['no_fenz_role'])})",
                         description="These members don't have any FENZ rank role:",
                         color=discord.Color.orange()
                     )
@@ -3565,7 +3833,7 @@ class CallsignCog(commands.Cog):
 
                 if ineligible['incomplete_callsign']:
                     embed = discord.Embed(
-                        title=f"⚠️ Incomplete Callsigns ({len(ineligible['incomplete_callsign'])})",
+                        title=f"<:Warn:1437771973970104471> Incomplete Callsigns ({len(ineligible['incomplete_callsign'])})",
                         description="These members are already in the database with incomplete callsigns:",
                         color=discord.Color.orange()
                     )
@@ -3582,6 +3850,12 @@ class CallsignCog(commands.Cog):
                         )
                     await interaction.followup.send(embed=embed, ephemeral=True)
                 return
+
+            # If we have eligible users, show them and start the interactive assignment
+            # (Your existing BulkAssignView code continues here...)
+            view = BulkAssignView(self, interaction, users_without_callsigns)
+            await view.start()
+
         except Exception as e:
             await interaction.followup.send(
                 f"<:Denied:1426930694633816248> Error: {str(e)}",
