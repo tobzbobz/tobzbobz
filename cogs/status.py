@@ -206,7 +206,9 @@ class StatusCog(commands.Cog):
     @app_commands.describe(suggestion="Your status suggestion (e.g., 'Emergency response')")
     async def submit_status(self, interaction: discord.Interaction, suggestion: str):
         """Submit a status suggestion"""
-        await interaction.response.defer(ephemeral=True)
+
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Submitting Status",
+                                                ephemeral=True)
 
         # Check if status is too long
         if len(suggestion) > 128:
@@ -233,6 +235,7 @@ class StatusCog(commands.Cog):
         })
 
         await self.save_submissions()
+        await interaction.delete_original_response()
 
         # Confirm submission
         embed = discord.Embed(

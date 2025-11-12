@@ -333,6 +333,9 @@ class SayCog(commands.Cog):
                 await interaction.response.send_message(embed=no_permission_embed, ephemeral=True)
                 return
 
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Sending Message",
+                                                    ephemeral=True)
+
             # Determine target channel
             target_channel = channel if channel else interaction.channel
 
@@ -403,6 +406,7 @@ class SayCog(commands.Cog):
                 try:
                     # Fetch the message to reply to
                     message_to_reply = await target_channel.fetch_message(int(reply))
+
                     # Send the message as a reply
                     await message_to_reply.reply(content=text)
 
@@ -457,6 +461,8 @@ class SayCog(commands.Cog):
                 description=f'Error <:Denied:1426930694633816248>: {e}',
                 colour=discord.Colour(0xf24d4d)
             )
+            await interaction.delete_original_response()
+
             if not interaction.response.is_done():
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
             else:
@@ -501,6 +507,9 @@ class SayCog(commands.Cog):
                 )
                 await interaction.response.send_message(embed=no_permission_embed, ephemeral=True)
                 return
+
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Sending Message",
+                                                    ephemeral=True)
 
             # Determine target channel
             target_channel = channel if channel else interaction.channel
@@ -610,6 +619,8 @@ class SayCog(commands.Cog):
                 description=f'Error <:Denied:1426930694633816248>: {e}',
                 colour=discord.Colour(0xf24d4d)
             )
+            await interaction.delete_original_response()
+
             if not interaction.response.is_done():
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
             else:

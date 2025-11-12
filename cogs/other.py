@@ -19,7 +19,8 @@ class ImageFetcher(commands.Cog):
         if interaction.user.id != self.owner_id:
             return await interaction.response.send_message("You don’t have permission to use this command <:Denied:1426930694633816248>", ephemeral=True)
 
-        await interaction.response.defer(thinking=True)
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Fetching Images",
+                                                ephemeral=True)
 
         async with aiohttp.ClientSession() as session:
             for _ in range(number):
@@ -42,6 +43,7 @@ class ImageFetcher(commands.Cog):
 
                     embed = discord.Embed(title="Random Image", color=discord.Color.blurple())
                     embed.set_image(url=image_url)
+                    await interaction.delete_original_response()
                     await interaction.followup.send(embed=embed)
 
 async def setup(bot):

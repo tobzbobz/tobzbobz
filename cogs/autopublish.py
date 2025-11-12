@@ -31,6 +31,7 @@ ERROR_INDICATORS = [
     "Exception",
     "Auto-Sync Failed",
     "Sync Failed",
+    "Retaliatory",
 ]
 
 # Success indicators (optional - for extra confidence)

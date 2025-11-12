@@ -102,7 +102,8 @@ class TopicCog(commands.Cog):
     ):
         """Request a topic change in the current channel"""
 
-        await interaction.response.defer()
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Sending Topic Change Request",
+                                                ephemeral=True)
 
         # Check cooldown
         async with db.pool.acquire() as conn:
@@ -183,6 +184,8 @@ class TopicCog(commands.Cog):
 
         staff_embed.set_thumbnail(url=interaction.user.display_avatar.url)
         staff_embed.set_footer(text=f"User ID: {interaction.user.id} | Request ID: {message.id}")
+
+        await interaction.delete_original_response()
 
         # Send to moderation log channel
         log_channel = self.bot.get_channel(MODERATION_LOG_CHANNEL_ID)

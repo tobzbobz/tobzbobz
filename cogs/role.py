@@ -63,7 +63,8 @@ class RoleCog(commands.Cog):
             print(f"🔍 Roles command triggered by {interaction.user} in {interaction.guild.name}")
 
             # Defer the response to prevent timeout
-            await interaction.response.defer()
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Getting Role Info",
+                                                    ephemeral=True)
             print("<:Accepted:1426930333789585509> Response deferred")
 
             # Check if user has one of the allowed roles
@@ -294,6 +295,8 @@ class RoleCog(commands.Cog):
             pages.append(current_embed)
 
             print(f"📄 Created {len(pages)} pages")
+
+            await interaction.delete_original_response()
 
             # Send with pagination if multiple pages
             if len(pages) > 1:

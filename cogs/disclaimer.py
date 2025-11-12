@@ -58,7 +58,8 @@ class DisclaimerCog(commands.Cog):
                 return
 
             # Defer the response
-            await interaction.response.defer(ephemeral=False)  # Set to True if you want only the user to see it
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Obtaining Disclaimer Information",
+                                                    ephemeral=True)
 
             # First Embed
             embed2 = discord.Embed(
@@ -87,11 +88,12 @@ class DisclaimerCog(commands.Cog):
                 description=f'Error <:Denied:1426930694633816248>: {e}',
                 colour=discord.Colour(0xf24d4d)
             )
-            if not interaction.response.is_done():
-                await interaction.response.send_message(embed=error_embed, ephemeral=True)
-            else:
-                await interaction.followup.send(embed=error_embed, ephemeral=True)
+            await interaction.delete_original_response()
 
+            if not interaction.response.is_done():
+                await interaction.response.send_message(embed=error_embed, ephemeral=True, delete_after=60)
+            else:
+                await interaction.followup.send(embed=error_embed, ephemeral=True, delete_after=60)
             raise
 
 

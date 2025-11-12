@@ -43,7 +43,8 @@ class PingCog(commands.Cog):
 
         # Measure response time (interaction latency)
         start_time = time.time()
-        await interaction.response.defer()
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Checking Latency",
+                                                ephemeral=True)
         end_time = time.time()
 
         # Calculate latencies
@@ -99,6 +100,7 @@ class PingCog(commands.Cog):
             icon_url=interaction.user.display_avatar.url
         )
 
+        await interaction.delete_original_response()
         await interaction.followup.send(embed=embed)
 
 

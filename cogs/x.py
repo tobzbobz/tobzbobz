@@ -98,7 +98,8 @@ class JishakuCog(commands.Cog):
 
     async def run_code(self, interaction: discord.Interaction, code: str):
         """Execute Python code with bot context"""
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Running Code",
+                                                ephemeral=True)
 
         # Preload useful globals
         env = {
@@ -164,6 +165,7 @@ class JishakuCog(commands.Cog):
         if not output and ret is None:
             embed.description = "*No output or return value*"
 
+        await interaction.delete_original_response()
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @py_group.command(name="shell", description="Execute a shell command on the bot host")
@@ -181,7 +183,8 @@ class JishakuCog(commands.Cog):
 
     async def run_shell(self, interaction: discord.Interaction, command: str):
         """Execute a shell command"""
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Running Shell",
+                                                ephemeral=True)
 
         try:
             # Run command with timeout
@@ -240,6 +243,7 @@ class JishakuCog(commands.Cog):
                 description=f"```py\n{e.__class__.__name__}: {e}\n```",
                 color=discord.Color.red()
             )
+            await interaction.delete_original_response()
             await interaction.followup.send(embed=embed, ephemeral=True)
 
     @py_group.command(name="stats", description="Show runtime diagnostics and cache information")
@@ -252,7 +256,8 @@ class JishakuCog(commands.Cog):
             )
             return
 
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Collecting Stats",
+                                                ephemeral=True)
 
         # System stats
         process = psutil.Process()
@@ -332,7 +337,7 @@ class JishakuCog(commands.Cog):
         )
 
         embed.set_footer(text=f"Process ID: {process.pid}")
-
+        await interaction.delete_original_response()
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @py_group.command(name="tasks", description="List active event loop handles and requests")
@@ -345,7 +350,8 @@ class JishakuCog(commands.Cog):
             )
             return
 
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Collecting Tasks",
+                                                ephemeral=True)
 
         # Get all tasks
         all_tasks = asyncio.all_tasks()
@@ -413,7 +419,7 @@ class JishakuCog(commands.Cog):
                   f"**Closed:** {'Yes' if loop.is_closed() else 'No'}",
             inline=True
         )
-
+        await interaction.delete_original_response()
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @py_group.command(name="sync", description="Sync database changes to the bot without restarting")
@@ -426,7 +432,8 @@ class JishakuCog(commands.Cog):
             )
             return
 
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Sycning",
+                                                ephemeral=True)
 
         import inspect
         reloaded = []
@@ -468,7 +475,7 @@ class JishakuCog(commands.Cog):
             embed.description = "No reloadable methods found."
 
         embed.set_footer(text=f"Garbage collected: {collected} objects")
-
+        await interaction.delete_original_response()
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @py_group.command(name="reload", description="Reload a specific cog")
@@ -482,7 +489,8 @@ class JishakuCog(commands.Cog):
             )
             return
 
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Reloading",
+                                                ephemeral=True)
 
         try:
             # Reload the cog
@@ -511,7 +519,7 @@ class JishakuCog(commands.Cog):
                 description=f"```py\n{e.__class__.__name__}: {e}\n```",
                 color=discord.Color.red()
             )
-
+        await interaction.delete_original_response()
         await interaction.followup.send(embed=embed, ephemeral=True)
 
 

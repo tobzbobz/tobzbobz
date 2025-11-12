@@ -3,6 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 from datetime import datetime
 from typing import Optional
+import io
 
 # Configuration - Role IDs that can use /purge commands
 ALLOWED_ROLE_IDS = [
@@ -45,7 +46,7 @@ class PurgeCog(commands.Cog):
     purge = app_commands.Group(name="purge", description="Message purge commands")
 
     async def log_purge(self, interaction: discord.Interaction, purge_type: str, count: int, deleted_count: int,
-                        target: Optional[discord.User] = None):
+                        deleted_messages: list[discord.Message] = None, target: Optional[discord.User] = None):
         """Log purge action to logging channel"""
         log_channel = self.bot.get_channel(LOG_CHANNEL_ID)
         if not log_channel:
@@ -91,7 +92,79 @@ class PurgeCog(commands.Cog):
         embed.set_thumbnail(url=interaction.user.display_avatar.url)
         embed.set_footer(text=f"User ID: {interaction.user.id}")
 
-        await log_channel.send(embed=embed)
+        file = None
+        if deleted_messages and deleted_count > 0:
+            # Format messages to text
+            try:
+                txt_content = self.format_messages_to_txt(deleted_messages)
+
+                # Create filename with timestamp
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                filename = f"purge_{purge_type.lower()}_{timestamp}.txt"
+
+                # Create Discord file object
+                file = discord.File(
+                    fp=io.BytesIO(txt_content.encode('utf-8', errors='replace')),  # ✅ Use BytesIO
+                    filename=filename
+                )
+
+            except Exception as e:
+                print(f"Error creating purge log file: {e}")
+            # Still send embed without file
+
+        # Send with or without file
+        if file:
+            await log_channel.send(embed=embed, file=file)
+        else:
+            await log_channel.send(embed=embed)
+
+    def format_messages_to_txt(self, messages: list[discord.Message]) -> str:
+        """Format deleted messages into a readable text format"""
+
+        lines = []
+
+        if len(messages) > 100:  # Arbitrary limit
+            lines.append(f"<:Warn:1437771973970104471> Warning: Large purge ({len(messages)} messages)")
+            lines.append("Only showing first 100 messages in detail")
+            lines.append("")
+            sorted_messages = sorted(messages, key=lambda m: m.created_at)[:100]
+        else:
+            sorted_messages = sorted(messages, key=lambda m: m.created_at)
+
+        lines.append(f"Purge Log - {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+        lines.append("=" * 80)
+        lines.append("")
+
+        # Sort messages by timestamp (oldest first)
+        sorted_messages = sorted(messages, key=lambda m: m.created_at)
+
+        for msg in sorted_messages:
+            lines.append(f"[{msg.created_at.strftime('%Y-%m-%d %H:%M:%S')}] {msg.author.name} (ID: {msg.author.id})")
+
+            # Add content
+            if msg.content:
+                lines.append(f"Content: {msg.content}")
+            else:
+                lines.append("Content: <No text content>")
+
+            # Add attachment info
+            if msg.attachments:
+                lines.append(f"Attachments ({len(msg.attachments)}):")
+                for attachment in msg.attachments:
+                    lines.append(f"  - {attachment.filename} ({attachment.url})")
+
+            # Add embed info
+            if msg.embeds:
+                lines.append(f"Embeds: {len(msg.embeds)} embed(s)")
+
+            # Add sticker info
+            if msg.stickers:
+                lines.append(f"Stickers: {', '.join([s.name for s in msg.stickers])}")
+
+            lines.append("-" * 80)
+            lines.append("")
+
+        return "\n".join(lines)
 
     @purge.command(name="user", description="Purge messages from a specific user")
     @app_commands.describe(
@@ -107,7 +180,8 @@ class PurgeCog(commands.Cog):
     ):
         """Purge messages from a specific user"""
 
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Purging Messages",
+                                                ephemeral=True)
 
         # Default to the command user if no user specified
         target_user = user if user else interaction.user
@@ -126,7 +200,16 @@ class PurgeCog(commands.Cog):
             )
 
             # Log the action
-            await self.log_purge(interaction, "User", count, deleted_count, target_user)
+            await self.log_purge(
+                interaction,
+                "User",
+                count,
+                deleted_count,
+                deleted_messages=deleted,  # ✅ ADD THIS
+                target=target_user
+            )
+
+            await interaction.original_response(content=f"<:Accepted:1426930333789585509> Completed")
 
         except discord.Forbidden:
             await interaction.followup.send(
@@ -151,7 +234,8 @@ class PurgeCog(commands.Cog):
     ):
         """Purge messages from bots"""
 
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Purging Messages",
+                                                ephemeral=True)
 
         # Delete bot messages
         def check(message):
@@ -167,7 +251,16 @@ class PurgeCog(commands.Cog):
             )
 
             # Log the action
-            await self.log_purge(interaction, "Bot", count, deleted_count)
+            await self.log_purge(
+                interaction,
+                "Bot",
+                count,
+                deleted_count,
+                deleted_messages=deleted  # ✅ ADD THIS
+            )
+
+            await interaction.original_response(content=f"<:Accepted:1426930333789585509> Completed")
+
 
         except discord.Forbidden:
             await interaction.followup.send(
@@ -192,7 +285,8 @@ class PurgeCog(commands.Cog):
     ):
         """Purge all messages"""
 
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Purging Messages",
+                                                ephemeral=True)
 
         # Delete all messages
         try:
@@ -205,7 +299,15 @@ class PurgeCog(commands.Cog):
             )
 
             # Log the action
-            await self.log_purge(interaction, "All", count, deleted_count)
+            await self.log_purge(
+                interaction,
+                "All",
+                count,
+                deleted_count,
+                deleted_messages=deleted  # ✅ ADD THIS
+            )
+
+            await interaction.original_response(content=f"<:Accepted:1426930333789585509> Completed")
 
         except discord.Forbidden:
             await interaction.followup.send(

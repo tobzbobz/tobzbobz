@@ -36,6 +36,10 @@ class WentWrongCog(commands.Cog):
     @went_group.command(name='time-entry', description='View examples of valid date and time formats.')
     async def time_entry(self, interaction: discord.Interaction):
         """Shows examples of valid date/time formats for the went wrong command"""
+
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Sending Embed",
+                                                ephemeral=True)
+
         try:
             embed = discord.Embed(
                 title='Valid Date & Time Formats',
@@ -77,10 +81,11 @@ class WentWrongCog(commands.Cog):
                 description=f'<:Denied:1426930694633816248> Error: {e}',
                 colour=discord.Colour.red()
             )
+            await interaction.delete_original_response()
             if not interaction.response.is_done():
-                await interaction.response.send_message(embed=error_embed, ephemeral=True)
+                await interaction.response.send_message(embed=error_embed, ephemeral=True, delete_after=60)
             else:
-                await interaction.followup.send(embed=error_embed, ephemeral=True)
+                await interaction.followup.send(embed=error_embed, ephemeral=True, delete_after=60)
             raise
 
     @went_group.command(name='wrong',
@@ -104,7 +109,8 @@ class WentWrongCog(commands.Cog):
             proof: discord.Attachment
     ):
         try:
-            await interaction.response.defer(ephemeral=True)
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Sending Report",
+                                                    ephemeral=True)
 
             # Get guild-specific configuration
             guild_config = get_guild_config(interaction.guild.id)
@@ -208,10 +214,11 @@ class WentWrongCog(commands.Cog):
                 description=f'<:Denied:1426930694633816248> Error: {e}',
                 colour=discord.Colour(0xf24d4d)
             )
+            await interaction.delete_original_response()
             if not interaction.response.is_done():
-                await interaction.response.send_message(embed=error_embed, ephemeral=True)
+                await interaction.response.send_message(embed=error_embed, ephemeral=True, delete_after=60)
             else:
-                await interaction.followup.send(embed=error_embed, ephemeral=True)
+                await interaction.followup.send(embed=error_embed, ephemeral=True, delete_after=60)
             raise
 
 

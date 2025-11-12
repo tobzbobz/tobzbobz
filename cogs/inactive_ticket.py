@@ -69,7 +69,8 @@ class InactiveTicketCog(commands.Cog):
                 await interaction.response.send_message(embed=no_permission_embed, ephemeral=True)
                 return
 
-            await interaction.response.defer(ephemeral=True)
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Sending Inactivity Notice",
+                                                    ephemeral=True)
 
             # Create the inactive ticket embed
             # Create the inactive ticket embed
@@ -102,10 +103,11 @@ class InactiveTicketCog(commands.Cog):
                 colour=discord.Colour(0xf24d4d)
             )
 
+            await interaction.delete_original_response()
             if not interaction.response.is_done():
-                await interaction.response.send_message(embed=error_embed, ephemeral=True)
+                await interaction.response.send_message(embed=error_embed, ephemeral=True, delete_after=60)
             else:
-                await interaction.followup.send(embed=error_embed, ephemeral=True)
+                await interaction.followup.send(embed=error_embed, ephemeral=True, delete_after=60)
 
             raise
 

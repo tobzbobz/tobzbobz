@@ -418,7 +418,8 @@ class MissedVoteConfirmationView(discord.ui.View):
                     '<:Denied:1426930694633816248> Only the bot owner can use this!', ephemeral=True)
                 return
 
-            await interaction.response.defer()
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Sending",
+                                                    ephemeral=True)
             await self.cog.send_scheduled_vote(self.vote_data)
 
             # Remove from database
@@ -432,7 +433,8 @@ class MissedVoteConfirmationView(discord.ui.View):
                 item.disabled = True
 
             await interaction.message.edit(embed=embed, view=self)
-            await interaction.followup.send('<:Accepted:1426930333789585509> Vote sent successfully!', ephemeral=True)
+            await interaction.delete_original_response()
+            await interaction.followup.send('<:Accepted:1426930333789585509> Vote sent successfully!', ephemeral=True, delete_after=60)
 
         except Exception as e:
             print(f'Error sending missed vote: {e}')
@@ -447,7 +449,8 @@ class MissedVoteConfirmationView(discord.ui.View):
                     '<:Denied:1426930694633816248> Only the bot owner can use this!', ephemeral=True)
                 return
 
-            await interaction.response.defer()
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Cancelling",
+                                                    ephemeral=True)
 
             # Remove from database
             await db.remove_scheduled_vote(self.vote_id)
@@ -460,8 +463,9 @@ class MissedVoteConfirmationView(discord.ui.View):
                 item.disabled = True
 
             await interaction.message.edit(embed=embed, view=self)
+            await interaction.delete_original_response()
             await interaction.followup.send('<:Accepted:1426930333789585509> Vote cancelled and removed from schedule.',
-                                            ephemeral=True)
+                                            ephemeral=True, delete_after=60)
 
         except Exception as e:
             print(f'Error cancelling missed vote: {e}')
@@ -571,6 +575,13 @@ class WatchCog(commands.Cog):
         self.check_scheduled_votes.start()
 
         print("<:Accepted:1426930333789585509> WatchCog initialized successfully")
+
+    def truncate_field_value(self, value: str, max_length: int = 1024) -> str:
+        """Truncate a field value to fit Discord's limits"""
+        if len(value) <= max_length:
+            return value
+        # Truncate and add ellipsis
+        return value[:max_length - 3] + "..."
 
     async def register_active_vote_buttons(self):
         """Re-register VoteButton views for watches that were active during restart"""
@@ -701,6 +712,8 @@ class WatchCog(commands.Cog):
                     colour_counts[colour] = colour_counts.get(colour, 0) + 1
 
             most_common_colour = max(colour_counts.items(), key=lambda x: x[1])[0] if colour_counts else 'N/A'
+            if len(most_common_colour) > 50:  # Reasonable limit for a colour name
+                most_common_colour = most_common_colour[:47] + "..."
             print(f"Most common colour: {most_common_colour} (from {len(colour_counts)} unique colours)")
 
             # Most active station
@@ -711,6 +724,8 @@ class WatchCog(commands.Cog):
                     station_counts[station] = station_counts.get(station, 0) + 1
 
             most_active_station = max(station_counts.items(), key=lambda x: x[1])[0] if station_counts else 'N/A'
+            if len(most_active_station) > 50:  # Reasonable limit for a station name
+                most_active_station = most_active_station[:47] + "..."
             print(f"Most active station: {most_active_station} (from {len(station_counts)} unique stations)")
 
             # Average duration
@@ -792,16 +807,18 @@ class WatchCog(commands.Cog):
             )
 
             # Add Watch Records field
+            records_value = (
+                f"​\n**Total Watches:** {stats['total_watches']}\n"
+                f"**Longest Watch:** {stats['longest_duration']}\n"
+                f"**Most Attendees:** {stats['most_attendees']}\n"
+                f"**Most Common Watch Colour:** {stats['most_common_colour']}\n"
+                f"**Most Active Station:** {stats['most_active_station']}\n"
+                f"**Average Watch Duration:** {stats['average_duration']}"
+            )
+
             stats_embed.add_field(
                 name="🏆 | Watch Records",
-                value=(
-                    f"‎\n**Total Watches:** {stats['total_watches']}\n"
-                    f"**Longest Watch:** {stats['longest_duration']}\n"
-                    f"**Most Attendees:** {stats['most_attendees']}\n"
-                    f"**Most Common Watch Colour:** {stats['most_common_colour']}\n"
-                    f"**Most Active Station:** {stats['most_active_station']}\n"
-                    f"**Average Watch Duration:** {stats['average_duration']}"
-                ),
+                value=self.truncate_field_value(records_value),  # ✅ ADD THIS
                 inline=True
             )
 
@@ -856,7 +873,8 @@ class WatchCog(commands.Cog):
                     await interaction.response.send_message(embed=decline_embed, ephemeral=True)
                     return
 
-            await interaction.response.defer()
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Starting Watch",
+                                                    ephemeral=True)
 
             guild_config = get_guild_config(interaction.guild.id)
             watch_channel_id = guild_config.get('watch_channel_id')
@@ -1006,8 +1024,8 @@ class WatchCog(commands.Cog):
                 description=f'<:Accepted:1426930333789585509> Watch started in {watch_channel.mention}!',
                 colour=discord.Colour(0x2ecc71)
             )
-            await interaction.followup.send(embed=success_embed, ephemeral=True)
-
+            await interaction.followup.send(embed=success_embed, ephemeral=True, delete_after=60)
+            await interaction.delete_original_response()
             await self.update_watch_channel_name(watch_channel, colour, station, 'active')
 
         except Exception as e:
@@ -1063,7 +1081,8 @@ class WatchCog(commands.Cog):
                 await interaction.response.send_message(embed=permission_embed, ephemeral=True)
                 return
 
-            await interaction.response.defer()
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Starting Watch Vote",
+                                                    ephemeral=True)
 
             guild_config = get_guild_config(interaction.guild.id)
             watch_channel_id = guild_config.get('watch_channel_id')
@@ -1134,7 +1153,8 @@ class WatchCog(commands.Cog):
                     colour=discord.Colour(0x2ecc71)
                 )
 
-            await interaction.followup.send(embed=success_embed, ephemeral=True)
+            await interaction.followup.send(embed=success_embed, ephemeral=True, delete_after=60)
+            await interaction.delete_original_response()
 
             await self.update_watch_channel_name(watch_channel, colour, station, 'voting')
 
@@ -1186,7 +1206,8 @@ class WatchCog(commands.Cog):
                 await interaction.response.send_message(embed=permission_embed, ephemeral=True)
                 return
 
-            await interaction.response.defer(ephemeral=True)
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Ending Watch",
+                                                    ephemeral=True)
 
             if watch not in active_watches:
                 not_found_embed = discord.Embed(
@@ -1305,7 +1326,8 @@ class WatchCog(commands.Cog):
                 description=f'<:Accepted:1426930333789585509> Watch ended successfully with {attendees} attendees!',
                 colour=discord.Colour(0x2ecc71)
             )
-            await interaction.followup.send(embed=success_embed, ephemeral=True)
+            await interaction.followup.send(embed=success_embed, ephemeral=True, delete_after=60)
+            await interaction.delete_original_response()
 
         except Exception as e:
             print(f'Error ending watch: {e}')
@@ -1346,7 +1368,8 @@ class WatchCog(commands.Cog):
                 await interaction.response.send_message(embed=permission_embed, ephemeral=True)
                 return
 
-            await interaction.response.defer(ephemeral=True)
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Getting Watch Logs",
+                                                    ephemeral=True)
 
             # <:Accepted:1426930333789585509> Now safe to call database
             completed_watches = await load_completed_watches()
@@ -1474,6 +1497,7 @@ class WatchCog(commands.Cog):
                                         colour=discord.Colour(0xf24d4d))
 
             # Handle if response not sent yet
+            await interaction.delete_original_response()
             if not interaction.response.is_done():
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
             else:
@@ -1496,7 +1520,8 @@ class WatchCog(commands.Cog):
                 await interaction.response.send_message(embed=permission_embed, ephemeral=True)
                 return
 
-            await interaction.response.defer(ephemeral=True)
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Deleting Log",
+                                                    ephemeral=True)
 
             completed_watches = await load_completed_watches()
 
@@ -1523,7 +1548,8 @@ class WatchCog(commands.Cog):
                 description=f'<:Accepted:1426930333789585509> Deleted watch log:\n**{colour} Watch at {station}**\nEnded: {formatted_time}',
                 colour=discord.Colour(0x2ecc71)
             )
-            await interaction.followup.send(embed=success_embed, ephemeral=True)
+            await interaction.delete_original_response()
+            await interaction.followup.send(embed=success_embed, ephemeral=True, delete_after=60)
 
         except Exception as e:
             print(f'Error deleting watch log: {e}')
@@ -1581,7 +1607,8 @@ class WatchCog(commands.Cog):
                 await interaction.response.send_message(embed=permission_embed, ephemeral=True)
                 return
 
-            await interaction.response.defer(ephemeral=True)
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Ending All Watches",
+                                                    ephemeral=True)
 
             if not active_watches:
                 no_watches_embed = discord.Embed(
@@ -1617,7 +1644,8 @@ class WatchCog(commands.Cog):
                             (f'\n<:Warn:1437771973970104471> Failed to delete {failed_count} watch(es)/vote(s).' if failed_count > 0 else ''),
                 colour=discord.Colour(0x2ecc71)
             )
-            await interaction.followup.send(embed=summary_embed, ephemeral=True)
+            await interaction.delete_original_response()
+            await interaction.followup.send(embed=summary_embed, ephemeral=True, delete_after=60)
 
         except Exception as e:
             print(f'Error in end all watches: {e}')
@@ -2079,7 +2107,8 @@ class WatchCog(commands.Cog):
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
                 return
 
-            await interaction.response.defer(ephemeral=True)
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Switching Watch",
+                                                    ephemeral=True)
 
             if watch not in active_watches:
                 not_found_embed = discord.Embed(
@@ -2391,10 +2420,11 @@ class WatchCog(commands.Cog):
                 description=f'<:Denied:1426930694633816248> Error: {e}',
                 colour=discord.Colour(0xf24d4d)
             )
+            await interaction.delete_original_response()
             if not interaction.response.is_done():
-                await interaction.response.send_message(embed=error_embed, ephemeral=True)
+                await interaction.response.send_message(embed=error_embed, ephemeral=True, delete_after=60)
             else:
-                await interaction.followup.send(embed=error_embed, ephemeral=True)
+                await interaction.followup.send(embed=error_embed, ephemeral=True, delete_after=60)
             raise
 
     def normalize_switch_history(self, switch_history):
@@ -2457,7 +2487,8 @@ class WatchCog(commands.Cog):
                 await interaction.response.send_message(embed=permission_embed, ephemeral=True)
                 return
 
-            await interaction.response.defer(ephemeral=True)
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Sending Watch Low",
+                                                    ephemeral=True)
 
             if watch not in active_watches:
                 not_found_embed = discord.Embed(
@@ -2550,7 +2581,8 @@ class WatchCog(commands.Cog):
                 description=f'<:Accepted:1426930333789585509> Watch boosted successfully in {channel.mention}!',
                 colour=discord.Colour(0x2ecc71)
             )
-            await interaction.followup.send(embed=success_embed, ephemeral=True)
+            await interaction.delete_original_response()
+            await interaction.followup.send(embed=success_embed, ephemeral=True, delete_after=60)
 
         except Exception as e:
             print(f'Error boosting watch: {e}')
@@ -2613,7 +2645,8 @@ class WatchCog(commands.Cog):
                 await interaction.response.send_message(embed=permission_embed, ephemeral=True)
                 return
 
-            await interaction.response.defer(ephemeral=True)
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Sending Watch Embed",
+                                                    ephemeral=True)
 
             guild_config = get_guild_config(interaction.guild.id)
             watch_channel_id = guild_config.get('watch_channel_id')
@@ -2666,16 +2699,18 @@ class WatchCog(commands.Cog):
                 inline=False
             )
 
+            records_value = (
+                f"​\n**Total Watches:** {stats['total_watches']}\n"
+                f"**Longest Watch:** {stats['longest_duration']}\n"
+                f"**Most Attendees:** {stats['most_attendees']}\n"
+                f"**Most Common Watch Colour:** {stats['most_common_colour']}\n"
+                f"**Most Active Station:** {stats['most_active_station']}\n"
+                f"**Average Watch Duration:** {stats['average_duration']}"
+            )
+
             stats_embed.add_field(
                 name="🏆 | Watch Records",
-                value=(
-                    f"‎\n**Total Watches:** {stats['total_watches']}\n"
-                    f"**Longest Watch:** {stats['longest_duration']}\n"
-                    f"**Most Attendees:** {stats['most_attendees']}\n"
-                    f"**Most Common Watch Colour:** {stats['most_common_colour']}\n"
-                    f"**Most Active Station:** {stats['most_active_station']}\n"
-                    f"**Average Watch Duration:** {stats['average_duration']}"
-                ),
+                value=self.truncate_field_value(records_value),  # ✅ ADD THIS
                 inline=True
             )
 
@@ -2692,7 +2727,9 @@ class WatchCog(commands.Cog):
                 description=f'<:Accepted:1426930333789585509> Watch statistics embed created in {watch_channel.mention}!',
                 colour=discord.Colour(0x2ecc71)
             )
-            await interaction.followup.send(embed=success_embed, ephemeral=True)
+            await interaction.delete_original_response()
+            await interaction.followup.send(embed=success_embed, ephemeral=True, delete_after=60)
+
 
         except Exception as e:
             print(f'Error creating watch embed: {e}')

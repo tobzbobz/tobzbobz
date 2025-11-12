@@ -69,7 +69,12 @@ class ReactCog(commands.Cog):
                 await interaction.response.send_message(embed=no_permission_embed, ephemeral=True)
                 return
 
-            await interaction.response.defer(ephemeral=True)
+            if remove == 'yes':
+                await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Removing Reactions",
+                                                    ephemeral=True)
+            else:
+                await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Adding Reactions",
+                                                        ephemeral=True)
 
             # Determine target channel
             target_channel = channel if channel else interaction.channel
@@ -205,10 +210,13 @@ class ReactCog(commands.Cog):
                 description=f'Error <:Denied:1426930694633816248>: {e}',
                 colour=discord.Colour(0xf24d4d)
             )
+
+            await interaction.delete_original_response()
+
             if not interaction.response.is_done():
-                await interaction.response.send_message(embed=error_embed, ephemeral=True)
+                await interaction.response.send_message(embed=error_embed, ephemeral=True, delete_after=60)
             else:
-                await interaction.followup.send(embed=error_embed, ephemeral=True)
+                await interaction.followup.send(embed=error_embed, ephemeral=True, delete_after=60)
 
             raise
 

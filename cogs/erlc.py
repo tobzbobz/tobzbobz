@@ -629,7 +629,8 @@ class ERLC(commands.GroupCog, name="erlc"):
             modcalls_channel: Optional[discord.TextChannel] = None
     ):
         """Setup the ER:LC API configuration for this server."""
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Configuring API Integration",
+                                                ephemeral=True)
 
         success = await self.set_config(
             interaction.guild_id,
@@ -666,7 +667,8 @@ class ERLC(commands.GroupCog, name="erlc"):
         if modcalls_channel:
             embed.add_field(name="Mod Call Logs", value=modcalls_channel.mention, inline=True)
 
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.delete_original_response()
+        await interaction.followup.send(embed=embed, ephemeral=True, delete_after=60)
 
     @app_commands.command(name="logs", description="Configure automatic log monitoring")
     @app_commands.describe(
@@ -689,7 +691,8 @@ class ERLC(commands.GroupCog, name="erlc"):
             )
             return
 
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Configuring Automatic Logs",
+                                                ephemeral=True)
         await self.set_log_monitoring(interaction.guild_id, log_type, enabled)
 
         embed = discord.Embed(
@@ -703,7 +706,8 @@ class ERLC(commands.GroupCog, name="erlc"):
         if channel and enabled:
             embed.add_field(name="Channel", value=channel.mention, inline=True)
 
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.delete_original_response()
+        await interaction.followup.send(embed=embed, ephemeral=True, delete_after=60)
 
     @app_commands.command(name="interval", description="Change the log monitoring check interval")
     @app_commands.describe(
@@ -743,11 +747,13 @@ class ERLC(commands.GroupCog, name="erlc"):
             await interaction.response.send_message("<:Denied:1426930694633816248> Please setup the API first using `/erlc setup`", ephemeral=True)
             return
 
-        await interaction.response.defer()
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Getting Server Status",
+                                                ephemeral=True)
 
         data = await self.make_request('/v1/server', config['server_key'])
         embed = self.create_embed("Server Status", data)
 
+        await interaction.delete_original_response()
         await interaction.followup.send(embed=embed)
         await self.send_to_channel(interaction.guild_id, embed)
 
@@ -772,7 +778,8 @@ class ERLC(commands.GroupCog, name="erlc"):
             await interaction.response.send_message("<:Denied:1426930694633816248> Please setup the API first using `/erlc setup`", ephemeral=True)
             return
 
-        await interaction.response.defer()
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Getting Players",
+                                                ephemeral=True)
 
         data = await self.make_request('/v1/server/players', config['server_key'])
 
@@ -829,6 +836,7 @@ class ERLC(commands.GroupCog, name="erlc"):
         else:
             embed = self.create_embed("Current Players", data)
 
+        await interaction.delete_original_response()
         await interaction.followup.send(embed=embed)
         await self.send_to_channel(interaction.guild_id, embed)
 
@@ -851,7 +859,8 @@ class ERLC(commands.GroupCog, name="erlc"):
             await interaction.response.send_message("<:Denied:1426930694633816248> Please setup the API first using `/erlc setup`", ephemeral=True)
             return
 
-        await interaction.response.defer()
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Getting Vehicles",
+                                                ephemeral=True)
 
         data = await self.make_request('/v1/server/vehicles', config['server_key'])
 
@@ -907,6 +916,7 @@ class ERLC(commands.GroupCog, name="erlc"):
         else:
             embed = self.create_embed("Server Vehicles", data)
 
+        await interaction.delete_original_response()
         await interaction.followup.send(embed=embed)
         await self.send_to_channel(interaction.guild_id, embed)
 
@@ -918,7 +928,8 @@ class ERLC(commands.GroupCog, name="erlc"):
             await interaction.response.send_message("<:Denied:1426930694633816248> Please setup the API first using `/erlc setup`", ephemeral=True)
             return
 
-        await interaction.response.defer()
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Getting Staff",
+                                                ephemeral=True)
 
         data = await self.make_request('/v1/server/staff', config['server_key'])
 
@@ -980,6 +991,7 @@ class ERLC(commands.GroupCog, name="erlc"):
         else:
             embed = self.create_embed("Server Staff", data)
 
+        await interaction.delete_original_response()
         await interaction.followup.send(embed=embed)
         await self.send_to_channel(interaction.guild_id, embed)
 
@@ -994,7 +1006,8 @@ class ERLC(commands.GroupCog, name="erlc"):
             await interaction.response.send_message("<:Denied:1426930694633816248> Please setup the API first using `/erlc setup`", ephemeral=True)
             return
 
-        await interaction.response.defer()
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Getting Bans",
+                                                ephemeral=True)
 
         data = await self.make_request('/v1/server/bans', config['server_key'])
 
@@ -1122,6 +1135,7 @@ class ERLC(commands.GroupCog, name="erlc"):
         else:
             embed = self.create_embed("Server Bans", data)
 
+        await interaction.delete_original_response()
         await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="command", description="Execute a command on the server")
@@ -1134,7 +1148,8 @@ class ERLC(commands.GroupCog, name="erlc"):
             await interaction.response.send_message("<:Denied:1426930694633816248> Please setup the API first using `/erlc setup`", ephemeral=True)
             return
 
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Executing Command",
+                                                ephemeral=True)
 
         data = await self.make_request(
             '/v1/server/command',
@@ -1156,7 +1171,8 @@ class ERLC(commands.GroupCog, name="erlc"):
                 color=discord.Color.red()
             )
 
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.delete_original_response()
+        await interaction.followup.send(embed=embed, ephemeral=True, delete_after=60)
 
 
 async def setup(bot):

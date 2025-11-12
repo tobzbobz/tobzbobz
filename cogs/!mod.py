@@ -1196,6 +1196,9 @@ class ModCog(commands.Cog):
         except:
             pass
 
+        loading_msg = await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Scanning ???",
+                                                ephemeral=True)
+
         if limit is None:
             embed = discord.Embed(
                 title="Moderation Logs - Help Menu",
@@ -1285,6 +1288,7 @@ class ModCog(commands.Cog):
             )
 
         embed.set_footer(text=f"Showing logs {start_index + 1}-{end_index} of {total_logs}{user_filter_text}")
+        await loading_msg.delete()
         await ctx.send(embed=embed, delete_after=300)
 
     @commands.command(name="deletelog")

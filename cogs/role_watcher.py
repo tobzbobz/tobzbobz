@@ -108,6 +108,71 @@ class RoleWatcherCog(commands.Cog):
         """Called when the cog is loaded"""
         await load_config()
 
+    def parse_mentions(self, text: str, guild: discord.Guild, type: str = "user") -> list:
+        """
+        Parse multiple user or role mentions/IDs from a string
+
+        Args:
+            text: String containing mentions or IDs (space-separated)
+            guild: Discord guild to lookup members/roles
+            type: "user" or "role"
+
+        Returns:
+            List of Member objects or Role objects
+        """
+        if not text:
+            return []
+
+        items = []
+        parts = text.split()
+
+        for part in parts:
+            item = None
+
+            if type == "user":
+                # Try as mention
+                if part.startswith('<@') and part.endswith('>'):
+                    user_id = part.strip('<@!>')
+                    try:
+                        item = guild.get_member(int(user_id))
+                    except ValueError:
+                        pass
+
+                # Try as ID
+                if not item:
+                    try:
+                        item = guild.get_member(int(part))
+                    except ValueError:
+                        pass
+
+            elif type == "role":
+                # Try as mention
+                if part.startswith('<@&') and part.endswith('>'):
+                    role_id = part.strip('<@&>')
+                    try:
+                        item = guild.get_role(int(role_id))
+                    except ValueError:
+                        pass
+
+                # Try as ID
+                if not item:
+                    try:
+                        item = guild.get_role(int(part))
+                    except ValueError:
+                        pass
+
+                # Try as name
+                if not item:
+                    item = discord.utils.find(
+                        lambda r: r.name.lower() == part.lower(),
+                        guild.roles
+                    )
+
+            if item and item not in items:
+                items.append(item)
+
+        return items
+
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
         """Monitor role changes and alert if unauthorized users give monitored roles"""
@@ -287,8 +352,8 @@ class RoleWatcherCog(commands.Cog):
     @app_commands.command(name="role-monitor", description="Configure role monitoring")
     @app_commands.describe(
         action="Action to perform",
-        role="Role to monitor/configure",
-        user="User to add/remove",
+        roles="Role(s) to monitor/configure",
+        users="User(s) to add/remove",
         channel="Channel for alerts (or type 'CURRENT' for this channel)"
     )
     @is_owner()
@@ -296,161 +361,176 @@ class RoleWatcherCog(commands.Cog):
             self,
             interaction: discord.Interaction,
             action: str,
-            role: Optional[discord.Role] = None,
-            user: Optional[discord.Member] = None,
+            roles: Optional[str] = None,
+            users: Optional[str] = None,
             channel: Optional[Union[discord.TextChannel, discord.VoiceChannel, discord.StageChannel]] = None
     ):
         """Configure role monitoring system"""
 
+
+        role_list = self.parse_mentions(roles, interaction.guild, "role") if roles else []
+        user_list = self.parse_mentions(users, interaction.guild, "user") if users else []
+
         if action == "list":
-            # List all monitored roles and their configurations
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Getting Monitored Roles",
+                                                    ephemeral=True)
+
+            # List all monitored roles
             if not MONITORED_ROLES:
                 await interaction.response.send_message(
-                    "No roles are currently being monitored.",
+                    " <Denied:1426930694633816248> No roles are currently being monitored.",
                     ephemeral=True
                 )
                 return
 
             embed = discord.Embed(
-                title="Role Monitor Configuration",
+                title="<:Accepted:1426930333789585509> Monitored Roles",
                 color=discord.Color.blue(),
                 timestamp=datetime.now()
             )
 
             for role_id, config in MONITORED_ROLES.items():
-                role_obj = interaction.guild.get_role(role_id)
-                role_name = role_obj.name if role_obj else f"Unknown Role (ID: {role_id})"
+                role = interaction.guild.get_role(role_id)
+                if not role:
+                    continue
 
-                # Whitelist users
-                whitelist_users = []
+                # Get whitelist users
+                whitelist_mentions = []
                 for user_id in config['whitelist']:
-                    user_obj = interaction.guild.get_member(user_id)
-                    if user_obj:
-                        whitelist_users.append(f"{user_obj.mention}")
+                    user = interaction.guild.get_member(user_id)
+                    if user:
+                        whitelist_mentions.append(user.mention)
                     else:
-                        whitelist_users.append(f"<@{user_id}>")
+                        whitelist_mentions.append(f"<@{user_id}>")
 
-                # Channel info
-                role_channel_id = config.get('channel_id')
-                if role_channel_id:
-                    channel_info = f"<#{role_channel_id}>"
-                else:
-                    channel_info = "No channel set (alerts disabled)"
+                # Get alert channel
+                channel = interaction.guild.get_channel(config.get('channel_id')) if config.get('channel_id') else None
+                channel_info = channel.mention if channel else "Not set"
 
-                # Ping users info
+                # Get ping users
                 ping_users = config.get('ping_users')
                 if ping_users:
-                    ping_info = ", ".join([f"<@{uid}>" for uid in ping_users])
+                    ping_mentions = []
+                    for user_id in ping_users:
+                        user = interaction.guild.get_member(user_id)
+                        if user:
+                            ping_mentions.append(user.mention)
+                        else:
+                            ping_mentions.append(f"<@{user_id}>")
+                    ping_info = ", ".join(ping_mentions)
                 else:
                     ping_info = "Whitelist users"
 
                 field_value = (
-                    f"**Authorized:** {', '.join(whitelist_users) if whitelist_users else 'None'}\n"
+                    f"**Authorized Users:** {', '.join(whitelist_mentions) if whitelist_mentions else 'None'}\n"
                     f"**Alert Channel:** {channel_info}\n"
                     f"**Ping on Alert:** {ping_info}"
                 )
 
                 embed.add_field(
-                    name=f"🎭 {role_name}",
+                    name=f"{role.mention} ({role.name})",
                     value=field_value,
                     inline=False
                 )
 
+            embed.set_footer(text=f"Total: {len(MONITORED_ROLES)} monitored role(s)")
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
         elif action == "toggle":
-            if not role or not user:
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Toggling User(s)",
+                                                    ephemeral=True)
+            if not role_list or not user_list:
                 await interaction.response.send_message(
-                    "<:Denied:1426930694633816248> Please specify both a role and user to toggle.",
+                    "<:Denied:1426930694633816248> Please specify both role(s) and user(s) to toggle.",
                     ephemeral=True
                 )
                 return
 
-            # Create monitoring entry if doesn't exist
-            if role.id not in MONITORED_ROLES:
-                MONITORED_ROLES[role.id] = {
-                    'whitelist': [],
-                    'channel_id': None,
-                    'ping_users': None
-                }
+            results = []
 
-            # Toggle logic
-            if user.id in MONITORED_ROLES[role.id]['whitelist']:
-                # Remove user
-                MONITORED_ROLES[role.id]['whitelist'].remove(user.id)
+            for role in role_list:
+                # Create monitoring entry if doesn't exist
+                if role.id not in MONITORED_ROLES:
+                    MONITORED_ROLES[role.id] = {
+                        'whitelist': [],
+                        'channel_id': None,
+                        'ping_users': None
+                    }
 
-                # Remove role from monitoring if no users left
-                if not MONITORED_ROLES[role.id]['whitelist']:
-                    del MONITORED_ROLES[role.id]
-                    await save_config()
-                    await interaction.response.send_message(
-                        f"<:Accepted:1426930333789585509> Removed {user.mention} from {role.mention}. Role is no longer monitored (no authorized users).",
-                        ephemeral=True
-                    )
-                else:
-                    await save_config()
-                    await interaction.response.send_message(
-                        f"<:Accepted:1426930333789585509> Removed {user.mention} from authorized users for {role.mention}.",
-                        ephemeral=True
-                    )
-            else:
-                # Add user
-                MONITORED_ROLES[role.id]['whitelist'].append(user.id)
-                await save_config()
-                await interaction.response.send_message(
-                    f"<:Accepted:1426930333789585509> Added {user.mention} to authorized users for {role.mention}.",
-                    ephemeral=True
-                )
+                for user in user_list:
+                    # Toggle logic
+                    if user.id in MONITORED_ROLES[role.id]['whitelist']:
+                        # Remove user
+                        MONITORED_ROLES[role.id]['whitelist'].remove(user.id)
+                        results.append(f"❌ Removed {user.mention} from {role.mention}")
+
+                        # Remove role from monitoring if no users left
+                        if not MONITORED_ROLES[role.id]['whitelist']:
+                            del MONITORED_ROLES[role.id]
+                            results.append(f"⚠️ {role.mention} no longer monitored (no authorized users)")
+                    else:
+                        # Add user
+                        MONITORED_ROLES[role.id]['whitelist'].append(user.id)
+                        results.append(f"✅ Added {user.mention} to {role.mention}")
+
+            await save_config()
+
+            # Send summary
+            embed = discord.Embed(
+                title="Authorization Changes",
+                description="\n".join(results),
+                color=discord.Color.green(),
+                timestamp=datetime.now()
+            )
+            embed.set_footer(text=f"Modified {len(role_list)} role(s) for {len(user_list)} user(s)")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
 
         elif action == "set-role-channel":
-            if not role:
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Setting Channel",
+                                                    ephemeral=True)
+            if not role_list:
                 await interaction.response.send_message(
-                    "<:Denied:1426930694633816248> Please specify a role to configure.",
-                    ephemeral=True
-                )
-                return
-
-            if role.id not in MONITORED_ROLES:
-                await interaction.response.send_message(
-                    f"<:Denied:1426930694633816248> {role.mention} is not being monitored. Add authorized users first.",
+                    "<:Denied:1426930694633816248> Please specify role(s) to configure.",
                     ephemeral=True
                 )
                 return
 
             if not channel:
                 await interaction.response.send_message(
-                    "<:Denied:1426930694633816248> Please specify a channel for alerts (or type 'CURRENT').",
+                    "<:Denied:1426930694633816248> Please specify a channel for alerts.",
                     ephemeral=True
                 )
                 return
 
-            MONITORED_ROLES[role.id]['channel_id'] = channel.id
+            results = []
+            for role in role_list:
+                if role.id not in MONITORED_ROLES:
+                    results.append(f"❌ {role.mention} is not being monitored")
+                    continue
+
+                MONITORED_ROLES[role.id]['channel_id'] = channel.id
+                results.append(f"✅ Set alert channel for {role.mention}")
+
             await save_config()
 
             await interaction.response.send_message(
-                f"<:Accepted:1426930333789585509> Set alert channel for {role.mention} to {channel.mention}.",
+                f"**Updated {len([r for r in results if '✅' in r])} role(s):**\n" + "\n".join(results),
                 ephemeral=True
             )
 
         elif action == "set-role-channel-current":
-            if not role:
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Setting Channel",
+                                                    ephemeral=True)
+
+            if not role_list:
                 await interaction.response.send_message(
-                    "<:Denied:1426930694633816248> Please specify a role to configure.",
+                    "<:Denied:1426930694633816248> Please specify role(s) to configure.",
                     ephemeral=True
                 )
                 return
 
-            if role.id not in MONITORED_ROLES:
-                await interaction.response.send_message(
-                    f"<:Denied:1426930694633816248> {role.mention} is not being monitored. Add authorized users first.",
-                    ephemeral=True
-                )
-                return
-
-            # Use the current channel
             current_channel = interaction.channel
 
-            # Verify it's a text-based channel
             if not isinstance(current_channel, (discord.TextChannel, discord.VoiceChannel, discord.StageChannel)):
                 await interaction.response.send_message(
                     "<:Denied:1426930694633816248> This channel cannot receive messages.",
@@ -458,115 +538,130 @@ class RoleWatcherCog(commands.Cog):
                 )
                 return
 
-            MONITORED_ROLES[role.id]['channel_id'] = current_channel.id
+            results = []
+            for role in role_list:
+                if role.id not in MONITORED_ROLES:
+                    results.append(f"❌ {role.mention} is not being monitored")
+                    continue
+
+                MONITORED_ROLES[role.id]['channel_id'] = current_channel.id
+                results.append(f"✅ {role.mention}")
+
             await save_config()
 
             await interaction.response.send_message(
-                f"<:Accepted:1426930333789585509> Set alert channel for {role.mention} to this channel ({current_channel.mention}).",
+                f"**Set alert channel to {current_channel.mention} for:**\n" + "\n".join(results),
                 ephemeral=True
             )
 
         elif action == "toggle-ping-user":
-            if not role:
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Toggling User(s)",
+                                                    ephemeral=True)
+
+            if not role_list or not user_list:
                 await interaction.response.send_message(
-                    "<:Denied:1426930694633816248> Please specify a role to configure.",
+                    "<:Denied:1426930694633816248> Please specify both role(s) and user(s).",
                     ephemeral=True
                 )
                 return
 
-            if role.id not in MONITORED_ROLES:
-                await interaction.response.send_message(
-                    f"<:Denied:1426930694633816248> {role.mention} is not being monitored. Add authorized users first.",
-                    ephemeral=True
-                )
-                return
+            results = []
 
-            if not user:
-                await interaction.response.send_message(
-                    "<:Denied:1426930694633816248> Please specify a user to toggle in the ping list.",
-                    ephemeral=True
-                )
-                return
+            for role in role_list:
+                if role.id not in MONITORED_ROLES:
+                    results.append(f"❌ {role.mention} is not being monitored")
+                    continue
 
-            # Initialize ping_users list if it doesn't exist
-            if not MONITORED_ROLES[role.id].get('ping_users'):
-                MONITORED_ROLES[role.id]['ping_users'] = []
+                # Initialize ping_users list if it doesn't exist
+                if not MONITORED_ROLES[role.id].get('ping_users'):
+                    MONITORED_ROLES[role.id]['ping_users'] = []
 
-            # Toggle logic
-            if user.id in MONITORED_ROLES[role.id]['ping_users']:
-                # Remove from ping list
-                MONITORED_ROLES[role.id]['ping_users'].remove(user.id)
+                for user in user_list:
+                    if user.id in MONITORED_ROLES[role.id]['ping_users']:
+                        MONITORED_ROLES[role.id]['ping_users'].remove(user.id)
+                        results.append(f"🔕 Removed {user.mention} from {role.mention} ping list")
+                    else:
+                        MONITORED_ROLES[role.id]['ping_users'].append(user.id)
+                        results.append(f"🔔 Added {user.mention} to {role.mention} ping list")
+
+                # Clean up empty ping list
                 if not MONITORED_ROLES[role.id]['ping_users']:
                     MONITORED_ROLES[role.id]['ping_users'] = None
-                await save_config()
-                await interaction.response.send_message(
-                    f"<:Accepted:1426930333789585509> Removed {user.mention} from ping list for {role.mention}.",
-                    ephemeral=True
-                )
-            else:
-                # Add to ping list
-                MONITORED_ROLES[role.id]['ping_users'].append(user.id)
-                await save_config()
-                await interaction.response.send_message(
-                    f"<:Accepted:1426930333789585509> Added {user.mention} to ping list for {role.mention} alerts.",
-                    ephemeral=True
-                )
+
+            await save_config()
+
+            embed = discord.Embed(
+                title="Ping List Changes",
+                description="\n".join(results),
+                color=discord.Color.blue(),
+                timestamp=datetime.now()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
 
         elif action == "clear-ping-users":
-            if not role:
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Clearing Users",
+                                                    ephemeral=True)
+
+            if not role_list:
                 await interaction.response.send_message(
-                    "<:Denied:1426930694633816248> Please specify a role.",
+                    "<:Denied:1426930694633816248> Please specify role(s).",
                     ephemeral=True
                 )
                 return
 
-            if role.id not in MONITORED_ROLES:
-                await interaction.response.send_message(
-                    f"<:Denied:1426930694633816248> {role.mention} is not being monitored.",
-                    ephemeral=True
-                )
-                return
+            results = []
+            for role in role_list:
+                if role.id not in MONITORED_ROLES:
+                    results.append(f"❌ {role.mention} is not being monitored")
+                    continue
 
-            MONITORED_ROLES[role.id]['ping_users'] = None
+                MONITORED_ROLES[role.id]['ping_users'] = None
+                results.append(f"✅ Cleared ping list for {role.mention}")
+
             await save_config()
 
             await interaction.response.send_message(
-                f"<:Accepted:1426930333789585509> Cleared ping list for {role.mention}. Will now ping whitelist users on alerts.",
+                "\n".join(results) + "\n\n*Will now ping whitelist users on alerts.*",
                 ephemeral=True
             )
 
         elif action == "toggle-monitoring":
-            if not role:
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Toggling Monitoring",
+                                                    ephemeral=True)
+
+            if not role_list:
                 await interaction.response.send_message(
-                    "<:Denied:1426930694633816248> Please specify a role to toggle monitoring.",
+                    "<:Denied:1426930694633816248> Please specify role(s) to toggle.",
                     ephemeral=True
                 )
                 return
 
-            if role.id in MONITORED_ROLES:
-                # Stop monitoring
-                del MONITORED_ROLES[role.id]
-                await save_config()
-                await interaction.response.send_message(
-                    f"<:Accepted:1426930333789585509> Stopped monitoring {role.mention}.",
-                    ephemeral=True
-                )
-            else:
-                # Start monitoring
-                MONITORED_ROLES[role.id] = {
-                    'whitelist': [],
-                    'channel_id': None,
-                    'ping_users': None
-                }
-                await save_config()
-                await interaction.response.send_message(
-                    f"<:Accepted:1426930333789585509> Started monitoring {role.mention}. Remember to add authorized users and set an alert channel!",
-                    ephemeral=True
-                )
+            results = []
+            for role in role_list:
+                if role.id in MONITORED_ROLES:
+                    del MONITORED_ROLES[role.id]
+                    results.append(f"🔴 Stopped monitoring {role.mention}")
+                else:
+                    MONITORED_ROLES[role.id] = {
+                        'whitelist': [],
+                        'channel_id': None,
+                        'ping_users': None
+                    }
+                    results.append(f"🟢 Started monitoring {role.mention}")
+
+            await save_config()
+
+            await interaction.delete_original_response()
+
+            await interaction.response.send_message(
+                "\n".join(results),
+                ephemeral=True,
+                delete_after=60
+            )
 
         else:
             await interaction.response.send_message(
-                "<:Denied:1426930694633816248> Invalid action. Use autocomplete to see available actions.",
+                "<:Denied:1426930694633816248> Invalid action.",
                 ephemeral=True
             )
 

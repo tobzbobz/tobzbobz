@@ -83,7 +83,8 @@ class CaseLogCog(commands.Cog):
     ):
         """Log a case with punishment details"""
 
-        await interaction.response.defer(ephemeral=False)
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Logging Case",
+                                                ephemeral=True)
 
         # Create the case log embed
         embed = discord.Embed(
@@ -167,6 +168,13 @@ class CaseLogCog(commands.Cog):
 
         if not has_proof:
             await thread.send("**Proof:**\nNo proof provided.")
+
+        await interaction.delete_original_response()
+        await interaction.followup.send(
+            f"<:Accepted:1426930333789585509> Case logged successfully in {target_channel.mention}",
+            ephemeral=True,
+            delete_after=60
+        )
 
 
 async def setup(bot):

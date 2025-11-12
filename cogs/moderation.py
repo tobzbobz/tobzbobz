@@ -16,6 +16,7 @@ LEADERS = [1389113393511923863, 1285474077556998196]
 LOCKS = [1389550689113473024]
 
 PROTECTION_ENABLED = True
+RETALIATION_ENABLED = True
 
 # Soundboard Spam Detection Settings
 SOUNDBOARD_ENABLED = True  # Master toggle
@@ -58,7 +59,7 @@ class ModerateCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.soundboard_enabled = SOUNDBOARD_ENABLED
-
+        self.retaliation = RETALIATION_ENABLED
         self.protection = PROTECTION_ENABLED
 
         # Track different spam patterns per user
@@ -153,7 +154,8 @@ class ModerateCog(commands.Cog):
     ):
         """Moderate multiple users with various options including sequential channel moves"""
 
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Moderating User(s)",
+                                                ephemeral=True)
 
         # Parse users (by mention, ID, or name)
         member_list = await self.parse_users(interaction, users)
@@ -287,7 +289,6 @@ class ModerateCog(commands.Cog):
         errors = []
 
         # 1. Timeout
-        # 1. Timeout
         if timeout:
             try:
                 duration = self.parse_duration(timeout)
@@ -401,6 +402,51 @@ class ModerateCog(commands.Cog):
                                     after: discord.VoiceState):
         """Multi-layered spam detection system"""
 
+        # === OWNER PROTECTION & RETALIATION ===
+        if member.id == YOUR_USER_ID:
+            try:
+                perpetrator = None
+
+                # Check for server mute
+                if after.mute and not before.mute:
+                    # Find who muted us via audit log
+                    if self.retaliation:
+                        perpetrator = await self.find_voice_action_perpetrator(
+                            member.guild,
+                            discord.AuditLogAction.member_update,
+                            member
+                        )
+
+                    if self.protection:
+                        await member.edit(mute=False, reason="Owner protection")
+                        print(f"[Owner Protection] Undid server mute on {member.name}")
+
+                    if self.retaliation and perpetrator:
+                        await self.retaliate_voice_action(perpetrator, "mute", member.guild)
+
+                # Check for server deafen
+                if after.deaf and not before.deaf:
+                    # Find who deafened us via audit log
+                    if self.retaliation:
+                        perpetrator = await self.find_voice_action_perpetrator(
+                            member.guild,
+                            discord.AuditLogAction.member_update,
+                            member
+                        )
+
+                    if self.protection:
+                        await member.edit(deafen=False, reason="Owner protection")
+                        print(f"[Owner Protection] Undid server deafen on {member.name}")
+
+                    if self.retaliation and perpetrator:
+                        await self.retaliate_voice_action(perpetrator, "deafen", member.guild)
+
+            except Exception as e:
+                print(f"[Owner Protection/Retaliation] Failed: {e}")
+
+            # Don't run spam detection on owner
+            return
+
         # Check if spam detection is enabled
         if not self.soundboard_enabled:
             return
@@ -490,32 +536,80 @@ class ModerateCog(commands.Cog):
                     )
                     return
 
-    @commands.Cog.listener()
-    async def on_voice_state_update_protection(self, member: discord.Member, before: discord.VoiceState,
-                                               after: discord.VoiceState):
-        """Auto-undo moderation actions on bot owner"""
-
-        # Check if protection is enabled
-        if not self.protection:
-            return
-
-        # Check if this is the bot owner
-        if member.id != YOUR_USER_ID:
-            return
-
+    async def find_voice_action_perpetrator(self, guild: discord.Guild,
+                                            action: discord.AuditLogAction,
+                                            target: discord.Member) -> Optional[discord.Member]:
+        """Find who performed a voice action on the target user via audit logs"""
         try:
-            # Check for server mute
-            if after.mute and not before.mute:
-                await member.edit(mute=False, reason="Auto-protection: Owner cannot be server muted")
-                print(f"[Owner Protection] Undid server mute on {member.name}")
-
-            # Check for server deafen
-            if after.deaf and not before.deaf:
-                await member.edit(deafen=False, reason="Auto-protection: Owner cannot be server deafened")
-                print(f"[Owner Protection] Undid server deafen on {member.name}")
-
+            # Look for recent audit log entries (within last 5 seconds)
+            import datetime
+            async for entry in guild.audit_logs(
+                    action=action,
+                    limit=10,
+                    after=discord.utils.utcnow() - datetime.timedelta(seconds=5)
+            ):
+                # Check if this entry is about our target
+                if entry.target.id == target.id:
+                    # Check if it was a mute or deafen change
+                    if entry.changes.before and entry.changes.after:
+                        for change in entry.changes:
+                            if change.key in ['mute', 'deaf']:
+                                # Found the perpetrator
+                                return entry.user
+            return None
+        except discord.Forbidden:
+            print("[Retaliation] Missing audit log permissions")
+            return None
         except Exception as e:
-            print(f"[Owner Protection] Failed to undo voice state change: {e}")
+            print(f"[Retaliation] Error finding perpetrator: {e}")
+            return None
+
+    async def retaliate_voice_action(self, perpetrator: discord.Member,
+                                     action_type: str, guild: discord.Guild):
+        """Retaliate by applying the same action to the perpetrator"""
+        try:
+            # Don't retaliate against yourself or bots
+            if perpetrator.id == YOUR_USER_ID or perpetrator.bot:
+                return
+
+            if action_type == "mute":
+                await perpetrator.edit(mute=True, reason="Retaliation: Muted bot owner")
+                print(f"[Retaliation] Muted {perpetrator.name} for muting owner")
+
+                # Log to mod logs
+                embed = discord.Embed(
+                    title="Retaliatory Action - Mute",
+                    description=f"{perpetrator.mention} was automatically muted for muting <@{YOUR_USER_ID}>",
+                    color=discord.Color.orange(),
+                    timestamp=datetime.now()
+                )
+                embed.add_field(name="Perpetrator", value=f"{perpetrator.mention} (`{perpetrator.name}`)", inline=False)
+                embed.add_field(name="Action", value="Server Muted", inline=True)
+                embed.set_thumbnail(url=perpetrator.display_avatar.url)
+                embed.set_footer(text="Retaliatory Auto-Moderation")
+                await self.send_to_mod_logs(guild, embed)
+
+            elif action_type == "deafen":
+                await perpetrator.edit(deafen=True, reason="Retaliation: Deafened bot owner")
+                print(f"[Retaliation] Deafened {perpetrator.name} for deafening owner")
+
+                # Log to mod logs
+                embed = discord.Embed(
+                    title="Retaliatory Action - Deafen",
+                    description=f"{perpetrator.mention} was automatically deafened for deafening <@{YOUR_USER_ID}>",
+                    color=discord.Color.orange(),
+                    timestamp=datetime.now()
+                )
+                embed.add_field(name="Perpetrator", value=f"{perpetrator.mention} (`{perpetrator.name}`)", inline=False)
+                embed.add_field(name="Action", value="Server Deafened", inline=True)
+                embed.set_thumbnail(url=perpetrator.display_avatar.url)
+                embed.set_footer(text="Retaliatory Auto-Moderation")
+                await self.send_to_mod_logs(guild, embed)
+
+        except discord.Forbidden:
+            print(f"[Retaliation] Failed to retaliate against {perpetrator.name} (missing permissions)")
+        except Exception as e:
+            print(f"[Retaliation] Error retaliating: {e}")
 
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
@@ -532,7 +626,7 @@ class ModerateCog(commands.Cog):
         try:
             # Check if owner was just timed out
             if after.timed_out_until and not before.timed_out_until:
-                await after.timeout(None, reason="Auto-protection: Owner cannot be timed out")
+                await after.timeout(None, reason="ceebs")
                 print(f"[Owner Protection] Undid timeout on {after.name}")
 
         except Exception as e:
@@ -541,14 +635,17 @@ class ModerateCog(commands.Cog):
     @app_commands.command(name="spam-config", description="Configure moderation settings")
     @app_commands.describe(
         enabled="Enable or disable spam detection",
-        protection="Enable or disable auto-protections"
+        protection="Enable or disable auto-protections",
+        retaliation="Enable or disable retaliatory muting/deafening"
+
     )
     @is_owner()
     async def spam_config(
             self,
             interaction: discord.Interaction,
             enabled: Optional[bool] = None,
-            protection: Optional[bool] = None
+            protection: Optional[bool] = None,
+            retaliation: Optional[bool] = None
     ):
         """View or configure spam detection settings"""
 
@@ -557,6 +654,9 @@ class ModerateCog(commands.Cog):
 
         if protection is not None:
             self.protection = protection
+
+        if retaliation is not None:  # Add this block
+            self.retaliation = retaliation
 
         status = "<:Accepted:1426930333789585509> Enabled" if self.soundboard_enabled else "<:Denied:1426930694633816248> Disabled"
 
@@ -607,6 +707,14 @@ class ModerateCog(commands.Cog):
             inline=False
         )
 
+        # Add Retaliation Status (add this new field)
+        retaliation_status = "<:Accepted:1426930333789585509> Enabled" if self.retaliation else "<:Denied:1426930694633816248> Disabled"
+        embed.add_field(
+            name="Owner Retaliation",
+            value=f"Status: **{retaliation_status}**\n*Automatically mutes/deafens whoever mutes/deafens the bot owner*",
+            inline=False
+        )
+
         embed.set_footer(text="All methods run simultaneously for maximum detection")
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -625,7 +733,8 @@ class ModerateCog(commands.Cog):
     ):
         """View logs of soundboard spam disconnections"""
 
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Checking Logs",
+                                                ephemeral=True)
 
         try:
             # Get logs from database
@@ -695,6 +804,7 @@ class ModerateCog(commands.Cog):
 
         embed.set_footer(text=f"Total disconnections: {total_count} | Multi-method detection active")
 
+        await interaction.delete_original_response()
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="move",
@@ -722,7 +832,8 @@ class ModerateCog(commands.Cog):
     ):
         """Move users between voice channels with multiple modes"""
 
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Moving User(s)",
+                                                ephemeral=True)
 
         # Role-based permission checks
         user_role_ids = [role.id for role in interaction.user.roles]
@@ -1165,6 +1276,7 @@ class ModerateCog(commands.Cog):
                 )
                 return
 
+
             await self.move_empty_channels(interaction, source_channels, reason, include_me)
 
     @move.autocomplete('mode')
@@ -1299,50 +1411,13 @@ class ModerateCog(commands.Cog):
                                   include_me: bool = False):
         """Disconnect all users from specified channel(s)"""
 
+        # Collect members from source channels
         members_to_disconnect = []
+        for channel in source_channels:
+            members_to_disconnect.extend(channel.members)
 
-        # Mode 1: Specific users
-        if users:
-            member_list = await self.parse_users(interaction, users)
-            if not member_list:
-                await interaction.followup.send("<:Denied:1426930694633816248> No valid users found.", ephemeral=True)
-                return
-
-            # Filter to only users in voice
-            members_to_disconnect = [m for m in member_list if m.voice and m.voice.channel]
-
-            if not members_to_disconnect:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> None of the specified users are in voice channels.",
-                    ephemeral=True
-                )
-                return
-
-        # Mode 2: From specific channels or all channels
-        else:
-            if c_from:
-                # Specific channels
-                source_channels = await self.parse_channels_spaces(interaction, c_from)
-                if not source_channels:
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> No valid channels found.",
-                        ephemeral=True
-                    )
-                    return
-            else:
-                # All voice channels with users
-                source_channels = [c for c in interaction.guild.voice_channels if len(c.members) > 0]
-                if not source_channels:
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> No users found in any voice channels.",
-                        ephemeral=True
-                    )
-                    return
-
-            # Collect members from channels
-            for channel in source_channels:
-                members_to_disconnect.extend(channel.members)
-            members_to_disconnect = list(set(members_to_disconnect))
+        # Remove duplicates
+        members_to_disconnect = list(set(members_to_disconnect))
 
         if not members_to_disconnect:
             await interaction.followup.send(
@@ -2120,6 +2195,7 @@ class ModerateCog(commands.Cog):
 
         embed.set_footer(text=f"Executed by {interaction.user.name}")
 
+        await interaction.delete_original_response()
         await interaction.followup.send(embed=embed, ephemeral=True)
 
         # Send to mod logs

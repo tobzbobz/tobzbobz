@@ -344,6 +344,7 @@ class WeeklyShiftManager:
                         emoji = "<:Accepted:1426930333789585509>" if completed else "<:Denied:1426930694633816248>"
                         status = f"{emoji} {member.mention} - {self.cog.format_duration(timedelta(seconds=active_seconds))} / {self.cog.format_duration(timedelta(seconds=max_quota))} **({percentage:.1f}% - RA 50% Required)**"
                     else:
+                        bypass_type = None
                         percentage = (active_seconds / max_quota * 100) if max_quota > 0 else 0
                         completed = percentage >= 100
                         emoji = "<:Accepted:1426930333789585509>" if completed else "<:Denied:1426930694633816248>"
@@ -1129,6 +1130,7 @@ class ShiftManagementCog(commands.Cog):
             percentage = (active_seconds / modified_quota) * 100 if modified_quota > 0 else 0
             completed = percentage >= 100
         else:
+            bypass_type = None
             percentage = (active_seconds / quota_seconds) * 100
             completed = percentage >= 100
 
@@ -1240,7 +1242,8 @@ class ShiftManagementCog(commands.Cog):
     @shift_group.command(name="test_weekly_reset", description="[ADMIN] Test weekly reset (dev only - dry run)")
     async def test_weekly_reset(self, interaction: discord.Interaction):
         """Test command to simulate weekly reset WITHOUT making permanent changes"""
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Testing",
+                                                ephemeral=True)
 
         if not self.has_super_admin_permission(interaction.user):
             await interaction.followup.send(
@@ -1331,6 +1334,7 @@ class ShiftManagementCog(commands.Cog):
             embed.set_footer(text="<:Warn:1437771973970104471> DRY RUN - No actual changes made to database")
             embed.timestamp = datetime.utcnow()
 
+            await interaction.delete_original_response()
             await interaction.followup.send(embed=embed, ephemeral=True)
 
         except Exception as e:
@@ -1366,10 +1370,12 @@ class ShiftManagementCog(commands.Cog):
             minutes: int = 0,
             type: app_commands.Choice[str] = None
     ):
-        await interaction.response.defer(ephemeral=True)
 
         try:
             if action == "view":
+                await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Getting your Quota",
+                                                        ephemeral=True)
+
                 # View user's own quota
                 quota_info = await self.get_quota_info(interaction.user, type.value if type else None)
 
@@ -1416,6 +1422,7 @@ class ShiftManagementCog(commands.Cog):
                 await interaction.followup.send(embed=embed, ephemeral=True)
 
             elif action == "set":
+
                 # Check admin permission
                 if not any(role_check.id in QUOTA_ADMIN_ROLES for role_check in interaction.user.roles):
                     await interaction.followup.send(
@@ -1423,6 +1430,9 @@ class ShiftManagementCog(commands.Cog):
                         ephemeral=True
                     )
                     return
+
+                await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Setting Quota",
+                                                        ephemeral=True)
 
                 if not roles:
                     await interaction.followup.send(
@@ -1538,6 +1548,9 @@ class ShiftManagementCog(commands.Cog):
                     )
                     return
 
+                await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Removing Quota",
+                                                        ephemeral=True)
+
                 if not roles:
                     await interaction.followup.send(
                         "<:Denied:1426930694633816248> Please specify role(s) to remove quota from.",
@@ -1611,6 +1624,9 @@ class ShiftManagementCog(commands.Cog):
                         ephemeral=True
                     )
                     return
+
+                await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Viewing Quotas",
+                                                        ephemeral=True)
 
                 # Check if user is admin (to show ignored roles)
                 is_admin = any(role_check.id in QUOTA_ADMIN_ROLES for role_check in interaction.user.roles)
@@ -1719,6 +1735,9 @@ class ShiftManagementCog(commands.Cog):
                     )
                     return
 
+                await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Toggling Visibility",
+                                                        ephemeral=True)
+
                 if not roles:
                     await interaction.followup.send(
                         "<:Denied:1426930694633816248> Please specify role(s) to toggle visibility for.",
@@ -1824,6 +1843,8 @@ class ShiftManagementCog(commands.Cog):
                 )
                 embed.set_footer(text=f"Hidden roles will not appear in weekly leaderboards for {type.value}")
 
+                await interaction.delete_original_response()
+
                 await interaction.followup.send(embed=embed, ephemeral=True)
 
         except Exception as e:
@@ -1885,7 +1906,8 @@ class ShiftManagementCog(commands.Cog):
             type: app_commands.Choice[str],
             wave: int = None  # ← Changed to integer parameter
     ):
-        await interaction.response.defer()
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Retriving Shift Data",
+                                                ephemeral=True)
 
         # Check permission (keep existing code)
         required_roles = {
@@ -2003,6 +2025,8 @@ class ShiftManagementCog(commands.Cog):
 
             embed.set_footer(text=f"Shift Type: {type.value}")
 
+            await interaction.delete_original_response()
+
             await interaction.edit_original_response(embed=embed)
 
         except Exception as e:
@@ -2090,7 +2114,8 @@ class ShiftManagementCog(commands.Cog):
     ])
     async def shift_manage(self, interaction: discord.Interaction, type: app_commands.Choice[str]):
         """Main shift management command"""
-        await interaction.response.defer()
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Initialising Shift Management",
+                                                ephemeral=True)
 
         if db.pool is None:
             await interaction.followup.send(
@@ -2113,6 +2138,8 @@ class ShiftManagementCog(commands.Cog):
             # Check if user has an active shift
             active_shift = await self.get_active_shift(interaction.user.id)
 
+            await interaction.delete_original_response()
+
             if active_shift:
                 # User has an active shift - show shift status
                 await self.show_active_shift_panel(interaction, active_shift)
@@ -2131,7 +2158,8 @@ class ShiftManagementCog(commands.Cog):
     @shift_group.command(name="active", description="View all active shifts")
     async def shift_active(self, interaction: discord.Interaction):
         """Show all currently active shifts categorized by type"""
-        await interaction.response.defer()
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Finding Active Shifts",
+                                                ephemeral=True)
 
         if db.pool is None:
             await interaction.followup.send(
@@ -2257,6 +2285,8 @@ class ShiftManagementCog(commands.Cog):
                         inline=False
                     )
 
+            await interaction.delete_original_response()
+
             await interaction.edit_original_response(embed=embed)
 
         except Exception as e:
@@ -2294,7 +2324,8 @@ class ShiftManagementCog(commands.Cog):
             return
 
         """Admin shift management command"""
-        await interaction.response.defer()
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Opening Admin Panel",
+                                                ephemeral=True)
 
         # Check admin permission
         if not self.has_admin_permission(interaction.user):
@@ -2331,6 +2362,8 @@ class ShiftManagementCog(commands.Cog):
                 return
 
             # Show admin control panel
+            await interaction.delete_original_response()
+
             await self.show_admin_shift_panel(interaction, user, type.value)
 
         except Exception as e:
@@ -2376,7 +2409,7 @@ class ShiftManagementCog(commands.Cog):
 
         # Add quota info if available
         if quota_info and quota_info['has_quota']:
-            if quota_info['bypass_type']:
+            if quota_info.get('bypass_type'):
                 if quota_info['bypass_type'] == 'RA':
                     status_text = f"<:Accepted:1426930333789585509> **{quota_info['percentage']:.1f}%** (RA - 50% Required)"
                 else:
@@ -2878,7 +2911,8 @@ class QuotaConflictView(discord.ui.View):
 
     @discord.ui.button(label="Confirm Overwrite", style=discord.ButtonStyle.danger)
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Overwriting",
+                                                ephemeral=True)
 
         try:
             async with db.pool.acquire() as conn:
@@ -2911,6 +2945,8 @@ class QuotaConflictView(discord.ui.View):
             except discord.HTTPException:
                 pass  # Other HTTP error, ignore
 
+            await interaction.delete_original_response()
+
             self.stop()
 
         except Exception as e:
@@ -2921,7 +2957,8 @@ class QuotaConflictView(discord.ui.View):
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Cancelling",
+                                                ephemeral=True)
         await interaction.followup.send("Cancelled.", ephemeral=True)
 
         for item in self.children:
@@ -2933,6 +2970,8 @@ class QuotaConflictView(discord.ui.View):
             pass  # Message was deleted, ignore
         except discord.HTTPException:
             pass  # Other HTTP error, ignore
+
+        await interaction.delete_original_response()
 
         self.stop()
 
@@ -3512,7 +3551,8 @@ class ShiftTypeSelectView(discord.ui.View):
 
     def create_callback(self, type: str):
         async def callback(interaction: discord.Interaction):
-            await interaction.response.defer()
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Checking Shifts",
+                                                    ephemeral=True)
 
             # Verify user still has access to this shift type
             user_types = await self.cog.get_user_types(interaction.user)
@@ -3567,6 +3607,8 @@ class ShiftTypeSelectView(discord.ui.View):
             await interaction.edit_original_response(embed=embed, view=view)
 
             # Note: Don't disable buttons or edit the old message since we're replacing it
+            await interaction.delete_original_response()
+
             self.stop()
 
         return callback
@@ -3919,8 +3961,16 @@ class AdminActionsSelect(discord.ui.Select):
         selection = self.values[0]
 
         if selection == "View Shift List":
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Displaying Shift List",
+                                                    ephemeral=True)
+
             await self.show_shift_list(interaction)
+            await interaction.delete_original_response()
+
         elif selection == "Modify Shift":
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Retriving Shifts",
+                                                    ephemeral=True)
+
             # Check if user has active shift
             active_shift = await self.cog.get_active_shift(self.target_user.id)
             if active_shift:
@@ -3930,6 +3980,8 @@ class AdminActionsSelect(discord.ui.Select):
                 )
                 return
             await self.show_modify_shift(interaction)
+            await interaction.delete_original_response()
+
         elif selection == "Delete Shift":
             # Check if user has active shift
             active_shift = await self.cog.get_active_shift(self.target_user.id)
@@ -4346,6 +4398,10 @@ class ResetTimeConfirmModal(discord.ui.Modal):
             )
             return
 
+            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Resetting Time",
+                                                ephemeral=True)
+
+
         try:
             # Set shift duration to 0 by making start_time = end_time
             async with db.pool.acquire() as conn:
@@ -4365,6 +4421,8 @@ class ResetTimeConfirmModal(discord.ui.Modal):
                 self.shift,
                 "Reset shift time to 0"
             )
+
+            await interaction.delete_original_response()
 
             await interaction.followup.send(
                 f"<:Accepted:1426930333789585509> Reset shift time to 0 for {self.target_user.mention} (Shift ID: {self.shift['id']})",
@@ -4615,7 +4673,8 @@ class TimeModifyModal(discord.ui.Modal):
             ))
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Setting Shift Time",
+                                                ephemeral=True)
 
         try:
             hours = int(self.children[0].value or 0)
@@ -4746,6 +4805,8 @@ class TimeModifyModal(discord.ui.Modal):
                     self.shift,
                     f"Removed {self.cog.format_duration(time_delta)} from shift"  # CHANGE THIS
                 )
+
+                await interaction.delete_original_response()
 
                 await interaction.followup.send(
                     f"<:Accepted:1426930333789585509> Removed {self.cog.format_duration(time_delta)} from shift for {self.target_user.mention}",
@@ -4897,7 +4958,6 @@ class DeleteShiftConfirmView(discord.ui.View):
     @discord.ui.button(label="Delete Shift", style=discord.ButtonStyle.secondary, disabled=True, custom_id="delete",
                        emoji="<:Reset:1434959478796714074>")
     async def delete_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
 
         if not self.armed:
             await interaction.followup.send(
@@ -4905,6 +4965,10 @@ class DeleteShiftConfirmView(discord.ui.View):
                 ephemeral=True
             )
             return
+
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Deleting Shift",
+                                                ephemeral=True)
+
 
         try:
             # Log before deleting
@@ -4924,6 +4988,8 @@ class DeleteShiftConfirmView(discord.ui.View):
                 f"<:Accepted:1426930333789585509> Deleted shift (ID: {self.shift['id']}) for {self.target_user.mention}",
                 ephemeral=True
             )
+
+            await interaction.delete_original_response()
 
             # Disable all buttons
             for item in self.children:
@@ -5210,6 +5276,10 @@ class ClearShiftsConfirmView(discord.ui.View):
             await interaction.followup.send("<:Denied:1426930694633816248> Please ARM first!", ephemeral=True)
             return
 
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Clearing User Shifts",
+                                                ephemeral=True)
+
+
         try:
             current_week = WeeklyShiftManager.get_current_week_monday()
 
@@ -5277,6 +5347,8 @@ class ClearShiftsConfirmView(discord.ui.View):
                 f"<:Accepted:1426930333789585509> Cleared {self.count} shifts from {scope_text} for {self.target_user.mention} ({self.type})",
                 ephemeral=True
             )
+
+            await interaction.delete_original_response()
 
             # Disable all buttons after clearing
             for item in self.children:
@@ -5520,7 +5592,6 @@ class ResetConfirmView(discord.ui.View):
 
     @discord.ui.button(label="Execute Reset", style=discord.ButtonStyle.danger, disabled=True, custom_id="reset")
     async def reset_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
 
         if not self.armed:
             await interaction.followup.send(
@@ -5528,6 +5599,10 @@ class ResetConfirmView(discord.ui.View):
                 ephemeral=True
             )
             return
+
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Executing Reset",
+                                                ephemeral=True)
+
 
         try:
             # Get next wave number
@@ -5564,6 +5639,8 @@ class ResetConfirmView(discord.ui.View):
                 f"• Users can now start fresh shifts for the new wave",
                 ephemeral=True
             )
+
+            await interaction.delete_original_response()
 
             # Disable all buttons
             for item in self.children:

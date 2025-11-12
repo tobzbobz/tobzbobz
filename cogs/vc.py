@@ -47,7 +47,8 @@ class VCRequestCog(commands.Cog):
             )
             return
 
-        await interaction.response.defer(ephemeral=False)  # Show publicly in the channel
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Sending VC Request",
+                                                ephemeral=True)
 
         try:
             # Create the request embed
@@ -109,7 +110,7 @@ class VCRequestCog(commands.Cog):
                     log_embed.add_field(name="Current Voice", value="<:Denied:1426930694633816248> Not in voice", inline=False)
 
                 log_embed.set_footer(text=f"Request ID: {request_message.id}")
-
+                await interaction.delete_original_response()
                 await log_channel.send(embed=log_embed)
 
         except Exception as e:
