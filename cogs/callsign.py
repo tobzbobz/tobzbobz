@@ -2606,7 +2606,7 @@ class CallsignCog(commands.Cog):
                     )
 
                 await interaction.delete_original_response()
-                await interaction.followup.send(embed=embed, ephemeral=True, delete_after=300)
+                await interaction.followup.send(embed=embed, ephemeral=True)
 
         except Exception as e:
             await interaction.followup.send(f"<:Denied:1426930694633816248> Error looking up callsign: {str(e)}")
@@ -3347,11 +3347,11 @@ class CallsignCog(commands.Cog):
 
             # Send embeds
             if len(embeds) == 1:
-                await interaction.followup.send(embed=embeds[0], ephemeral=True, delete_after=300)
+                await interaction.followup.send(embed=embeds[0], ephemeral=True)
             else:
                 # Send with pagination view
                 view = PaginatedEmbedView(embeds)
-                await interaction.followup.send(embed=embeds[0], view=view, ephemeral=True, delete_after=300)
+                await interaction.followup.send(embed=embeds[0], view=view, ephemeral=True)
 
         except Exception as e:
             await interaction.followup.send(
@@ -3454,7 +3454,7 @@ class CallsignCog(commands.Cog):
             return
 
         await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Scanning Database",
-                                                ephemeral=True)
+                                                )
 
         try:
             if database_scan:
@@ -3464,7 +3464,7 @@ class CallsignCog(commands.Cog):
                     description="Checking for outdated or incomplete data...",
                     color=discord.Color.blue()
                 )
-                await interaction.followup.send(embed=status_embed, ephemeral=True)
+                await interaction.followup.send(embed=status_embed)
 
                 mismatches = await self.detect_database_mismatches(interaction.guild)
                 total_issues = sum(len(v) for v in mismatches.values())
@@ -3645,57 +3645,66 @@ class CallsignCog(commands.Cog):
                 for member in batch:
                     result = bloxlink_results[member.id]
 
-                    # EXTRA 2: Separate genuine "not linked" from API failures
+                    # ✅ ENHANCED LOGGING: Print every result for debugging
+                    print(f"🔍 Bloxlink Result for {member.display_name} ({member.id}): {result['status']}")
+
+                    # ✅ NEW: Try to add EVERYONE, even with missing data
+                    roblox_username = None
+                    roblox_id = None
+                    fenz_prefix = None
+                    has_issues = []
+
+                    # Get Roblox data (if available)
                     if result['status'] == 'success':
-                        # Successfully got Bloxlink data
                         roblox_username = result['roblox_username']
                         roblox_id = result['roblox_user_id']
 
                         if not roblox_username or roblox_username == 'Unknown':
-                            ineligible['no_roblox_username'].append({
-                                'member': member,
-                                'roblox_id': roblox_id,
-                                'reason': f'Roblox account {roblox_id} is invalid or deleted'
-                            })
-                            continue
-
-                        # Get FENZ rank
-                        fenz_prefix = None
-                        for role_id, (rank_name, prefix) in FENZ_RANK_MAP.items():
-                            if any(role.id == role_id for role in member.roles):
-                                fenz_prefix = prefix
-                                break
-
-                        if not fenz_prefix:
-                            ineligible['no_fenz_role'].append({
-                                'member': member,
-                                'reason': 'No valid FENZ rank role found'
-                            })
-                            continue
-
-                        # User is eligible!
-                        users_without_callsigns.append({
-                            'member': member,
-                            'fenz_prefix': fenz_prefix,
-                            'roblox_id': str(roblox_id),
-                            'roblox_username': roblox_username
-                        })
+                            print(f"   ⚠️ Invalid Roblox username, using 'MISSING'")
+                            roblox_username = 'MISSING'
+                            has_issues.append('Invalid/deleted Roblox account')
+                        else:
+                            print(f"   ✅ Roblox: {roblox_username} (ID: {roblox_id})")
 
                     elif result['status'] == 'not_linked':
-                        # Genuinely not linked (404 from Bloxlink)
-                        ineligible['no_bloxlink'].append({
-                            'member': member,
-                            'reason': 'Not linked to Bloxlink - needs to run /verify'
-                        })
+                        print(f"   ❌ No Bloxlink, using 'MISSING'")
+                        roblox_username = 'MISSING'
+                        roblox_id = 'MISSING'
+                        has_issues.append('Not linked to Bloxlink')
 
                     else:
-                        # EXTRA 2: API failure (rate limit, timeout, error)
-                        # Don't mark as "not linked" - this is an API issue
-                        ineligible['api_failed'].append({
-                            'member': member,
-                            'status': result['status'],
-                            'reason': f"API Error: {result['status']} - May actually be linked, try again"
-                        })
+                        # API failure - mark as MISSING but note it might be linked
+                        print(f"   🔴 API failure: {result['status']}, using 'MISSING'")
+                        roblox_username = 'MISSING'
+                        roblox_id = 'MISSING'
+                        has_issues.append(f'API Error: {result["status"]}')
+
+                    # Get FENZ rank (if available)
+                    for role_id, (rank_name, prefix) in FENZ_RANK_MAP.items():
+                        if any(role.id == role_id for role in member.roles):
+                            fenz_prefix = prefix
+                            break
+
+                    if not fenz_prefix:
+                        print(f"   ⚠️ No FENZ role, using 'MISSING'")
+                        fenz_prefix = 'MISSING'
+                        has_issues.append('No valid FENZ rank role')
+                    else:
+                        print(f"   ✅ FENZ Rank: {fenz_prefix}")
+
+                    # ✅ ADD EVERYONE - even with missing data
+                    if has_issues:
+                        print(f"   ⚠️ Adding with issues: {', '.join(has_issues)}")
+                    else:
+                        print(f"   ✅ PERFECT: No issues found")
+
+                    users_without_callsigns.append({
+                        'member': member,
+                        'fenz_prefix': fenz_prefix,
+                        'roblox_id': str(roblox_id) if roblox_id else 'MISSING',
+                        'roblox_username': roblox_username,
+                        'has_issues': has_issues  # Track what's missing for reporting
+                    })
 
                 # EXTRA 3: Cooldown between batches (except last one)
                 if batch_num < total_batches - 1:
@@ -3775,7 +3784,7 @@ class CallsignCog(commands.Cog):
 
                     # EXTRA 4: Log API failures for manual review
                     embed.set_footer(text=f"Logged at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
-                    await interaction.followup.send(embed=embed, ephemeral=True)
+                    await interaction.followup.send(embed=embed)
 
                 # Send detailed breakdown of OTHER ineligible users
                 if ineligible['no_bloxlink']:
@@ -3802,7 +3811,7 @@ class CallsignCog(commands.Cog):
                             inline=False
                         )
 
-                        await interaction.followup.send(embed=embed, ephemeral=True)
+                        await interaction.followup.send(embed=embed)
 
                 if ineligible['no_roblox_username']:
                     for i in range(0, len(ineligible['no_roblox_username']), 15):
@@ -3825,7 +3834,7 @@ class CallsignCog(commands.Cog):
                             inline=False
                         )
 
-                        await interaction.followup.send(embed=embed, ephemeral=True)
+                        await interaction.followup.send(embed=embed)
 
                 if ineligible['no_fenz_role']:
                     for i in range(0, len(ineligible['no_fenz_role']), 15):
@@ -3848,7 +3857,7 @@ class CallsignCog(commands.Cog):
                             inline=False
                         )
 
-                        await interaction.followup.send(embed=embed, ephemeral=True)
+                        await interaction.followup.send(embed=embed)
 
                 if ineligible['incomplete_callsign']:
                     for i in range(0, len(ineligible['incomplete_callsign']), 15):
@@ -3871,8 +3880,24 @@ class CallsignCog(commands.Cog):
                             inline=False
                         )
 
-                        await interaction.followup.send(embed=embed, ephemeral=True)
+                        await interaction.followup.send(embed=embed)
                 return
+
+            print("\n" + "=" * 60)
+            print("BLOXLINK CHECK SUMMARY:")
+            print("=" * 60)
+            print(f"Total scanned: {len(members_without_callsigns)}")
+            print(f"✅ Eligible (success): {len(users_without_callsigns)}")
+            print(f"❌ Not linked: {len(ineligible['no_bloxlink'])}")
+            print(f"⚠️ Invalid Roblox: {len(ineligible['no_roblox_username'])}")
+            print(f"⚠️ No FENZ role: {len(ineligible['no_fenz_role'])}")
+            print(f"🔴 API failures: {len(ineligible['api_failed'])}")
+            print("=" * 60)
+
+            if ineligible['api_failed']:
+                print("\nFirst 10 API Failures:")
+                for item in ineligible['api_failed'][:10]:
+                    print(f"  - {item['member'].display_name}: {item['status']}")
 
             # If we have eligible users, show them and start the interactive assignment
             # (Your existing BulkAssignView code continues here...)
@@ -4355,6 +4380,14 @@ class BulkAssignView(discord.ui.View):
             inline=False
         )
 
+        roblox_display = user_data['roblox_username']
+        if roblox_display == 'MISSING':
+            roblox_display = "<:Warn:1437771973970104471>️ **MISSING** (No Bloxlink)"
+
+        fenz_display = user_data['fenz_prefix']
+        if fenz_display == 'MISSING':
+            fenz_display = "<:Warn:1437771973970104471>️ **MISSING** (No FENZ role)"
+
         embed.add_field(
             name="Roblox User",
             value=user_data['roblox_username'],
@@ -4366,6 +4399,15 @@ class BulkAssignView(discord.ui.View):
             value=user_data['fenz_prefix'],
             inline=True
         )
+
+        # ✅ Show issues if any
+        if user_data.get('has_issues'):
+            issues_text = "\n".join([f"• {issue}" for issue in user_data['has_issues']])
+            embed.add_field(
+                name="<:Warn:1437771973970104471>️ Issues Detected",
+                value=issues_text,
+                inline=False
+            )
 
         embed.add_field(
             name="Progress",
@@ -4594,6 +4636,28 @@ class BulkAssignModal(discord.ui.Modal):
 
             # Get HHStJ prefix BEFORE checking if callsign exists
             hhstj_prefix = get_hhstj_prefix_from_roles(member.roles)
+
+            fenz_prefix = self.user_data['fenz_prefix']
+            if fenz_prefix == 'MISSING':
+                await interaction.followup.send(
+                    "<:Warn:1437771973970104471>️ **Warning:** User has no FENZ rank role!\n"
+                    "Cannot assign callsign without a valid FENZ rank.\n"
+                    "Please assign them a rank first, then try again.",
+                    ephemeral=True
+                )
+                return
+
+            roblox_username = self.user_data['roblox_username']
+            roblox_id = self.user_data['roblox_id']
+
+            if roblox_username == 'MISSING' or roblox_id == 'MISSING':
+                await interaction.followup.send(
+                    "<:Warn:1437771973970104471>️ **Warning:** User has no Bloxlink connection!\n"
+                    "Cannot assign callsign without a valid Roblox account.\n"
+                    "Please ask them to run </verify:1114974748624027711> first.",
+                    ephemeral=True
+                )
+                return
 
             # NOW check if callsign exists (with the correct prefix)
             existing = await check_callsign_exists(callsign, self.user_data['fenz_prefix'])
