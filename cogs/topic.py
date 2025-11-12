@@ -31,10 +31,8 @@ def has_allowed_roles():
         has_role = any(role_id in user_role_ids for role_id in ALLOWED_ROLE_IDS)
 
         if not has_role:
-            await interaction.response.send_message(
-                "<:Denied:1426930694633816248> You don't have permission to use this command.",
-                ephemeral=True
-            )
+            await interaction.response.defer()
+
         return has_role
 
     return app_commands.check(predicate)
@@ -91,9 +89,7 @@ class TopicCog(commands.Cog):
                                ''')
 
     @topic_group.command(name="change", description="Request a topic change")
-    @app_commands.describe(
-        reason="Why you want to change the topic."
-    )
+    @app_commands.describe(reason="Why you want to change the topic.")
     @has_allowed_roles()
     async def topic_change(
             self,
@@ -101,101 +97,122 @@ class TopicCog(commands.Cog):
             reason: Optional[str] = None
     ):
         """Request a topic change in the current channel"""
+        try:
+            await interaction.response.defer(ephemeral=True)
 
-        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Sending Topic Change Request",
-                                                ephemeral=True)
+            # Check cooldown
+            async with db.pool.acquire() as conn:
+                last_request = await conn.fetchrow(
+                    'SELECT requested_at FROM topic_change_requests WHERE user_id = $1 ORDER BY requested_at DESC LIMIT 1',
+                    interaction.user.id
+                )
 
-        # Check cooldown
-        async with db.pool.acquire() as conn:
-            last_request = await conn.fetchrow(
-                'SELECT requested_at FROM topic_change_requests WHERE user_id = $1 ORDER BY requested_at DESC LIMIT 1',
-                interaction.user.id
+                if last_request:
+                    time_passed = datetime.utcnow() - last_request['requested_at']
+                    remaining = COOLDOWN_MINUTES - (time_passed.total_seconds() / 60)
+                    if remaining > 0:
+                        remaining_seconds = int(remaining * 60)
+                        await interaction.followup.send(
+                            f"<:Alarm:1437789417652752537> You're on cooldown! Please wait **{remaining_seconds} seconds** before requesting another topic change.",
+                            ephemeral=True
+                        )
+                        return
+
+            # Create embed for user confirmation
+            user_embed = discord.Embed(
+                title="Topic Change",
+                description="A staff member has been asked to change the topic; failure to do so will result in moderation.",
+                color=discord.Color.blue(),
+                timestamp=datetime.utcnow()
             )
 
-            if last_request:
-                time_passed = datetime.utcnow() - last_request['requested_at']
-                remaining = COOLDOWN_MINUTES - (time_passed.total_seconds() / 60)
-                if remaining > 0:
-                    remaining_seconds = int(remaining * 60)
-                    await interaction.followup.send(
-                        f"<:Alarm:1437789417652752537> You're on cooldown! Please wait **{remaining_seconds} seconds** before requesting another topic change.",
-                        ephemeral=True
+            user_embed.add_field(
+                name="â€Ž",
+                value=f"*Requested by {interaction.user.mention}*",
+                inline=False
+            )
+
+            user_embed.set_thumbnail(url=interaction.guild.icon.url if interaction.guild.icon else None)
+
+            # Send in channel (not as followup since we want it public)
+            message = await interaction.channel.send(embed=user_embed)
+
+            # Log to database - FIXED: Changed $8 to $7
+            async with db.pool.acquire() as conn:
+                await conn.execute('''
+                                   INSERT INTO topic_change_requests
+                                   (user_id, username, channel_id, channel_name, guild_id, reason, message_id)
+                                   VALUES ($1, $2, $3, $4, $5, $6, $7)
+                                   ''',
+                                   interaction.user.id,
+                                   str(interaction.user),
+                                   interaction.channel.id,
+                                   interaction.channel.name,
+                                   interaction.guild.id,
+                                   reason,
+                                   message.id
+                                   )
+
+            # Create detailed embed for staff log
+            staff_embed = discord.Embed(
+                title="Topic Change Request",
+                color=discord.Color.gold(),
+                timestamp=datetime.utcnow()
+            )
+
+            staff_embed.add_field(
+                name="Requested by:",
+                value=f"{interaction.user.mention} (`{interaction.user.name}` - `{interaction.user.id}`)",
+                inline=True
+            )
+
+            staff_embed.add_field(
+                name="Channel:",
+                value=f"{interaction.channel.mention} (`#{interaction.channel.name}`)",
+                inline=True
+            )
+
+            staff_embed.add_field(
+                name="Reason:",
+                value=f"```{reason if reason else 'No reason provided'}```",
+                inline=False
+            )
+
+            staff_embed.set_thumbnail(url=interaction.user.display_avatar.url)
+            staff_embed.set_footer(text=f"User ID: {interaction.user.id} | Request ID: {message.id}")
+
+            # Acknowledge to user
+            await interaction.followup.send(
+                "<:Accepted:1426930333789585509> Topic change request sent!",
+                ephemeral=True
+            )
+
+            # Send to moderation log channel
+            log_channel = self.bot.get_channel(MODERATION_LOG_CHANNEL_ID)
+            if log_channel:
+                try:
+                    staff_role = interaction.guild.get_role(STAFF_ROLE_ID)
+                    await log_channel.send(
+                        content=f"{staff_role.mention if staff_role else '@Staff'} - Topic Change Request",
+                        embed=staff_embed
                     )
-                    return
+                except Exception as e:
+                    print(f"Error sending to log channel: {e}")
+            else:
+                print(f"Warning: Log channel {MODERATION_LOG_CHANNEL_ID} not found!")
 
-        # Create embed for user confirmation
-        user_embed = discord.Embed(
-            title="Topic Change",
-            description="A staff member has been asked to change the topic; failure to do so will result in moderation.\n‎",
-            color=discord.Color.blue(),
-            timestamp=datetime.utcnow()
-        )
+        except Exception as e:
+            print(f"Error in topic_change command: {e}")
+            import traceback
+            traceback.print_exc()
 
-        user_embed.add_field(
-            name="*Requested by*",
-            value=f"*@{interaction.user.name}*",
-            inline=False
-        )
-
-        user_embed.set_thumbnail(url=interaction.guild.icon.url if interaction.guild.icon else None)
-
-        message = await interaction.followup.send(embed=user_embed)
-
-        # Log to database
-        async with db.pool.acquire() as conn:
-            await conn.execute('''
-                               INSERT INTO topic_change_requests
-                               (user_id, username, channel_id, channel_name, guild_id, reason, message_id)
-                               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                               ''',
-                               interaction.user.id,
-                               str(interaction.user),
-                               interaction.channel.id,
-                               interaction.channel.name,
-                               interaction.guild.id,
-                               reason,
-                               message.id
-                               )
-
-        # Create detailed embed for staff log
-        staff_embed = discord.Embed(
-            title="Topic Change Request",
-            color=discord.Color.gold(),
-            timestamp=datetime.utcnow()
-        )
-
-        staff_embed.add_field(
-            name="Requested by:",
-            value=f"{interaction.user.mention} (`{interaction.user.name}` - `{interaction.user.id}`)",
-            inline=True
-        )
-
-        staff_embed.add_field(
-            name="Channel:",
-            value=f"{interaction.channel.mention} (`#{interaction.channel.name}`)",
-            inline=True
-        )
-
-        staff_embed.add_field(
-            name="Reason:",
-            value=f"```{reason if reason else 'No reason provided'}```",
-            inline=False
-        )
-
-        staff_embed.set_thumbnail(url=interaction.user.display_avatar.url)
-        staff_embed.set_footer(text=f"User ID: {interaction.user.id} | Request ID: {message.id}")
-
-        await interaction.delete_original_response()
-
-        # Send to moderation log channel
-        log_channel = self.bot.get_channel(MODERATION_LOG_CHANNEL_ID)
-        if log_channel:
-            staff_role = interaction.guild.get_role(STAFF_ROLE_ID)
-            await log_channel.send(
-                content=f"{staff_role.mention if staff_role else '@Staff'} - Topic Change Request",
-                embed=staff_embed
-            )
-
+            try:
+                await interaction.followup.send(
+                    f"<:Denied:1426930694633816248> An error occurred while processing your request.",
+                    ephemeral=True
+                )
+            except:
+                pass
 
 async def setup(bot):
     await bot.add_cog(TopicCog(bot))
