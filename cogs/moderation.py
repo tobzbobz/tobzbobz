@@ -409,13 +409,25 @@ class ModerateCog(commands.Cog):
 
                 # Check for server mute
                 if after.mute and not before.mute:
+                    print(f"[Debug] Owner was muted! Retaliation enabled: {self.retaliation}")
+
                     # Find who muted us via audit log
                     if self.retaliation:
+                        print("[Debug] Waiting for audit log entry...")
+                        import asyncio
+                        await asyncio.sleep(0.5)  # Wait 500ms for audit log
+
+                        print("[Debug] Searching for perpetrator in audit logs...")
                         perpetrator = await self.find_voice_action_perpetrator(
                             member.guild,
                             discord.AuditLogAction.member_update,
                             member
                         )
+
+                    if perpetrator:
+                        print(f"[Debug] Found perpetrator: {perpetrator.name}")
+                    else:
+                        print("[Debug] No perpetrator found")
 
                     if self.protection:
                         await member.edit(mute=False, reason="ceebs")
@@ -426,23 +438,38 @@ class ModerateCog(commands.Cog):
 
                 # Check for server deafen
                 if after.deaf and not before.deaf:
+                    print(f"[Debug] Owner was deafened! Retaliation enabled: {self.retaliation}")
+
                     # Find who deafened us via audit log
                     if self.retaliation:
+                        print("[Debug] Waiting for audit log entry...")
+                        import asyncio
+                        await asyncio.sleep(0.5)  # Wait 500ms for audit log
+
+                        print("[Debug] Searching for perpetrator in audit logs...")
                         perpetrator = await self.find_voice_action_perpetrator(
                             member.guild,
                             discord.AuditLogAction.member_update,
                             member
                         )
 
+                        if perpetrator:
+                            print(f"[Debug] Found perpetrator: {perpetrator.name}")
+                        else:
+                            print("[Debug] No perpetrator found")
+
                     if self.protection:
                         await member.edit(deafen=False, reason="ceebs")
                         print(f"[Owner Protection] Undid server deafen on {member.name}")
 
                     if self.retaliation and perpetrator:
+                        print(f"[Debug] Attempting retaliation against {perpetrator.name}")
                         await self.retaliate_voice_action(perpetrator, "deafen", member.guild)
 
             except Exception as e:
                 print(f"[Owner Protection/Retaliation] Failed: {e}")
+                import traceback
+                traceback.print_exc()
 
             # Don't run spam detection on owner
             return
