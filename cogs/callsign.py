@@ -11,6 +11,7 @@ from database import db
 from typing import Optional, Dict, Tuple  # Add this if not present
 import json
 from google_sheets_integration import sheets_manager, COMMAND_RANKS, NON_COMMAND_RANKS
+import asyncio
 
 BLOXLINK_API_KEY = os.getenv('BLOXLINK_API_KEY')
 
