@@ -1105,7 +1105,12 @@ class CallsignCog(commands.Cog):
                 # <:Accepted:1426930333789585509> NEW: Track all naughty roles in the server during sync
                 naughty_role_data = []
 
-                mismatches = await self.detect_database_mismatches(guild)
+                mismatches = await self.detect_database_mismatches(
+                    guild=guild,
+                    progress_callback=None,
+                    bloxlink_cache=None
+                )
+
                 mismatch_fixes = 0
 
                 fixed_users = set()
@@ -3460,7 +3465,8 @@ class CallsignCog(commands.Cog):
             import traceback
             traceback.print_exc()
 
-    async def detect_database_mismatches(self, guild: discord.Guild, progress_callback=None) -> dict:
+    async def detect_database_mismatches(self, guild: discord.Guild, progress_callback=None, bloxlink_cache: dict = None):
+
         """
         Detect users with outdated or incomplete database information
         Returns dict with categories of mismatches
