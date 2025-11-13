@@ -3517,48 +3517,47 @@ class CallsignCog(commands.Cog):
                 })
 
             # Check Roblox data
-                if member.id in bloxlink_cache:
-                    # Use cached result
-                    cached = bloxlink_cache[member.id]
-                    roblox_username, roblox_id, status = cached
-                else:
-                    # Fetch and cache
-                    roblox_username, roblox_id, status = await bloxlink_api.get_bloxlink_data(member.id, guild.id)
-                    bloxlink_cache[member.id] = (roblox_username, roblox_id, status)
+            if member.id in bloxlink_cache:
+                # Use cached result
+                cached = bloxlink_cache[member.id]
+                roblox_username, roblox_id, status = cached
+            else:
+               # Fetch and cache
+               roblox_username, roblox_id, status = await bloxlink_api.get_bloxlink_data(member.id, guild.id)
+               bloxlink_cache[member.id] = (roblox_username, roblox_id, status)
 
-                if status == 'success' and roblox_id:
-                    current_roblox_id = str(roblox_id)
-                    current_roblox_username = roblox_username
+            if status == 'success' and roblox_id:
+                current_roblox_id = str(roblox_id)
+                current_roblox_username = roblox_username
+                stored_roblox_id = record.get('roblox_user_id')
+                stored_roblox_username = record.get('roblox_username')
 
-                    stored_roblox_id = record.get('roblox_user_id')
-                    stored_roblox_username = record.get('roblox_username')
+                # Check Roblox ID mismatch or missing
+                if not stored_roblox_id:
+                   mismatches['missing_roblox_id'].append({
+                        'member': member,
+                        'current_id': current_roblox_id,
+                        'current_username': current_roblox_username,
+                        'record': dict(record)
+                    })
+                elif current_roblox_id != stored_roblox_id:
+                    mismatches['roblox_id_mismatch'].append({
+                        'member': member,
+                        'old_id': stored_roblox_id,
+                        'new_id': current_roblox_id,
+                        'current_username': current_roblox_username,
+                        'record': dict(record)
+                    })
 
-                    # Check Roblox ID mismatch or missing
-                    if not stored_roblox_id:
-                        mismatches['missing_roblox_id'].append({
+                # Check Roblox username mismatch
+                if current_roblox_username and stored_roblox_username:
+                    if current_roblox_username != stored_roblox_username:
+                        mismatches['roblox_username_mismatch'].append({
                             'member': member,
-                            'current_id': current_roblox_id,
-                            'current_username': current_roblox_username,
+                            'old': stored_roblox_username,
+                            'new': current_roblox_username,
                             'record': dict(record)
                         })
-                    elif current_roblox_id != stored_roblox_id:
-                        mismatches['roblox_id_mismatch'].append({
-                            'member': member,
-                            'old_id': stored_roblox_id,
-                            'new_id': current_roblox_id,
-                            'current_username': current_roblox_username,
-                            'record': dict(record)
-                        })
-
-                    # Check Roblox username mismatch
-                    if current_roblox_username and stored_roblox_username:
-                        if current_roblox_username != stored_roblox_username:
-                            mismatches['roblox_username_mismatch'].append({
-                                'member': member,
-                                'old': stored_roblox_username,
-                                'new': current_roblox_username,
-                                'record': dict(record)
-                            })
 
             return mismatches
 
@@ -3683,7 +3682,7 @@ class CallsignCog(commands.Cog):
             import traceback
             traceback.print_exc()
 
-    async def start_bulk_assign(self, interaction: discord.Interaction):
+    async def start_bulk_assign(self, interaction: discord.Interaction, bloxlink_cache: dict = None):
         """Streamlined bulk assign with proper Bloxlink handling"""
 
         # Initialize BloxlinkAPI for retry logic
@@ -3779,6 +3778,8 @@ class CallsignCog(commands.Cog):
             # Get Discord IDs for all members (only those NOT in cache)
             uncached_ids = [m.id for m in members_without_callsigns if m.id not in bloxlink_cache]
 
+            uncached_ids = [m.id for m in members_without_callsigns if m.id not in bloxlink_cache]
+
             if uncached_ids:
                 # Use enhanced Bloxlink API with retry logic for uncached members
                 new_results = await bloxlink_api.bulk_check_bloxlink(
@@ -3787,15 +3788,15 @@ class CallsignCog(commands.Cog):
                     progress_callback=progress_callback
                 )
 
-            # Add new results to cache
-            for discord_id, result in new_results.items():
-                bloxlink_cache[discord_id] = (result['roblox_username'], result['roblox_user_id'], result['status'])
+                # ✅ FIX: Add new results to cache
+                for discord_id, result in new_results.items():
+                    bloxlink_cache[discord_id] = (result['roblox_username'], result['roblox_user_id'], result['status'])
 
-            # Process results
+            # ✅ FIX: Process results using CACHE instead of undefined variable
             for member in members_without_callsigns:
-                result = bloxlink_results[member.id]
-
-                print(f"Bloxlink Result for {member.display_name} ({member.id}): {result['status']}")
+                # Get from cache (guaranteed to exist now)
+                roblox_username, roblox_id, status = bloxlink_cache[member.id]
+                print(f"Bloxlink Result for {member.display_name} ({member.id}): {status}")
 
                 # Initialize data
                 roblox_username = None
@@ -4258,11 +4259,12 @@ class HighCommandPrefixChoice(discord.ui.View):
 class DatabaseMismatchView(discord.ui.View):
     """View for handling database mismatches before bulk assign"""
 
-    def __init__(self, cog, interaction, mismatches):
+    def __init__(self, cog, interaction, mismatches, bloxlink_cache: dict = None):
         super().__init__(timeout=600)
         self.cog = cog
         self.interaction = interaction
         self.mismatches = mismatches
+        # ✅ FIX: Initialize cache AFTER super().__init__
         self.bloxlink_cache = bloxlink_cache if bloxlink_cache is not None else {}
 
 
