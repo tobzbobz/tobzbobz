@@ -947,7 +947,7 @@ class BloxlinkAPI:
 
             # Progress callback
             if progress_callback:
-                progress_callback(i, total, status_counts)
+                await progress_callback(i, total, status_counts)
 
             # Progress updates every 10 members
             if i % 10 == 0 or i == total:
@@ -3730,7 +3730,7 @@ class CallsignCog(commands.Cog):
             # Check how many are already cached
             cached_count = sum(1 for m in members_without_callsigns if m.id in bloxlink_cache)
             if cached_count > 0:
-                status_embed.description += f"\n<:Accepted:1426930333789585509> {cached_count} already cached from database scan"
+                status_embed.description += f"\n✅ {cached_count} already cached from database scan"
 
             await interaction.edit_original_response(embed=status_embed)
 
@@ -3745,6 +3745,8 @@ class CallsignCog(commands.Cog):
                 nonlocal last_update_time
                 current_time = asyncio.get_event_loop().time()
 
+                print(f"📊 Progress callback called: {current}/{total}")
+
                 # Only update every 5 members OR every 3 seconds to avoid rate limits
                 if current % 5 == 0 or (current_time - last_update_time) >= 3 or current == total:
                     progress_percent = int((current / total) * 100)
@@ -3754,9 +3756,9 @@ class CallsignCog(commands.Cog):
                         title="<a:Load:1430912797469970444> Checking Bloxlink Connections",
                         description=f"**Progress:** {current}/{total} ({progress_percent}%)\n"
                                     f"`{progress_bar}`\n\n"
-                                    f"<:Accepted:1426930333789585509> **Linked:** {status_counts['success']}\n"
-                                    f"<:Denied:1426930694633816248> **Not Linked:** {status_counts['not_linked']}\n"
-                                    f"<:Warn:1437771973970104471> **API Issues:** {status_counts['rate_limited'] + status_counts['timeout'] + status_counts['api_error']}",
+                                    f"✅ **Linked:** {status_counts['success']}\n"
+                                    f"❌ **Not Linked:** {status_counts['not_linked']}\n"
+                                    f"⚠️ **API Issues:** {status_counts['rate_limited'] + status_counts['timeout'] + status_counts['api_error']}",
                         color=discord.Color.blue()
                     )
 
@@ -3772,16 +3774,24 @@ class CallsignCog(commands.Cog):
             uncached_ids = [m.id for m in members_without_callsigns if m.id not in bloxlink_cache]
 
             if uncached_ids:
-                # Use enhanced Bloxlink API with retry logic for uncached members
+                # ✅ Use enhanced Bloxlink API with retry logic AND progress callback
                 new_results = await bloxlink_api.bulk_check_bloxlink(
                     uncached_ids,
                     guild_id=interaction.guild.id,
-                    progress_callback=progress_callback
+                    progress_callback=progress_callback  # ✅ Pass the callback
                 )
 
                 # ✅ Add new results to cache
                 for discord_id, result in new_results.items():
                     bloxlink_cache[discord_id] = (result['roblox_username'], result['roblox_user_id'], result['status'])
+            else:
+                progress_embed = discord.Embed(
+                    title="✅ Bloxlink Check Complete",
+                    description=f"All {len(members_without_callsigns)} members already cached!\nProceeding to assignment...",
+                    color=discord.Color.green()
+                )
+                await interaction.edit_original_response(embed=progress_embed)
+                await asyncio.sleep(1)  # Brief pause so user can see the message
 
             # ✅ FIX: Process results using CACHE instead of undefined 'result' variable
             for member in members_without_callsigns:
