@@ -3465,8 +3465,8 @@ class CallsignCog(commands.Cog):
             import traceback
             traceback.print_exc()
 
-    async def detect_database_mismatches(self, guild: discord.Guild, progress_callback=None, bloxlink_cache: dict = None):
-
+    async def detect_database_mismatches(self, guild: discord.Guild, progress_callback=None,
+                                         bloxlink_cache: dict = None):
         """
         Detect users with outdated or incomplete database information
         Returns dict with categories of mismatches
@@ -3522,9 +3522,9 @@ class CallsignCog(commands.Cog):
                 cached = bloxlink_cache[member.id]
                 roblox_username, roblox_id, status = cached
             else:
-               # Fetch and cache
-               roblox_username, roblox_id, status = await bloxlink_api.get_bloxlink_data(member.id, guild.id)
-               bloxlink_cache[member.id] = (roblox_username, roblox_id, status)
+                # Fetch and cache
+                roblox_username, roblox_id, status = await bloxlink_api.get_bloxlink_data(member.id, guild.id)
+                bloxlink_cache[member.id] = (roblox_username, roblox_id, status)
 
             if status == 'success' and roblox_id:
                 current_roblox_id = str(roblox_id)
@@ -3534,7 +3534,7 @@ class CallsignCog(commands.Cog):
 
                 # Check Roblox ID mismatch or missing
                 if not stored_roblox_id:
-                   mismatches['missing_roblox_id'].append({
+                    mismatches['missing_roblox_id'].append({
                         'member': member,
                         'current_id': current_roblox_id,
                         'current_username': current_roblox_username,
@@ -3559,7 +3559,8 @@ class CallsignCog(commands.Cog):
                             'record': dict(record)
                         })
 
-            return mismatches
+        # ✅ FIX: Actually return the mismatches!
+        return mismatches
 
     @callsign_group.command(name="bulk-assign", description="Assign callsigns to all unassigned users")
     @app_commands.describe(database_scan="Check and fix database mismatches before assigning (default: False)")
@@ -3580,6 +3581,7 @@ class CallsignCog(commands.Cog):
         try:
             bloxlink_cache = {}
 
+            # ✅ FIX: Always run database scan when database_scan=True
             if database_scan:
                 # Step 1: Detect database mismatches with progress
                 status_embed = discord.Embed(
@@ -3616,8 +3618,13 @@ class CallsignCog(commands.Cog):
                         except:
                             pass
 
-                mismatches = await self.detect_database_mismatches(interaction.guild, db_progress_callback,
-                                                                   bloxlink_cache)
+                # ✅ Actually call the function with progress callback
+                mismatches = await self.detect_database_mismatches(
+                    interaction.guild,
+                    db_progress_callback,
+                    bloxlink_cache
+                )
+
                 total_issues = sum(len(v) for v in mismatches.values())
 
                 if total_issues > 0:
@@ -3670,6 +3677,13 @@ class CallsignCog(commands.Cog):
                     view = DatabaseMismatchView(self, interaction, mismatches, bloxlink_cache)
                     await interaction.edit_original_response(embed=mismatch_embed, view=view)
                     return
+                else:
+                    # ✅ Show "no issues found" message before proceeding
+                    status_embed.title = "✅ Database Scan Complete"
+                    status_embed.description = "No database issues found! Proceeding to bulk assign..."
+                    status_embed.color = discord.Color.green()
+                    await interaction.edit_original_response(embed=status_embed)
+                    await asyncio.sleep(2)  # Give user time to see the message
 
             # No mismatches OR database_scan=False, proceed to bulk assign
             await self.start_bulk_assign(interaction, bloxlink_cache)
@@ -3691,8 +3705,6 @@ class CallsignCog(commands.Cog):
         # Initialize cache if not provided
         if bloxlink_cache is None:
             bloxlink_cache = {}
-
-        bloxlink_api = BloxlinkAPI()
 
         try:
             # Progress Update 1: Starting scan
@@ -3753,7 +3765,7 @@ class CallsignCog(commands.Cog):
                 current_time = asyncio.get_event_loop().time()
 
                 # Only update every 5 members OR every 3 seconds to avoid rate limits
-                if current % 5 == 0 or (current_time - last_update_time) >= 3:
+                if current % 5 == 0 or (current_time - last_update_time) >= 3 or current == total:
                     progress_percent = int((current / total) * 100)
                     progress_bar = "█" * (progress_percent // 5) + "░" * (20 - (progress_percent // 5))
 
@@ -3778,8 +3790,6 @@ class CallsignCog(commands.Cog):
             # Get Discord IDs for all members (only those NOT in cache)
             uncached_ids = [m.id for m in members_without_callsigns if m.id not in bloxlink_cache]
 
-            uncached_ids = [m.id for m in members_without_callsigns if m.id not in bloxlink_cache]
-
             if uncached_ids:
                 # Use enhanced Bloxlink API with retry logic for uncached members
                 new_results = await bloxlink_api.bulk_check_bloxlink(
@@ -3788,52 +3798,44 @@ class CallsignCog(commands.Cog):
                     progress_callback=progress_callback
                 )
 
-                # ✅ FIX: Add new results to cache
+                # ✅ Add new results to cache
                 for discord_id, result in new_results.items():
                     bloxlink_cache[discord_id] = (result['roblox_username'], result['roblox_user_id'], result['status'])
 
-            # ✅ FIX: Process results using CACHE instead of undefined variable
+            # ✅ FIX: Process results using CACHE instead of undefined 'result' variable
             for member in members_without_callsigns:
                 # Get from cache (guaranteed to exist now)
                 roblox_username, roblox_id, status = bloxlink_cache[member.id]
+
                 print(f"Bloxlink Result for {member.display_name} ({member.id}): {status}")
 
                 # Initialize data
-                roblox_username = None
-                roblox_id = None
-                fenz_prefix = None
                 has_issues = []
 
-                # Get Roblox data
-                if result['status'] == 'success':
-                    roblox_id = result['roblox_user_id']
-
-                    # ✅ Fetch username from Roblox API using the ID
-                    if roblox_id:
-                        roblox_username = await bloxlink_api._get_roblox_username(roblox_id)
-
-                    # ✅ Check if username is valid
-                    if not roblox_username or roblox_username == 'Unknown':
+                # ✅ FIX: Validate Roblox data properly
+                if status == 'success' and roblox_id and roblox_username:
+                    # Check if username is valid (not Unknown or empty)
+                    if roblox_username == 'Unknown' or not roblox_username:
                         print(f"   ⚠️ Invalid Roblox username for {member.display_name}")
                         roblox_username = 'MISSING'
+                        roblox_id = 'MISSING'
                         has_issues.append('Invalid/deleted Roblox account')
                     else:
                         print(f"   ✅ Roblox: {roblox_username} (ID: {roblox_id})")
-
-                elif result['status'] == 'not_linked':
+                elif status == 'not_linked':
                     print(f"   ❌ No Bloxlink for {member.display_name}")
                     roblox_username = 'MISSING'
                     roblox_id = 'MISSING'
                     has_issues.append('Not linked to Bloxlink')
-
                 else:
                     # API failure
-                    print(f"   🔴 API failure for {member.display_name}: {result['status']}")
+                    print(f"   🔴 API failure for {member.display_name}: {status}")
                     roblox_username = 'MISSING'
                     roblox_id = 'MISSING'
-                    has_issues.append(f'API Error: {result["status"]}')
+                    has_issues.append(f'API Error: {status}')
 
                 # Get FENZ rank
+                fenz_prefix = None
                 for role_id, (rank_name, prefix) in FENZ_RANK_MAP.items():
                     if any(role.id == role_id for role in member.roles):
                         fenz_prefix = prefix
@@ -3855,7 +3857,7 @@ class CallsignCog(commands.Cog):
                 users_without_callsigns.append({
                     'member': member,
                     'fenz_prefix': fenz_prefix,
-                    'roblox_id': str(roblox_id) if roblox_id else 'MISSING',
+                    'roblox_id': str(roblox_id) if roblox_id and roblox_id != 'MISSING' else 'MISSING',
                     'roblox_username': roblox_username,
                     'has_issues': has_issues
                 })
