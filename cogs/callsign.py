@@ -583,7 +583,7 @@ async def send_safe_embeds(self, channel, items: list, title_prefix: str, color,
             embed.add_field(**field_data)
 
         # Validate size
-        if self.get_embed_size(embed) > 5500:
+        if get_embed_size(embed) > 5500:
             # Try with smaller chunks
             if max_per_embed > 1:
                 await self.send_safe_embeds(channel, chunk, title_prefix, color, formatter_func, max_per_embed // 2)
@@ -757,7 +757,7 @@ class BloxlinkAPI:
 
     def __init__(self):
         self.base_url = "https://api.blox.link/v4/public"
-        self.rate_limit_delay = 1  # 750ms between requests (safer than 500ms)
+        self.rate_limit_delay = 0  # 750ms between requests (safer than 500ms)
         self.last_request_time = 0
         self.max_retries = 3
         self.timeout = 15  # Increased from 10s to 15s
@@ -1326,40 +1326,44 @@ class CallsignCog(commands.Cog):
                         if discord_id not in db_map:
                             member = guild.get_member(discord_id)
                             if member:
-                                bloxlink_data = await self.get_bloxlink_data(member.id, guild.id)
-                                if bloxlink_data:
-                                    roblox_id = bloxlink_data['id']
-                                    roblox_username = await self.get_roblox_user_from_id(roblox_id)
+                                # ✅ Use BloxlinkAPI class for proper retry logic
+                                bloxlink_api = BloxlinkAPI()
+                                roblox_username, roblox_id, status = await bloxlink_api.get_bloxlink_data(member.id,
+                                                                                                          guild.id)
 
-                                    if roblox_username:
-                                        hhstj_prefix = get_hhstj_prefix_from_roles(member.roles)
-                                        is_fenz_high_command = any(
-                                            role.id in HIGH_COMMAND_RANKS for role in member.roles)
-                                        is_hhstj_high_command = any(
-                                            role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
+                                if status == 'success' and roblox_id and roblox_username:
+                                    # ✅ Both username and ID fetched successfully
+                                    hhstj_prefix = get_hhstj_prefix_from_roles(member.roles)
+                                    is_fenz_high_command = any(
+                                        role.id in HIGH_COMMAND_RANKS for role in member.roles)
+                                    is_hhstj_high_command = any(
+                                        role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
 
-                                        await add_callsign_to_database(
-                                            sheet_data['callsign'],
-                                            discord_id,
-                                            str(member),
-                                            roblox_id,
-                                            roblox_username,
-                                            sheet_data['fenz_prefix'],
-                                            hhstj_prefix or '',
-                                            self.bot.user.id,
-                                            "Auto-sync",
-                                            is_fenz_high_command,
-                                            is_hhstj_high_command
-                                        )
+                                    await add_callsign_to_database(
+                                        sheet_data['callsign'],
+                                        discord_id,
+                                        str(member),
+                                        str(roblox_id),  # Convert to string
+                                        roblox_username,
+                                        sheet_data['fenz_prefix'],
+                                        hhstj_prefix or '',
+                                        self.bot.user.id,
+                                        "Auto-sync",
+                                        is_fenz_high_command,
+                                        is_hhstj_high_command
+                                    )
 
-                                        # Track addition
-                                        callsign_display = f"{sheet_data['fenz_prefix']}-{sheet_data['callsign']}" if \
-                                            sheet_data['fenz_prefix'] else sheet_data['callsign']
-                                        stats['added_users'].append({
-                                            'member': member,
-                                            'callsign': callsign_display
-                                        })
-                                        stats['added_from_sheets'] += 1
+                                    # Track addition
+                                    callsign_display = f"{sheet_data['fenz_prefix']}-{sheet_data['callsign']}" if \
+                                        sheet_data['fenz_prefix'] else sheet_data['callsign']
+                                    stats['added_users'].append({
+                                        'member': member,
+                                        'callsign': callsign_display
+                                    })
+                                    stats['added_from_sheets'] += 1
+                                else:
+                                    # Failed to get Bloxlink data, skip this user
+                                    print(f"⚠️ Auto-sync: Could not get Bloxlink for {member.id}: {status}")
 
                     # Re-fetch database if we added entries
                     if stats['added_from_sheets'] > 0:
@@ -1371,62 +1375,62 @@ class CallsignCog(commands.Cog):
                         member = guild.get_member(record['discord_user_id'])
 
                         if not member:
-                            # User not in guild, just add to sheets data
-                            rank_type, rank_data = sheets_manager.determine_rank_type(member.roles)
-                            is_command_rank = (rank_type == 'command')
+                            continue
 
-                            callsign_data.append({
-                                'fenz_prefix': current_fenz_prefix or '',
-                                'hhstj_prefix': current_hhstj_prefix or '',
-                                'callsign': current_callsign,
-                                'discord_user_id': record['discord_user_id'],
-                                'discord_username': record['discord_username'],
-                                'roblox_user_id': record['roblox_user_id'],
-                                'roblox_username': record['roblox_username'],
-                                'is_command': is_command_rank,
-                                'strikes': sheets_manager.determine_strikes_value(member.roles) if member else None,
-                                'qualifications': sheets_manager.determine_qualifications(member.roles,
-                                                                                          is_command_rank) if member else None
-                            })
+                        rank_type, rank_data = sheets_manager.determine_rank_type(member.roles)
+                        is_command_rank = (rank_type == 'command')
 
-                            # Sort by rank hierarchy
-                        callsign_data.sort(key=lambda x: get_rank_sort_key(x['fenz_prefix'], x['hhstj_prefix']))
+                        callsign_data.append({
+                            'fenz_prefix': record['fenz_prefix'] or '',
+                            'hhstj_prefix': record['hhstj_prefix'] or '',
+                            'callsign': record['callsign'],
+                            'discord_user_id': record['discord_user_id'],
+                            'discord_username': record['discord_username'],
+                            'roblox_user_id': record['roblox_user_id'],
+                            'roblox_username': record['roblox_username'],
+                            'is_command': is_command_rank,
+                            'strikes': sheets_manager.determine_strikes_value(member.roles),
+                            'qualifications': sheets_manager.determine_qualifications(member.roles, is_command_rank)
+                        })
 
-                        # Update Google Sheets
-                        await sheets_manager.batch_update_callsigns(callsign_data)
+                    # Sort by rank hierarchy
+                    callsign_data.sort(key=lambda x: get_rank_sort_key(x['fenz_prefix'], x['hhstj_prefix']))
 
-                        # Calculate sync duration
-                        sync_duration = (datetime.utcnow() - sync_start_time).total_seconds()
+                    # Update Google Sheets
+                    await sheets_manager.batch_update_callsigns(callsign_data)
 
-                        # Send enhanced log with DETAILED changes
-                        await self.send_detailed_sync_log(self.bot, guild.name, stats, sync_duration)
+                    # Calculate sync duration
+                    sync_duration = (datetime.utcnow() - sync_start_time).total_seconds()
 
-                        print(f"<:Accepted:1426930333789585509> Auto-sync completed for guild {guild.name}:")
-                        print(f"    📊 {stats['total_callsigns']} callsigns synced to Google Sheets")
-                        print(
-                            f"    👥 {stats['members_found']} members found / {stats['members_not_found']} not in server")
-                        print(f"    🏷️ {stats['nickname_updates']} nicknames updated")
-                        print(f"    🎖️ {stats['rank_updates']} rank changes detected and saved")
-                        if stats['added_from_sheets'] > 0:
-                            print(f"    ➕ {stats['added_from_sheets']} added from sheets")
-                        if stats['removed_inactive'] > 0:
-                            print(f"    🗑️ {stats['removed_inactive']} removed (inactive 7+ days)")
-                        if stats['callsigns_reset']:
-                            print(f"    🔄 {len(stats['callsigns_reset'])} callsigns reset due to rank changes")
-                        # <:Accepted:1426930333789585509> NEW: Print naughty role stats
-                        if stats['naughty_roles_found'] > 0:
-                            print(f"    🚨 {stats['naughty_roles_found']} naughty roles found")
-                            print(f"    💾 {stats['naughty_roles_stored']} new naughty roles stored")
-                            print(f"    ✂️ {stats['naughty_roles_removed']} naughty roles removed")
-                        if stats['permission_errors']:
-                            print(f"    <:Warn:1437771973970104471> {len(stats['permission_errors'])} permission errors")
-                        if stats['errors']:
-                            non_perm_errors = [e for e in stats['errors'] if e['error'] != 'Missing permissions']
-                            if non_perm_errors:
-                                print(f"    <:Warn:1437771973970104471> {len(non_perm_errors)} other errors occurred")
-                        if stats.get('database_mismatches_fixed', 0) > 0:
-                            print(f"    🔧 {stats['database_mismatches_fixed']} database mismatches fixed")
-                        print(f"    ⏱️ Completed in {sync_duration:.2f}s")
+                    # Send enhanced log with DETAILED changes
+                    await self.send_detailed_sync_log(self.bot, guild.name, stats, sync_duration)
+
+                    print(f"<:Accepted:1426930333789585509> Auto-sync completed for guild {guild.name}:")
+                    print(f"    📊 {stats['total_callsigns']} callsigns synced to Google Sheets")
+                    print(
+                        f"    👥 {stats['members_found']} members found / {stats['members_not_found']} not in server")
+                    print(f"    🏷️ {stats['nickname_updates']} nicknames updated")
+                    print(f"    🎖️ {stats['rank_updates']} rank changes detected and saved")
+                    if stats['added_from_sheets'] > 0:
+                        print(f"    ➕ {stats['added_from_sheets']} added from sheets")
+                    if stats['removed_inactive'] > 0:
+                        print(f"    🗑️ {stats['removed_inactive']} removed (inactive 7+ days)")
+                    if stats['callsigns_reset']:
+                        print(f"    🔄 {len(stats['callsigns_reset'])} callsigns reset due to rank changes")
+                    # <:Accepted:1426930333789585509> NEW: Print naughty role stats
+                    if stats['naughty_roles_found'] > 0:
+                        print(f"    🚨 {stats['naughty_roles_found']} naughty roles found")
+                        print(f"    💾 {stats['naughty_roles_stored']} new naughty roles stored")
+                        print(f"    ✂️ {stats['naughty_roles_removed']} naughty roles removed")
+                    if stats['permission_errors']:
+                        print(f"    <:Warn:1437771973970104471> {len(stats['permission_errors'])} permission errors")
+                    if stats['errors']:
+                        non_perm_errors = [e for e in stats['errors'] if e['error'] != 'Missing permissions']
+                        if non_perm_errors:
+                            print(f"    <:Warn:1437771973970104471> {len(non_perm_errors)} other errors occurred")
+                    if stats.get('database_mismatches_fixed', 0) > 0:
+                        print(f"    🔧 {stats['database_mismatches_fixed']} database mismatches fixed")
+                    print(f"    ⏱️ Completed in {sync_duration:.2f}s")
 
             except Exception as e:
                 print(f"<:Denied:1426930694633816248> Error during auto-sync for {guild.name}: {e}")
@@ -1537,7 +1541,7 @@ class CallsignCog(commands.Cog):
                         )
 
                         # ✅ Validate size before sending
-                        if self.get_embed_size(embed) > 5500:
+                        if get_embed_size(embed) > 5500:
                             print(f"⚠️️ Embed too large, reducing chunk size further")
                             # Split into even smaller chunks if needed
                             continue
@@ -1561,7 +1565,7 @@ class CallsignCog(commands.Cog):
                             inline=False
                         )
 
-                    if self.get_embed_size(embed) > 5500:
+                    if get_embed_size(embed) > 5500:
                         print(f"⚠️ Embed too large, skipping")
                         continue
 
@@ -1585,7 +1589,7 @@ class CallsignCog(commands.Cog):
                             inline=False
                         )
 
-                    if self.get_embed_size(embed) > 5500:
+                    if get_embed_size(embed) > 5500:
                         print(f"⚠️ Embed too large, skipping")
                         continue
 
@@ -1629,7 +1633,7 @@ class CallsignCog(commands.Cog):
                             inline=False
                         )
 
-                    if self.get_embed_size(embed) > 5500:
+                    if get_embed_size(embed) > 5500:
                         print(f"⚠️ Embed too large, skipping")
                         continue
 
@@ -1654,7 +1658,7 @@ class CallsignCog(commands.Cog):
                             inline=True
                         )
 
-                    if self.get_embed_size(embed) > 5500:
+                    if get_embed_size(embed) > 5500:
                         print(f"⚠️ Embed too large, skipping")
                         continue
 
@@ -1679,7 +1683,7 @@ class CallsignCog(commands.Cog):
                             inline=True
                         )
 
-                    if self.get_embed_size(embed) > 5500:
+                    if get_embed_size(embed) > 5500:
                         print(f"⚠️ Embed too large, skipping")
                         continue
 
@@ -1973,36 +1977,35 @@ class CallsignCog(commands.Cog):
                 if discord_id not in db_map:
                     member = interaction.guild.get_member(discord_id)
                     if member:
-                        bloxlink_data = await self.get_bloxlink_data(member.id, interaction.guild.id)
-                        if bloxlink_data:
-                            roblox_id = bloxlink_data['id']
-                            roblox_username = await self.get_roblox_user_from_id(roblox_id)
+                        bloxlink_api = BloxlinkAPI()
+                        roblox_username, roblox_id, status = await bloxlink_api.get_bloxlink_data(member.id,
+                                                                                                  interaction.guild.id)
 
-                            if roblox_username:
-                                hhstj_prefix = get_hhstj_prefix_from_roles(member.roles)
-                                is_fenz_hc = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
-                                is_hhstj_hc = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
+                        if status == 'success' and roblox_id and roblox_username:
+                            hhstj_prefix = get_hhstj_prefix_from_roles(member.roles)
+                            is_fenz_hc = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
+                            is_hhstj_hc = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
 
-                                if not dry_run:
-                                    await add_callsign_to_database(
-                                        sheet_data['callsign'],
-                                        discord_id,
-                                        str(member),
-                                        roblox_id,
-                                        roblox_username,
-                                        sheet_data['fenz_prefix'],
-                                        hhstj_prefix or '',
-                                        self.bot.user.id,
-                                        "Manual Sync",
-                                        is_fenz_hc,
-                                        is_hhstj_hc
-                                    )
+                            if not dry_run:
+                                await add_callsign_to_database(
+                                    sheet_data['callsign'],
+                                    discord_id,
+                                    str(member),
+                                    roblox_id,
+                                    roblox_username,
+                                    sheet_data['fenz_prefix'],
+                                    hhstj_prefix or '',
+                                    self.bot.user.id,
+                                    "Manual Sync",
+                                    is_fenz_hc,
+                                    is_hhstj_hc
+                                )
 
-                                stats['added_from_sheets'] += 1
-                    else:
-                        stats['missing_in_sheets'].append(
-                            f"Discord ID {discord_id} (callsign {sheet_data['callsign']}) - user not in server"
-                        )
+                            stats['added_from_sheets'] += 1
+                        else:
+                            stats['missing_in_sheets'].append(
+                                f"Discord ID {discord_id} - Bloxlink error: {status}"
+                            )
 
             # Re-fetch if we added entries
             if stats['added_from_sheets'] > 0 and not dry_run:
@@ -2300,7 +2303,7 @@ class CallsignCog(commands.Cog):
                             inline=False
                         )
 
-                    if self.get_embed_size(embed) > 5500:
+                    if get_embed_size(embed) > 5500:
                         print(f"⚠️ Embed too large, skipping")
                         continue
 
@@ -2325,7 +2328,7 @@ class CallsignCog(commands.Cog):
                             inline=False
                         )
 
-                    if self.get_embed_size(embed) > 5500:
+                    if get_embed_size(embed) > 5500:
                         print(f"⚠️ Embed too large, skipping")
                         continue
 
@@ -2349,7 +2352,7 @@ class CallsignCog(commands.Cog):
                             inline=False
                         )
 
-                    if self.get_embed_size(embed) > 5500:
+                    if get_embed_size(embed) > 5500:
                         print(f"⚠️ Embed too large, skipping")
                         continue
 
@@ -3457,7 +3460,7 @@ class CallsignCog(commands.Cog):
             import traceback
             traceback.print_exc()
 
-    async def detect_database_mismatches(self, guild: discord.Guild) -> dict:
+    async def detect_database_mismatches(self, guild: discord.Guild, progress_callback=None) -> dict:
         """
         Detect users with outdated or incomplete database information
         Returns dict with categories of mismatches
@@ -3470,11 +3473,22 @@ class CallsignCog(commands.Cog):
             'missing_roblox_id': [],
         }
 
+        # Initialize cache if not provided
+        if bloxlink_cache is None:
+            bloxlink_cache = {}
+
         async with db.pool.acquire() as conn:
             db_callsigns = await conn.fetch('SELECT * FROM callsigns')
 
-        for record in db_callsigns:
+        total_records = len(db_callsigns)
+
+        bloxlink_api = BloxlinkAPI()
+
+        for index, record in enumerate(db_callsigns, 1):
             member = guild.get_member(record['discord_user_id'])
+
+            if progress_callback:
+                await progress_callback(index, total_records)
 
             if not member:
                 continue  # User not in server
@@ -3497,43 +3511,50 @@ class CallsignCog(commands.Cog):
                 })
 
             # Check Roblox data
-            bloxlink_data = await self.get_bloxlink_data(member.id, guild.id)
+                if member.id in bloxlink_cache:
+                    # Use cached result
+                    cached = bloxlink_cache[member.id]
+                    roblox_username, roblox_id, status = cached
+                else:
+                    # Fetch and cache
+                    roblox_username, roblox_id, status = await bloxlink_api.get_bloxlink_data(member.id, guild.id)
+                    bloxlink_cache[member.id] = (roblox_username, roblox_id, status)
 
-            if bloxlink_data:
-                current_roblox_id = bloxlink_data['id']
-                current_roblox_username = await self.get_roblox_user_from_id(current_roblox_id)
+                if status == 'success' and roblox_id:
+                    current_roblox_id = str(roblox_id)
+                    current_roblox_username = roblox_username
 
-                stored_roblox_id = record.get('roblox_user_id')
-                stored_roblox_username = record.get('roblox_username')
+                    stored_roblox_id = record.get('roblox_user_id')
+                    stored_roblox_username = record.get('roblox_username')
 
-                # Check Roblox ID mismatch or missing
-                if not stored_roblox_id:
-                    mismatches['missing_roblox_id'].append({
-                        'member': member,
-                        'current_id': current_roblox_id,
-                        'current_username': current_roblox_username,
-                        'record': dict(record)
-                    })
-                elif current_roblox_id != stored_roblox_id:
-                    mismatches['roblox_id_mismatch'].append({
-                        'member': member,
-                        'old_id': stored_roblox_id,
-                        'new_id': current_roblox_id,
-                        'current_username': current_roblox_username,
-                        'record': dict(record)
-                    })
-
-                # Check Roblox username mismatch
-                if current_roblox_username and stored_roblox_username:
-                    if current_roblox_username != stored_roblox_username:
-                        mismatches['roblox_username_mismatch'].append({
+                    # Check Roblox ID mismatch or missing
+                    if not stored_roblox_id:
+                        mismatches['missing_roblox_id'].append({
                             'member': member,
-                            'old': stored_roblox_username,
-                            'new': current_roblox_username,
+                            'current_id': current_roblox_id,
+                            'current_username': current_roblox_username,
+                            'record': dict(record)
+                        })
+                    elif current_roblox_id != stored_roblox_id:
+                        mismatches['roblox_id_mismatch'].append({
+                            'member': member,
+                            'old_id': stored_roblox_id,
+                            'new_id': current_roblox_id,
+                            'current_username': current_roblox_username,
                             'record': dict(record)
                         })
 
-        return mismatches
+                    # Check Roblox username mismatch
+                    if current_roblox_username and stored_roblox_username:
+                        if current_roblox_username != stored_roblox_username:
+                            mismatches['roblox_username_mismatch'].append({
+                                'member': member,
+                                'old': stored_roblox_username,
+                                'new': current_roblox_username,
+                                'record': dict(record)
+                            })
+
+            return mismatches
 
     @callsign_group.command(name="bulk-assign", description="Assign callsigns to all unassigned users")
     @app_commands.describe(database_scan="Check and fix database mismatches before assigning (default: False)")
@@ -3549,28 +3570,49 @@ class CallsignCog(commands.Cog):
             )
             return
 
-        if database_scan:
-            await interaction.response.send_message(
-                content=f"<a:Load:1430912797469970444> Starting Database Scan",
-                ephemeral=True
-            )
-        else:
-            await interaction.response.send_message(
-                content=f"<a:Load:1430912797469970444> Starting Bulk Assignment",
-                ephemeral=True
-            )
+        await interaction.response.defer()
 
         try:
+            bloxlink_cache = {}
+
             if database_scan:
-                # Step 1: Detect database mismatches
+                # Step 1: Detect database mismatches with progress
                 status_embed = discord.Embed(
                     title="<a:Load:1430912797469970444> Scanning for database issues...",
-                    description="Checking for outdated or incomplete data...",
+                    description="Preparing to check database...",
                     color=discord.Color.blue()
                 )
                 await interaction.edit_original_response(embed=status_embed)
 
-                mismatches = await self.detect_database_mismatches(interaction.guild)
+                # Create progress callback for database scan
+                last_db_update = 0
+
+                async def db_progress_callback(current, total):
+                    nonlocal last_db_update
+                    current_time = asyncio.get_event_loop().time()
+
+                    # Update every 10 users or every 2 seconds
+                    if current % 10 == 0 or (current_time - last_db_update) >= 2 or current == total:
+                        progress_percent = int((current / total) * 100)
+                        progress_bar = "█" * (progress_percent // 5) + "░" * (20 - (progress_percent // 5))
+
+                        progress_embed = discord.Embed(
+                            title="<a:Load:1430912797469970444> Scanning Database",
+                            description=f"**Progress:** {current}/{total} ({progress_percent}%)\n"
+                                        f"`{progress_bar}`\n\n"
+                                        f"Checking for mismatches...",
+                            color=discord.Color.blue()
+                        )
+                        progress_embed.set_footer(text=f"Checking user {current} of {total}")
+
+                        try:
+                            await interaction.edit_original_response(embed=progress_embed)
+                            last_db_update = current_time
+                        except:
+                            pass
+
+                mismatches = await self.detect_database_mismatches(interaction.guild, db_progress_callback,
+                                                                   bloxlink_cache)
                 total_issues = sum(len(v) for v in mismatches.values())
 
                 if total_issues > 0:
@@ -3620,12 +3662,12 @@ class CallsignCog(commands.Cog):
                         text="Click 'Fix Mismatches' to update all database entries, or 'Skip to Bulk Assign'")
 
                     # Create view with buttons
-                    view = DatabaseMismatchView(self, interaction, mismatches)
+                    view = DatabaseMismatchView(self, interaction, mismatches, bloxlink_cache)
                     await interaction.edit_original_response(embed=mismatch_embed, view=view)
                     return
 
             # No mismatches OR database_scan=False, proceed to bulk assign
-            await self.start_bulk_assign(interaction)
+            await self.start_bulk_assign(interaction, bloxlink_cache)
 
         except Exception as e:
             await interaction.followup.send(
@@ -3639,6 +3681,12 @@ class CallsignCog(commands.Cog):
         """Streamlined bulk assign with proper Bloxlink handling"""
 
         # Initialize BloxlinkAPI for retry logic
+        bloxlink_api = BloxlinkAPI()
+
+        # Initialize cache if not provided
+        if bloxlink_cache is None:
+            bloxlink_cache = {}
+
         bloxlink_api = BloxlinkAPI()
 
         try:
@@ -3680,6 +3728,12 @@ class CallsignCog(commands.Cog):
             # Progress Update 3: Starting Bloxlink checks
             status_embed.title = "<a:Load:1430912797469970444> Checking Bloxlink Connections"
             status_embed.description = f"Scanning {len(members_without_callsigns)} members...\nThis may take a few minutes."
+
+            # Check how many are already cached
+            cached_count = sum(1 for m in members_without_callsigns if m.id in bloxlink_cache)
+            if cached_count > 0:
+                status_embed.description += f"\n<:Accepted:1426930333789585509> {cached_count} already cached from database scan"
+
             await interaction.edit_original_response(embed=status_embed)
 
             # Track eligible users
@@ -3716,15 +3770,20 @@ class CallsignCog(commands.Cog):
                     except:
                         pass
 
-            # Get Discord IDs for all members
-            discord_ids = [m.id for m in members_without_callsigns]
+            # Get Discord IDs for all members (only those NOT in cache)
+            uncached_ids = [m.id for m in members_without_callsigns if m.id not in bloxlink_cache]
 
-            # Use enhanced Bloxlink API with retry logic
-            bloxlink_results = await bloxlink_api.bulk_check_bloxlink(
-                discord_ids,
-                guild_id=interaction.guild.id,
-                progress_callback=progress_callback
-            )
+            if uncached_ids:
+                # Use enhanced Bloxlink API with retry logic for uncached members
+                new_results = await bloxlink_api.bulk_check_bloxlink(
+                    uncached_ids,
+                    guild_id=interaction.guild.id,
+                    progress_callback=progress_callback
+                )
+
+            # Add new results to cache
+            for discord_id, result in new_results.items():
+                bloxlink_cache[discord_id] = (result['roblox_username'], result['roblox_user_id'], result['status'])
 
             # Process results
             for member in members_without_callsigns:
@@ -4198,6 +4257,8 @@ class DatabaseMismatchView(discord.ui.View):
         self.cog = cog
         self.interaction = interaction
         self.mismatches = mismatches
+        self.bloxlink_cache = bloxlink_cache if bloxlink_cache is not None else {}
+
 
     @discord.ui.button(label="Fix All Mismatches", style=discord.ButtonStyle.success, emoji="🔧")
     async def fix_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -4258,15 +4319,17 @@ class DatabaseMismatchView(discord.ui.View):
         )
         await interaction.delete_original_response()
 
-        # Proceed to bulk assign
-        await self.cog.start_bulk_assign(self.interaction)
+        # PASS THE CACHE when proceeding to bulk assign
+        await self.cog.start_bulk_assign(self.interaction, self.bloxlink_cache)
         self.stop()
 
     @discord.ui.button(label="Skip to Bulk Assign", style=discord.ButtonStyle.secondary, emoji="<:RightSkip:1434962167660281926>")
     async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Skipping to Bulk Assign",
                                                 ephemeral=True)
-        await self.cog.start_bulk_assign(self.interaction)
+
+        # PASS THE CACHE when skipping to bulk assign
+        await self.cog.start_bulk_assign(self.interaction, self.bloxlink_cache)
         await interaction.delete_original_response()
         self.stop()
 
