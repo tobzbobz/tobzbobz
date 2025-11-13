@@ -757,20 +757,38 @@ class BloxlinkAPI:
 
     def __init__(self):
         self.base_url = "https://api.blox.link/v4/public"
-        self.rate_limit_delay = 0  # 750ms between requests (safer than 500ms)
+        self.rate_limit_delay = 0.75  # 750ms between requests (safer than 500ms)
         self.last_request_time = 0
         self.max_retries = 3
         self.timeout = 15  # Increased from 10s to 15s
+        self.requests_this_minute = 0
+        self.minute_start = asyncio.get_event_loop().time()
+        self.max_requests_per_minute = 50  # Conservative limit
+
 
     async def _enforce_rate_limit(self):
         """Ensure we don't exceed rate limits"""
         current_time = asyncio.get_event_loop().time()
         time_since_last = current_time - self.last_request_time
 
+        if current_time - self.minute_start >= 60:
+            self.requests_this_minute = 0
+            self.minute_start = current_time
+
+        if self.requests_this_minute >= self.max_requests_per_minute:
+            wait_time = 60 - (current_time - self.minute_start)
+            if wait_time > 0:
+                print(f"⏸️ Hit rate limit ceiling, waiting {wait_time:.1f}s...")
+                await asyncio.sleep(wait_time)
+                self.requests_this_minute = 0
+                self.minute_start = asyncio.get_event_loop().time()
+
+        time_since_last = current_time - self.last_request_time
         if time_since_last < self.rate_limit_delay:
             await asyncio.sleep(self.rate_limit_delay - time_since_last)
 
         self.last_request_time = asyncio.get_event_loop().time()
+        self.requests_this_minute += 1
 
     async def get_bloxlink_data(
             self,
@@ -820,7 +838,7 @@ class BloxlinkAPI:
                         elif response.status == 429:
                             # Rate limited - retry with exponential backoff
                             if attempt < self.max_retries:
-                                wait_time = 2 ** attempt
+                                wait_time = (2 ** attempt) * 2
                                 print(f"⏳ Rate limited, waiting {wait_time}s (attempt {attempt}/{self.max_retries})")
                                 await asyncio.sleep(wait_time)
                                 continue
@@ -890,6 +908,7 @@ class BloxlinkAPI:
             guild_id: int,
             progress_callback=None
     ) -> Dict[int, Dict]:
+
         """
         Bulk check Bloxlink status for multiple users with proper rate limiting
 
@@ -918,11 +937,15 @@ class BloxlinkAPI:
             'other': 0
         }
 
+        consecutive_rate_limits = 0
+        consecutive_failures = 0  # ✅ Track all types of failures
+        max_consecutive_failures = 10  # ✅ Terminate after 10 consecutive failures
+        max_total_failures = 30  # ✅ Terminate if we hit 30 failures total
+
         print(f"🔍 Starting bulk Bloxlink check for {total} users...")
-        print(f"⏱️ Estimated time: {int(total * self.rate_limit_delay / 60)} minutes")
+        print(f"⏱️ Estimated time: ~{int(total * self.rate_limit_delay / 60)} minutes")
 
         for i, discord_id in enumerate(discord_user_ids, 1):
-            # Get Bloxlink data
             username, roblox_id, status = await self.get_bloxlink_data(discord_id, guild_id)
 
             results[discord_id] = {
@@ -932,16 +955,51 @@ class BloxlinkAPI:
             }
 
             # Update status counts
-            if status == 'success':
-                status_counts['success'] += 1
-            elif status == 'not_linked':
-                status_counts['not_linked'] += 1
-            elif status == 'rate_limited':
+            if status in ['rate_limited', 'timeout',
+                          'max_retries_exceeded'] or 'api_error' in status or 'error' in status:
+                consecutive_failures += 1
+
+            if status == 'rate_limited':
+                consecutive_rate_limits += 1
                 status_counts['rate_limited'] += 1
+
+                if consecutive_rate_limits >= 5:
+                    print(f"\n⚠️ Hit {consecutive_rate_limits} consecutive rate limits!")
+                    print(f"⏸️ Pausing for 2 minutes to let API cool down...")
+                    await asyncio.sleep(120)
+                    consecutive_rate_limits = 0
+                    print(f"▶️ Resuming bulk check...")
             elif status == 'timeout':
                 status_counts['timeout'] += 1
             elif 'api_error' in status or 'error' in status:
                 status_counts['api_error'] += 1
+            else:
+                status_counts['other'] += 1
+
+            total_failures = status_counts['rate_limited'] + status_counts['timeout'] + status_counts['api_error']
+
+            if consecutive_failures >= max_consecutive_failures:
+                print(f"\n❌ TERMINATING: Hit {consecutive_failures} consecutive failures!")
+                print(f"   Checked {i}/{total} users before termination")
+                print(f"   ✅ Success: {status_counts['success']}")
+                print(f"   ❌ Failed: {total_failures}")
+                return None  # ✅ Return None to signal termination
+
+            if total_failures >= max_total_failures:
+                print(f"\n❌ TERMINATING: Hit {total_failures} total failures (limit: {max_total_failures})!")
+                print(f"   Checked {i}/{total} users before termination")
+                print(f"   ✅ Success: {status_counts['success']}")
+                return None  # ✅ Return None to signal termination
+
+
+            else:
+                consecutive_failures = 0
+                consecutive_rate_limits = 0
+
+            if status == 'success':
+                status_counts['success'] += 1
+            elif status == 'not_linked':
+                status_counts['not_linked'] += 1
             else:
                 status_counts['other'] += 1
 
@@ -952,9 +1010,11 @@ class BloxlinkAPI:
             # Progress updates every 10 members
             if i % 10 == 0 or i == total:
                 print(
-                    f"Progress: {i}/{total} | <:Accepted:1426930333789585509> {status_counts['success']} | <:Denied:1426930694633816248> {status_counts['not_linked']} | <:Warn:1437771973970104471> {status_counts['rate_limited']} | ⏱️ {status_counts['timeout']} | 🔴 {status_counts['api_error']}")
+                    f"Progress: {i}/{total} | ✅ {status_counts['success']} | ❌ {status_counts['not_linked']} | "
+                    f"⚠️ {status_counts['rate_limited']} | ⏱️ {status_counts['timeout']} | 🔴 {status_counts['api_error']}"
+                )
 
-        print(f"\n<:Accepted:1426930333789585509> Bulk check complete!")
+        print(f"\n✅ Bulk check complete!")
         print(f"   Success: {status_counts['success']}")
         print(f"   Not Linked: {status_counts['not_linked']}")
         print(f"   Rate Limited: {status_counts['rate_limited']}")
@@ -3778,12 +3838,35 @@ class CallsignCog(commands.Cog):
                 new_results = await bloxlink_api.bulk_check_bloxlink(
                     uncached_ids,
                     guild_id=interaction.guild.id,
-                    progress_callback=progress_callback  # ✅ Pass the callback
+                    progress_callback=progress_callback
                 )
+
+                if new_results is None:
+                    error_embed = discord.Embed(
+                        title="<:Denied:1426930694633816248> Bulk Check Terminated",
+                        description="The Bloxlink API check was terminated due to excessive failures.\n\n"
+                                    "**Possible causes:**\n"
+                                    "• Bloxlink API is experiencing issues\n"
+                                    "• Rate limits are being hit too frequently\n"
+                                    "• Network connectivity problems\n\n"
+                                    "**What to do:**\n"
+                                    "• Wait 10-15 minutes and try again\n"
+                                    "• Check if Bloxlink is operational\n"
+                                    "• Contact support if the issue persists",
+                        color=discord.Color.red()
+                    )
+
+                    await interaction.edit_original_response(embed=error_embed)
+                    return
 
                 # ✅ Add new results to cache
                 for discord_id, result in new_results.items():
-                    bloxlink_cache[discord_id] = (result['roblox_username'], result['roblox_user_id'], result['status'])
+                    bloxlink_cache[discord_id] = (
+                        result['roblox_username'],
+                        result['roblox_user_id'],
+                        result['status']
+                    )
+
             else:
                 progress_embed = discord.Embed(
                     title="✅ Bloxlink Check Complete",
