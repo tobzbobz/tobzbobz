@@ -775,92 +775,91 @@ class BloxlinkAPI:
     async def get_bloxlink_data(
             self,
             discord_user_id: int,
-            guild_id: int = None
+            guild_id: int
     ) -> Tuple[Optional[str], Optional[int], str]:
         """
         Get Bloxlink data with retry logic and proper error handling
 
         Returns:
             Tuple of (roblox_username, roblox_user_id, status_message)
-            status can be: "success", "not_linked", "rate_limited", "timeout", "api_error"
         """
+
+        # ✅ REQUIRE guild_id - Bloxlink API works best with guild context
+        if not guild_id:
+            return (None, None, "no_guild_id")
 
         for attempt in range(1, self.max_retries + 1):
             try:
-                # Enforce rate limiting
                 await self._enforce_rate_limit()
 
-                # Build URL
-                url = f"{self.base_url}/guilds/{guild_id}/discord-to-roblox/{discord_user_id}" if guild_id else \
-                    f"{self.base_url}/discord-to-roblox/{discord_user_id}"
+                # ✅ ALWAYS use guild-specific endpoint with API key
+                url = f"{self.base_url}/guilds/{guild_id}/discord-to-roblox/{discord_user_id}"
 
-                # Make request with timeout
                 timeout = aiohttp.ClientTimeout(total=self.timeout)
                 async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.get(url) as response:
+                    async with session.get(
+                            url,
+                            headers={'Authorization': BLOXLINK_API_KEY}  # ✅ ALWAYS include API key
+                    ) as response:
 
-                        # Success
                         if response.status == 200:
                             data = await response.json()
                             roblox_id = data.get('robloxID')
 
                             if roblox_id:
-                                # Fetch username from Roblox API
                                 username = await self._get_roblox_username(roblox_id)
                                 return (username, int(roblox_id), "success")
                             else:
                                 return (None, None, "not_linked")
 
-                        # ✅ NEW: Handle 400 Bad Request - treat as not linked
                         elif response.status == 400:
-                            print(f"⚠️ Bad request for user {discord_user_id} - likely not in Bloxlink system")
+                            # Bad request - user likely not in Bloxlink system
+                            print(f"⚠️ Bad request for user {discord_user_id} in guild {guild_id}")
                             return (None, None, "not_linked")
 
-                        # Rate limited - retry with exponential backoff
                         elif response.status == 429:
+                            # Rate limited - retry with exponential backoff
                             if attempt < self.max_retries:
-                                wait_time = 2 ** attempt  # 2s, 4s, 8s
-                                print(
-                                    f"<:Warn:1437771973970104471> Rate limited for user {discord_user_id}, waiting {wait_time}s (attempt {attempt}/{self.max_retries})")
+                                wait_time = 2 ** attempt
+                                print(f"⏳ Rate limited, waiting {wait_time}s (attempt {attempt}/{self.max_retries})")
                                 await asyncio.sleep(wait_time)
                                 continue
                             return (None, None, "rate_limited")
 
-                        # Not found - genuinely not linked
                         elif response.status == 404:
+                            # Not found
                             return (None, None, "not_linked")
 
-                        # ✅ IMPROVED: Other errors - don't retry 4xx errors (client errors)
                         elif 400 <= response.status < 500:
-                            # Client errors (400-499) shouldn't be retried
-                            print(f"❌ Client error {response.status} for user {discord_user_id} - not retrying")
+                            # Other client errors - don't retry
+                            print(f"❌ Client error {response.status} for user {discord_user_id}")
                             return (None, None, "not_linked")
 
                         else:
-                            # Server errors (500+) - worth retrying
+                            # Server errors (500+) - retry
                             if attempt < self.max_retries:
                                 print(
-                                    f"<:Warn:1437771973970104471> Server error {response.status} for user {discord_user_id}, retrying (attempt {attempt}/{self.max_retries})")
-                                await asyncio.sleep(1 * attempt)  # Linear backoff
+                                    f"⚠️ Server error {response.status}, retrying (attempt {attempt}/{self.max_retries})")
+                                await asyncio.sleep(1 * attempt)
                                 continue
                             return (None, None, f"api_error_{response.status}")
 
             except asyncio.TimeoutError:
                 if attempt < self.max_retries:
-                    print(f"⏱️ Timeout for user {discord_user_id}, retrying (attempt {attempt}/{self.max_retries})")
+                    print(f"⏱️ Timeout, retrying (attempt {attempt}/{self.max_retries})")
                     await asyncio.sleep(2 * attempt)
                     continue
                 return (None, None, "timeout")
 
             except Exception as e:
                 if attempt < self.max_retries:
-                    print(f"❌ Error for user {discord_user_id}: {e}, retrying (attempt {attempt}/{self.max_retries})")
+                    print(f"❌ Error: {e}, retrying (attempt {attempt}/{self.max_retries})")
                     await asyncio.sleep(1 * attempt)
                     continue
                 return (None, None, f"error_{type(e).__name__}")
 
-        # All retries exhausted
         return (None, None, "max_retries_exceeded")
+
     async def _get_roblox_username(self, roblox_id: int) -> Optional[str]:
         """Fetch Roblox username from Roblox API with retry logic"""
         url = f"https://users.roblox.com/v1/users/{roblox_id}"
@@ -888,7 +887,7 @@ class BloxlinkAPI:
     async def bulk_check_bloxlink(
             self,
             discord_user_ids: list,
-            guild_id: int = None,
+            guild_id: int,
             progress_callback=None
     ) -> Dict[int, Dict]:
         """
