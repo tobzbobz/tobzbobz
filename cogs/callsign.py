@@ -566,6 +566,33 @@ def get_hhstj_prefix_from_roles(roles) -> str:
     return ""
 
 
+async def send_safe_embeds(self, channel, items: list, title_prefix: str, color, formatter_func,
+                           max_per_embed: int = 3):
+    """Safely send embeds with automatic size validation"""
+    for i in range(0, len(items), max_per_embed):
+        chunk = items[i:i + max_per_embed]
+
+        embed = discord.Embed(
+            title=f"{title_prefix} ({i + 1}-{min(i + max_per_embed, len(items))} of {len(items)})",
+            color=color,
+            timestamp=datetime.utcnow()
+        )
+
+        for item in chunk:
+            field_data = formatter_func(item)
+            embed.add_field(**field_data)
+
+        # Validate size
+        if self.get_embed_size(embed) > 5500:
+            # Try with smaller chunks
+            if max_per_embed > 1:
+                await self.send_safe_embeds(channel, chunk, title_prefix, color, formatter_func, max_per_embed // 2)
+            else:
+                print(f"⚠️ Single item too large, skipping")
+            continue
+
+        await channel.send(embed=embed)
+
 def get_hhstj_shortened_versions(hhstj_prefix: str) -> list:
     """
     Get all shortened versions of an HHStJ callsign
@@ -784,12 +811,17 @@ class BloxlinkAPI:
                             else:
                                 return (None, None, "not_linked")
 
+                        # ✅ NEW: Handle 400 Bad Request - treat as not linked
+                        elif response.status == 400:
+                            print(f"⚠️ Bad request for user {discord_user_id} - likely not in Bloxlink system")
+                            return (None, None, "not_linked")
+
                         # Rate limited - retry with exponential backoff
                         elif response.status == 429:
                             if attempt < self.max_retries:
                                 wait_time = 2 ** attempt  # 2s, 4s, 8s
                                 print(
-                                    f"<:Warn:1437771973970104471>️ Rate limited for user {discord_user_id}, waiting {wait_time}s (attempt {attempt}/{self.max_retries})")
+                                    f"⚠️ Rate limited for user {discord_user_id}, waiting {wait_time}s (attempt {attempt}/{self.max_retries})")
                                 await asyncio.sleep(wait_time)
                                 continue
                             return (None, None, "rate_limited")
@@ -798,11 +830,17 @@ class BloxlinkAPI:
                         elif response.status == 404:
                             return (None, None, "not_linked")
 
-                        # Other error
+                        # ✅ IMPROVED: Other errors - don't retry 4xx errors (client errors)
+                        elif 400 <= response.status < 500:
+                            # Client errors (400-499) shouldn't be retried
+                            print(f"❌ Client error {response.status} for user {discord_user_id} - not retrying")
+                            return (None, None, "not_linked")
+
                         else:
+                            # Server errors (500+) - worth retrying
                             if attempt < self.max_retries:
                                 print(
-                                    f"<:Warn:1437771973970104471> API error {response.status} for user {discord_user_id}, retrying (attempt {attempt}/{self.max_retries})")
+                                    f"⚠️ Server error {response.status} for user {discord_user_id}, retrying (attempt {attempt}/{self.max_retries})")
                                 await asyncio.sleep(1 * attempt)  # Linear backoff
                                 continue
                             return (None, None, f"api_error_{response.status}")
@@ -816,14 +854,13 @@ class BloxlinkAPI:
 
             except Exception as e:
                 if attempt < self.max_retries:
-                    print(f"<:Denied:1426930694633816248> Error for user {discord_user_id}: {e}, retrying (attempt {attempt}/{self.max_retries})")
+                    print(f"❌ Error for user {discord_user_id}: {e}, retrying (attempt {attempt}/{self.max_retries})")
                     await asyncio.sleep(1 * attempt)
                     continue
                 return (None, None, f"error_{type(e).__name__}")
 
         # All retries exhausted
         return (None, None, "max_retries_exceeded")
-
     async def _get_roblox_username(self, roblox_id: int) -> Optional[str]:
         """Fetch Roblox username from Roblox API with retry logic"""
         url = f"https://users.roblox.com/v1/users/{roblox_id}"
@@ -994,6 +1031,20 @@ class CallsignCog(commands.Cog):
         async with db.pool.acquire() as conn:
             self.active_watches = await conn.fetch("SELECT * FROM callsigns;")
         print("<:Accepted:1426930333789585509> Reloaded callsigns cache")
+
+    def get_embed_size(embed: discord.Embed) -> int:
+        """Calculate total character count of an embed"""
+        size = 0
+        size += len(embed.title or "")
+        size += len(embed.description or "")
+        size += len(embed.footer.text or "") if embed.footer else 0
+        size += len(embed.author.name or "") if embed.author else 0
+
+        for field in embed.fields:
+            size += len(field.name or "")
+            size += len(field.value or "")
+
+        return size
 
     @staticmethod
     def strip_shift_prefixes(nickname: str) -> str:
@@ -1464,61 +1515,79 @@ class CallsignCog(commands.Cog):
 
             # 1. Nickname Changes - SHOW WHO AND WHAT CHANGED
             if stats['nickname_changes']:
-                for i in range(0, len(stats['nickname_changes']), 5):
-                    chunk = stats['nickname_changes'][i:i + 5]
+                for i in range(0, len(stats['nickname_changes']),3):
+                    chunk = stats['nickname_changes'][i:i + 3]
 
                     # Around line 750-800
                     embed = discord.Embed(
-                        title=f"Nickname Updates ({i + 1}-{min(i + 5, len(stats['nickname_changes']))})",
+                        title=f"Nickname Updates ({i + 1}-{min(i + 3, len(stats['nickname_changes']))})",
                         description=' '.join([change['member'].mention for change in chunk]),  # Mentions here WILL ping
                         color=discord.Color.green()
                     )
 
                     for change in chunk:
+                        # ✅ Truncate long nicknames
+                        old_nick = change['old'][:100] if len(change['old']) > 100 else change['old']
+                        new_nick = change['new'][:100] if len(change['new']) > 100 else change['new']
+
                         embed.add_field(
-                            name=f"{change['member'].mention} ({change['member'].display_name})",
-                            value=f"**Before:** `{change['old']}`\n**After:** `{change['new']}`",
+                            name=f"{change['member'].display_name[:50]}",  # ✅ Limit name length
+                            value=f"**Before:** `{old_nick}`\n**After:** `{new_nick}`",
                             inline=False
                         )
+
+                        # ✅ Validate size before sending
+                        if self.get_embed_size(embed) > 5500:
+                            print(f"<:Warn:1437771973970104471>️ Embed too large, reducing chunk size further")
+                            # Split into even smaller chunks if needed
+                            continue
 
                     await channel.send(embed=embed)
 
             # 2. Rank Changes - SHOW WHO AND WHAT RANK CHANGED
             if stats['rank_changes']:
-                for i in range(0, len(stats['rank_changes']), 5):
-                    chunk = stats['rank_changes'][i:i + 5]
+                for i in range(0, len(stats['rank_changes']), 3):
+                    chunk = stats['rank_changes'][i:i + 3]
 
                     embed = discord.Embed(
-                        title=f"Rank Changes ({i + 1}-{min(i + 5, len(stats['rank_changes']))} of {len(stats['rank_changes'])})",
+                        title=f"Rank Changes ({i + 1}-{min(i + 3, len(stats['rank_changes']))} of {len(stats['rank_changes'])})",
                         color=discord.Color.gold()
                     )
 
                     for change in chunk:
                         embed.add_field(
-                            name=f"{change['member'].mention} ({change['member'].display_name})",
+                            name=f"{change['member'].display_name[:50]}",  # ✅ Limit name length
                             value=f"**Type:** {change['type']}\n**{change['old_rank']}** → **{change['new_rank']}**",
                             inline=False
                         )
+
+                    if self.get_embed_size(embed) > 5500:
+                        print(f"⚠️ Embed too large, skipping")
+                        continue
 
                     await channel.send(embed=embed)
 
             # 3. Callsigns Reset - SHOW WHO AND WHY
             if stats['callsigns_reset']:
-                for i in range(0, len(stats['callsigns_reset']), 5):
-                    chunk = stats['callsigns_reset'][i:i + 5]
+                for i in range(0, len(stats['callsigns_reset']), 3):
+                    chunk = stats['callsigns_reset'][i:i + 3]
 
                     embed = discord.Embed(
-                        title=f"Callsigns Reset ({i + 1}-{min(i + 5, len(stats['callsigns_reset']))} of {len(stats['callsigns_reset'])})",
+                        title=f"Callsigns Reset ({i + 1}-{min(i + 3, len(stats['callsigns_reset']))} of {len(stats['callsigns_reset'])})",
                         description="These callsigns were reset to Not Assigned due to rank changes",
                         color=discord.Color.orange()
                     )
 
-                    for reset in chunk:
+                    for change in chunk:
                         embed.add_field(
-                            name=f"{reset['member'].mention} ({reset['member'].display_name})",
-                            value=f"**Old:** {reset['old_callsign']}\n**New:** {reset['new_prefix']}-Not Assigned\n**Reason:** {reset['reason']}",
+                            name=f"{change['member'].display_name[:50]}",  # ✅ Limit name length
+                            value=f"**Type:** {change['type']}\n**{change['old_rank']}** → **{change['new_rank']}**",
                             inline=False
                         )
+
+                    if self.get_embed_size(embed) > 5500:
+                        print(f"⚠️ Embed too large, skipping")
+                        continue
 
                     await channel.send(embed=embed)
 
@@ -1544,8 +1613,8 @@ class CallsignCog(commands.Cog):
 
             # 5. Removed Users - SHOW WHO WAS REMOVED AND WHY
             if stats['removed_users']:
-                for i in range(0, len(stats['removed_users']), 5):
-                    chunk = stats['removed_users'][i:i + 5]
+                for i in range(0, len(stats['removed_users']), 3):
+                    chunk = stats['removed_users'][i:i + 3]
 
                     embed = discord.Embed(
                         title=f"Removed (Inactive) ({i + 1}-{min(i + 5, len(stats['removed_users']))} of {len(stats['removed_users'])})",
@@ -1553,23 +1622,27 @@ class CallsignCog(commands.Cog):
                         color=discord.Color.dark_red()
                     )
 
-                    for removed in chunk:
+                    for change in chunk:
                         embed.add_field(
-                            name=f"{removed['username']} (ID: {removed['id']})",
-                            value=f"**Callsign:** {removed['callsign']}\n**Days Gone:** {removed['days_gone']}\n**Reason:** {removed['reason']}",
+                            name=f"{change['member'].display_name[:50]}",  # ✅ Limit name length
+                            value=f"**Type:** {change['type']}\n**{change['old_rank']}** → **{change['new_rank']}**",
                             inline=False
                         )
+
+                    if self.get_embed_size(embed) > 5500:
+                        print(f"⚠️ Embed too large, skipping")
+                        continue
 
                     await channel.send(embed=embed)
 
             # 6. Naughty Roles Added - SHOW WHO GOT NAUGHTY ROLES
             if stats.get('naughty_role_details', {}).get('added'):
                 added_roles = stats['naughty_role_details']['added']
-                for i in range(0, len(added_roles), 10):
-                    chunk = added_roles[i:i + 10]
+                for i in range(0, len(added_roles), 5):
+                    chunk = added_roles[i:i + 5]
 
                     embed = discord.Embed(
-                        title=f"Naughty Roles Added ({i + 1}-{min(i + 10, len(added_roles))} of {len(added_roles)})",
+                        title=f"Naughty Roles Added ({i + 1}-{min(i + 5, len(added_roles))} of {len(added_roles)})",
                         description="These users received naughty roles during sync",
                         color=discord.Color.red()
                     )
@@ -1581,16 +1654,20 @@ class CallsignCog(commands.Cog):
                             inline=True
                         )
 
+                    if self.get_embed_size(embed) > 5500:
+                        print(f"⚠️ Embed too large, skipping")
+                        continue
+
                     await channel.send(embed=embed)
 
             # 7. Naughty Roles Removed - SHOW WHO LOST NAUGHTY ROLES
             if stats.get('naughty_role_details', {}).get('removed'):
                 removed_roles = stats['naughty_role_details']['removed']
-                for i in range(0, len(removed_roles), 10):
-                    chunk = removed_roles[i:i + 10]
+                for i in range(0, len(removed_roles), 5):
+                    chunk = removed_roles[i:i + 5]
 
                     embed = discord.Embed(
-                        title=f"Naughty Roles Removed ({i + 1}-{min(i + 10, len(removed_roles))} of {len(removed_roles)})",
+                        title=f"Naughty Roles Removed ({i + 1}-{min(i + 5, len(removed_roles))} of {len(removed_roles)})",
                         description="These users no longer have naughty roles",
                         color=discord.Color.green()
                     )
@@ -1601,6 +1678,10 @@ class CallsignCog(commands.Cog):
                             value=f"**Role:** {item['role_name']}",
                             inline=True
                         )
+
+                    if self.get_embed_size(embed) > 5500:
+                        print(f"⚠️ Embed too large, skipping")
+                        continue
 
                     await channel.send(embed=embed)
 
@@ -2204,60 +2285,75 @@ class CallsignCog(commands.Cog):
 
             # Nickname changes embed(s)
             if stats['nickname_changes']:
-                for i in range(0, len(stats['nickname_changes']), 5):
-                    chunk = stats['nickname_changes'][i:i + 5]
+                for i in range(0, len(stats['nickname_changes']), 3):
+                    chunk = stats['nickname_changes'][i:i + 3]
 
                     embed = discord.Embed(
-                        title=f"Nickname Updates ({i + 1}-{min(i + 5, len(stats['nickname_changes']))} of {len(stats['nickname_changes'])})",
+                        title=f"Nickname Updates ({i + 1}-{min(i + 3, len(stats['nickname_changes']))} of {len(stats['nickname_changes'])})",
                         color=discord.Color.green()
                     )
 
                     for change in chunk:
                         embed.add_field(
-                            name=f"{change['member'].display_name}",
-                            value=f"**Before:** `{change['old']}`\n**After:** `{change['new']}`",
+                            name=f"{change['member'].display_name[:50]}",  # ✅ Limit name length
+                            value=f"**Type:** {change['type']}\n**{change['old_rank']}** → **{change['new_rank']}**",
                             inline=False
                         )
+
+                    if self.get_embed_size(embed) > 5500:
+                        print(f"⚠️ Embed too large, skipping")
+                        continue
+
+                    await channel.send(embed=embed)
 
                     embeds.append(embed)
 
             # Rank changes embed(s)
             if stats['rank_changes']:
-                for i in range(0, len(stats['rank_changes']), 5):
-                    chunk = stats['rank_changes'][i:i + 5]
+                for i in range(0, len(stats['rank_changes']), 3):
+                    chunk = stats['rank_changes'][i:i + 3]
 
                     embed = discord.Embed(
-                        title=f"Rank Changes ({i + 1}-{min(i + 5, len(stats['rank_changes']))} of {len(stats['rank_changes'])})",
+                        title=f"Rank Changes ({i + 1}-{min(i + 3, len(stats['rank_changes']))} of {len(stats['rank_changes'])})",
                         color=discord.Color.gold()
                     )
 
                     for change in chunk:
                         embed.add_field(
-                            name=f"{change['member'].display_name}",
+                            name=f"{change['member'].display_name[:50]}",  # ✅ Limit name length
                             value=f"**Type:** {change['type']}\n**{change['old_rank']}** → **{change['new_rank']}**",
                             inline=False
                         )
+
+                    if self.get_embed_size(embed) > 5500:
+                        print(f"⚠️ Embed too large, skipping")
+                        continue
 
                     embeds.append(embed)
 
             # Callsigns reset embed(s)
             if stats['callsigns_reset']:
-                for i in range(0, len(stats['callsigns_reset']), 5):
-                    chunk = stats['callsigns_reset'][i:i + 5]
+                for i in range(0, len(stats['callsigns_reset']), 3):
+                    chunk = stats['callsigns_reset'][i:i + 3]
 
                     embed = discord.Embed(
-                        title=f"Callsigns Reset ({i + 1}-{min(i + 5, len(stats['callsigns_reset']))} of {len(stats['callsigns_reset'])})",
+                        title=f"Callsigns Reset ({i + 1}-{min(i +35, len(stats['callsigns_reset']))} of {len(stats['callsigns_reset'])})",
                         description="Reset to Not Assigned due to rank changes",
                         color=discord.Color.orange()
                     )
 
-                    for reset in chunk:
-                        reason = reset.get('reason', 'Rank changed')
+                    for change in chunk:
                         embed.add_field(
-                            name=f"{reset['member'].display_name}",
-                            value=f"**Old:** {reset['old_callsign']}\n**New:** {reset['new_prefix']}-Not Assigned\n**Reason:** {reason}",
+                            name=f"{change['member'].display_name[:50]}",  # ✅ Limit name length
+                            value=f"**Type:** {change['type']}\n**{change['old_rank']}** → **{change['new_rank']}**",
                             inline=False
                         )
+
+                    if self.get_embed_size(embed) > 5500:
+                        print(f"⚠️ Embed too large, skipping")
+                        continue
+
+                    await channel.send(embed=embed)
 
                     embeds.append(embed)
 
