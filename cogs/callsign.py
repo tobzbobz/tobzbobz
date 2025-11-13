@@ -1613,11 +1613,11 @@ class CallsignCog(commands.Cog):
 
             # 5. Removed Users - SHOW WHO WAS REMOVED AND WHY
             if stats['removed_users']:
-                for i in range(0, len(stats['removed_users']), 3):
-                    chunk = stats['removed_users'][i:i + 3]
+                for i in range(0, len(stats['removed_users']), 10):
+                    chunk = stats['removed_users'][i:i + 10]
 
                     embed = discord.Embed(
-                        title=f"Removed (Inactive) ({i + 1}-{min(i + 5, len(stats['removed_users']))} of {len(stats['removed_users'])})",
+                        title=f"Removed (Inactive) ({i + 1}-{min(i + 10, len(stats['removed_users']))} of {len(stats['removed_users'])})",
                         description="Users removed from database (not in server for 7+ days)",
                         color=discord.Color.dark_red()
                     )
@@ -2285,11 +2285,11 @@ class CallsignCog(commands.Cog):
 
             # Nickname changes embed(s)
             if stats['nickname_changes']:
-                for i in range(0, len(stats['nickname_changes']), 3):
-                    chunk = stats['nickname_changes'][i:i + 3]
+                for i in range(0, len(stats['nickname_changes']), 10):
+                    chunk = stats['nickname_changes'][i:i + 10]
 
                     embed = discord.Embed(
-                        title=f"Nickname Updates ({i + 1}-{min(i + 3, len(stats['nickname_changes']))} of {len(stats['nickname_changes'])})",
+                        title=f"Nickname Updates ({i + 1}-{min(i + 10, len(stats['nickname_changes']))} of {len(stats['nickname_changes'])})",
                         color=discord.Color.green()
                     )
 
@@ -2333,8 +2333,8 @@ class CallsignCog(commands.Cog):
 
             # Callsigns reset embed(s)
             if stats['callsigns_reset']:
-                for i in range(0, len(stats['callsigns_reset']), 3):
-                    chunk = stats['callsigns_reset'][i:i + 3]
+                for i in range(0, len(stats['callsigns_reset']), 10):
+                    chunk = stats['callsigns_reset'][i:i + 10]
 
                     embed = discord.Embed(
                         title=f"Callsigns Reset ({i + 1}-{min(i +35, len(stats['callsigns_reset']))} of {len(stats['callsigns_reset'])})",
@@ -3549,10 +3549,16 @@ class CallsignCog(commands.Cog):
             )
             return
 
-        await interaction.response.send_message(
-            content=f"<a:Load:1430912797469970444> Starting Bulk Assignment",
-            ephemeral=True
-        )
+        if database_scan:
+            await interaction.response.send_message(
+                content=f"<a:Load:1430912797469970444> Starting Database Scan",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                content=f"<a:Load:1430912797469970444> Starting Bulk Assignment",
+                ephemeral=True
+            )
 
         try:
             if database_scan:
@@ -3724,7 +3730,7 @@ class CallsignCog(commands.Cog):
             for member in members_without_callsigns:
                 result = bloxlink_results[member.id]
 
-                print(f"🔍 Bloxlink Result for {member.display_name} ({member.id}): {result['status']}")
+                print(f"Bloxlink Result for {member.display_name} ({member.id}): {result['status']}")
 
                 # Initialize data
                 roblox_username = None
@@ -3742,7 +3748,7 @@ class CallsignCog(commands.Cog):
 
                     # ✅ Check if username is valid
                     if not roblox_username or roblox_username == 'Unknown':
-                        print(f"   <:Warn:1437771973970104471> Invalid Roblox username for {member.display_name}")
+                        print(f"   ⚠️ Invalid Roblox username for {member.display_name}")
                         roblox_username = 'MISSING'
                         has_issues.append('Invalid/deleted Roblox account')
                     else:
@@ -3768,7 +3774,7 @@ class CallsignCog(commands.Cog):
                         break
 
                 if not fenz_prefix:
-                    print(f"   <:Warn:1437771973970104471> No FENZ role for {member.display_name}")
+                    print(f"   ⚠️ No FENZ role for {member.display_name}")
                     fenz_prefix = 'MISSING'
                     has_issues.append('No valid FENZ rank role')
                 else:
@@ -3776,7 +3782,7 @@ class CallsignCog(commands.Cog):
 
                 # Add everyone (even with issues for reporting)
                 if has_issues:
-                    print(f"   <:Warn:1437771973970104471> Adding with issues: {', '.join(has_issues)}")
+                    print(f"   ⚠️ Adding with issues: {', '.join(has_issues)}")
                 else:
                     print(f"   ✅ PERFECT: No issues found")
 
