@@ -3618,7 +3618,6 @@ class CallsignCog(commands.Cog):
 
             # No mismatches OR database_scan=False, proceed to bulk assign
             await self.start_bulk_assign(interaction)
-            await interaction.delete_original_response()
 
         except Exception as e:
             await interaction.followup.send(
