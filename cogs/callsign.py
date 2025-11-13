@@ -1879,37 +1879,6 @@ class CallsignCog(commands.Cog):
 
             return [dict(row) for row in rows]
 
-    async def get_bloxlink_data(self, user_id: int, guild_id: int):
-        """Get Roblox info from Bloxlink API"""
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                        f'https://api.blox.link/v4/public/guilds/{guild_id}/discord-to-roblox/{user_id}',
-                        headers={'Authorization': BLOXLINK_API_KEY}
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        return {'id': str(data['robloxID'])}
-            return None
-        except Exception as e:
-            print(f"Error fetching from Bloxlink: {e}")
-            return None
-
-    async def get_roblox_user_from_id(self, user_id: str):
-        """Get Roblox username from user ID"""
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                        f'https://users.roblox.com/v1/users/{user_id}'
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        return data.get('name')
-            return None
-        except Exception as e:
-            print(f"Error fetching Roblox username: {e}")
-            return None
-
     @callsign_group.command(name="sync", description="Sync callsigns to Google Sheets and update Discord nicknames")
     @app_commands.describe(
         dry_run="Preview changes without applying them (default: False)",
@@ -2441,17 +2410,21 @@ class CallsignCog(commands.Cog):
                 callsign = normalize_callsign(callsign)
 
             # Get user's Roblox info FIRST
-            bloxlink_data = await self.get_bloxlink_data(user.id, interaction.guild.id)
-            if not bloxlink_data:
+            # Get user's Roblox info FIRST
+            bloxlink_api = BloxlinkAPI()
+            roblox_username, roblox_id, status = await bloxlink_api.get_bloxlink_data(user.id, interaction.guild.id)
+
+            if status != 'success' or not roblox_id:
                 await interaction.followup.send(
                     f"<:Denied:1426930694633816248> Could not find Roblox account for {user.mention}. "
-                    "Please verify their Bloxlink connection.",
+                    f"Please verify their Bloxlink connection.\n"
+                    f"Status: {status}",
                     ephemeral=True
                 )
                 return
 
-            roblox_id = bloxlink_data['id']
-            roblox_username = await self.get_roblox_user_from_id(roblox_id)
+            # Convert to string for database
+            roblox_id = str(roblox_id)
 
             if not roblox_username:
                 await interaction.followup.send(
@@ -2763,21 +2736,20 @@ class CallsignCog(commands.Cog):
             # Reset nickname to just Roblox username (or get from Bloxlink if needed)
             try:
                 # Try to get Roblox username from stored data first
-                roblox_username = existing_callsign.get('roblox_username')
+                bloxlink_api = BloxlinkAPI()
+                roblox_username, roblox_id, status = await bloxlink_api.get_bloxlink_data(user.id, interaction.guild.id)
 
-                # If not available, fetch from Bloxlink
-                if not roblox_username:
-                    bloxlink_data = await self.get_bloxlink_data(user.id, interaction.guild.id)
-                    if bloxlink_data:
-                        roblox_id = bloxlink_data['id']
-                        roblox_username = await self.get_roblox_user_from_id(roblox_id)
+                if status != 'success' or not roblox_id:
+                    await interaction.followup.send(
+                        f"<:Denied:1426930694633816248> Could not find Roblox account for {user.mention}. "
+                        f"Please verify their Bloxlink connection.\n"
+                        f"Status: {status}",
+                        ephemeral=True
+                    )
+                    return
 
-                # Reset nickname
-                if roblox_username:
-                    await user.edit(nick=roblox_username)
-                else:
-                    # Fallback: remove nickname entirely
-                    await user.edit(nick=None)
+                # Convert to string for database
+                roblox_id = str(roblox_id)
 
                 nickname_reset = True
             except discord.Forbidden:
@@ -2894,8 +2866,13 @@ class CallsignCog(commands.Cog):
             callsign = normalize_callsign(callsign)
 
             # Get user's Roblox info
-            bloxlink_data = await self.get_bloxlink_data(interaction.user.id, interaction.guild.id)
-            if not bloxlink_data:
+            bloxlink_api = BloxlinkAPI()
+            roblox_username, roblox_id, status = await bloxlink_api.get_bloxlink_data(
+                interaction.user.id,
+                interaction.guild.id
+            )
+
+            if status != 'success' or not roblox_id:
                 await interaction.followup.send(
                     "<:Denied:1426930694633816248> Could not find your Roblox account. "
                     "Please verify your Bloxlink connection with </verify:1114974748624027711> and try again.",
@@ -2903,12 +2880,12 @@ class CallsignCog(commands.Cog):
                 )
                 return
 
-            roblox_id = bloxlink_data['id']
-            roblox_username = await self.get_roblox_user_from_id(roblox_id)
+            # Convert to string for database
+            roblox_id = str(roblox_id)
 
-            if not roblox_username:
+            if not roblox_username or roblox_username == 'Unknown':
                 await interaction.followup.send(
-                    "<:Denied:1426930694633816248> Failed to fetch Roblox username.",
+                    "<:Denied:1426930694633816248> Failed to fetch Roblox username or your account is invalid.",
                     ephemeral=True
                 )
                 return
@@ -3196,11 +3173,15 @@ class CallsignCog(commands.Cog):
             for member in fenz_members:
                 if member.id not in db_user_ids:
                     # NOT in database - this is a missing user
-                    bloxlink_data = await self.get_bloxlink_data(member.id, interaction.guild.id)
+                    bloxlink_api = BloxlinkAPI()
+                    roblox_username, roblox_id, status = await bloxlink_api.get_bloxlink_data(
+                        member.id,
+                        interaction.guild.id
+                    )
 
-                    if bloxlink_data:
-                        roblox_id = bloxlink_data['id']
-                        roblox_username = await self.get_roblox_user_from_id(roblox_id)
+                    # Convert ID to string if successful
+                    if status == 'success' and roblox_id:
+                        roblox_id = str(roblox_id)
                     else:
                         roblox_id = None
                         roblox_username = None
@@ -3523,6 +3504,7 @@ class CallsignCog(commands.Cog):
                 roblox_username, roblox_id, status = cached
             else:
                 # Fetch and cache
+                bloxlink_api = BloxlinkAPI()
                 roblox_username, roblox_id, status = await bloxlink_api.get_bloxlink_data(member.id, guild.id)
                 bloxlink_cache[member.id] = (roblox_username, roblox_id, status)
 
