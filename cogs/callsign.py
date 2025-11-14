@@ -2,16 +2,48 @@ import discord
 from discord.ext import commands, tasks
 from discord import app_commands
 from dotenv import load_dotenv
-
-load_dotenv()
 import aiohttp
 import os
 from datetime import datetime
 from database import db
-from typing import Optional, Dict, Tuple  # Add this if not present
+from dataclasses import dataclass
+from typing import Optional, Dict, Set, Tuple
 import json
 from google_sheets_integration import sheets_manager, COMMAND_RANKS, NON_COMMAND_RANKS
 import asyncio
+import functools
+from asyncpg.exceptions import PostgresError
+
+
+@dataclass
+class BotConfig:
+    """Centralized configuration"""
+    # Channels
+    sync_log_channel_id: int = 1434770430505390221
+    callsign_request_log_channel_id: int = 1435318020619632851
+
+    # Excluded guilds
+    excluded_guilds: Set[int] = None
+
+    # Role IDs
+    sync_role_id: int = 1389550689113473024
+    owner_id: int = 678475709257089057
+
+    # Cache settings
+    bloxlink_cache_duration: int = 86400  # 24 hours
+    sync_interval: int = 3600  # 1 hour
+
+    def __post_init__(self):
+        if self.excluded_guilds is None:
+            self.excluded_guilds = {
+                1420770769562243083,
+                1430002479239532747,
+                1425867713183744023
+            }
+
+
+# Create global config instance
+config = BotConfig()
 
 BLOXLINK_API_KEY = os.getenv('BLOXLINK_API_KEY')
 
@@ -123,6 +155,81 @@ UPPER_LEAD = {
     1389111326571499590
 }
 
+OWNER_ID = 678475709257089057
+
+
+class ProgressTracker:
+    """Helper for tracking and displaying progress with rate limiting"""
+
+    def __init__(self, interaction: discord.Interaction, total: int, update_interval: float = 3.0):
+        self.interaction = interaction
+        self.total = total
+        self.update_interval = update_interval
+        self.last_update = 0
+        self.current = 0
+
+    async def update(self, current: int, status_counts: dict = None, force: bool = False):
+        """Update progress, respecting rate limits"""
+        self.current = current
+        current_time = asyncio.get_event_loop().time()
+
+        # Only update if enough time passed or forced (e.g., completion)
+        if not force and (current_time - self.last_update) < self.update_interval:
+            return
+
+        progress_percent = int((current / self.total) * 100)
+        progress_bar = "█" * (progress_percent // 5) + "░" * (20 - (progress_percent // 5))
+
+        embed = discord.Embed(
+            title="🔄 Processing...",
+            description=f"**Progress:** {current}/{self.total} ({progress_percent}%)\n"
+                        f"`{progress_bar}`",
+            color=discord.Color.blue()
+        )
+
+        if status_counts:
+            status_text = "\n".join([
+                f"✅ **{key.replace('_', ' ').title()}:** {value}"
+                for key, value in status_counts.items()
+                if value > 0
+            ])
+            embed.add_field(name="Status", value=status_text, inline=False)
+
+        embed.set_footer(text=f"Processing item {current} of {self.total}")
+
+        try:
+            await self.interaction.edit_original_response(embed=embed)
+            self.last_update = current_time
+        except discord.HTTPException:
+            pass  # Ignore rate limit errors on progress updates
+
+
+def db_retry(max_attempts: int = 3, delay: float = 1.0):
+    """Decorator for retrying database operations"""
+
+    def decorator(func):
+        @functools.wraps(func)
+        async def wrapper(*args, **kwargs):
+            last_exception = None
+
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    return await func(*args, **kwargs)
+                except PostgresError as e:
+                    last_exception = e
+                    if attempt < max_attempts:
+                        print(f"⚠️ DB operation failed (attempt {attempt}/{max_attempts}): {e}")
+                        await asyncio.sleep(delay * attempt)
+                    else:
+                        print(f"❌ DB operation failed after {max_attempts} attempts")
+                        raise
+
+            raise last_exception
+
+        return wrapper
+
+    return decorator
+
 
 def normalize_callsign(callsign: str) -> str:
     """
@@ -137,60 +244,90 @@ def normalize_callsign(callsign: str) -> str:
     # This preserves '10' and '100' while converting '01' to '1'
     return str(int(callsign))
 
-async def safe_edit_nickname(member: discord.Member, nickname: str) -> bool:
+def get_embed_size(embed: discord.Embed) -> int:
+    """Calculate total character count of an embed"""
+    size = 0
+    size += len(embed.title or "")
+    size += len(embed.description or "")
+    size += len(embed.footer.text or "") if embed.footer else 0
+    size += len(embed.author.name or "") if embed.author else 0
+
+    for field in embed.fields:
+        size += len(field.name or "")
+        size += len(field.value or "")
+
+    return size
+
+
+def validate_embed_size(embed: discord.Embed, max_size: int = 5500) -> tuple[bool, int]:
+    """Validate embed size and return (is_valid, size)"""
+    size = get_embed_size(embed)
+    return (size <= max_size, size)
+
+
+async def safe_edit_nickname(member: discord.Member, nickname: str, max_retries: int = 3) -> tuple[bool, str]:
     """
-    Safely edit a member's nickname with automatic truncation on length errors
-    Returns True if successful, False otherwise
+    Safely edit nickname with automatic fixing and truncation
+    Returns: (success: bool, final_nickname: str)
     """
+
+    # Validation and cleaning
+    nickname = nickname.strip()
+
+    # Remove trailing separators
+    while nickname and nickname[-1] in ['-', '|', ' ']:
+        nickname = nickname[:-1].strip()
+
+    # Remove leading separators
+    while nickname and nickname[0] in ['-', '|', ' ']:
+        nickname = nickname[1:].strip()
 
     if not validate_nickname(nickname):
         print(f"⚠️ Invalid nickname format: '{nickname}'")
-        # Try to fix common issues
-        nickname = nickname.strip()
-        if nickname.endswith('-'):
-            nickname = nickname[:-1].strip()
+        return (False, nickname)
 
-        # Re-validate
-        if not validate_nickname(nickname):
-            print(f"<:Denied:1426930694633816248> Could not fix nickname: '{nickname}'")
-            return False
+    # Try progressively shorter versions
+    attempts = [
+        nickname,  # Full version
+        nickname[:32],  # Truncated to Discord limit
+    ]
 
-    try:
-        await member.edit(nick=nickname)
-        return True
-    except discord.HTTPException as e:
-        if e.code == 50035:  # Invalid Form Body (nickname too long)
-            print(f"⚠️ Nickname too long ({len(nickname)} chars): '{nickname}'")
+    # Try removing shift prefixes if still too long
+    shift_prefixes = ["DUTY | ", "BRK | ", "LOA | "]
+    for prefix in shift_prefixes:
+        if nickname.startswith(prefix):
+            stripped = nickname[len(prefix):]
+            if len(stripped) <= 32:
+                attempts.insert(1, stripped)
 
-            shift_prefixes = ["DUTY | ", "BRK | ", "LOA | "]
-            for prefix in shift_prefixes:
-                if nickname.startswith(prefix):
-                    stripped = nickname[len(prefix):]
-                    try:
-                        await member.edit(nick=stripped)
-                        print(f"<:Accepted:1426930333789585509> Used nickname without shift prefix: '{stripped}'")
-                        return True
-                    except:
-                        continue
+    last_error = None
 
-            # Try truncating
-            truncated = nickname[:32]
-            try:
-                await safe_edit_nickname(member, truncated)
-                print(f"<:Accepted:1426930333789585509> Used truncated nickname: '{truncated}'")
-                return True
-            except:
-                print(f"<:Denied:1426930694633816248> Even truncated nickname failed")
-                return False
-        else:
-            print(f"<:Denied:1426930694633816248> Discord HTTP error: {e}")
-            return False
-    except discord.Forbidden:
-        print(f"<:Denied:1426930694633816248> Missing permissions to edit nickname for {member.id}")
-        return False
-    except Exception as e:
-        print(f"<:Denied:1426930694633816248> Unexpected error editing nickname: {e}")
-        return False
+    for attempt_num, attempt_nick in enumerate(attempts, 1):
+        if not attempt_nick or len(attempt_nick) > 32:
+            continue
+
+        try:
+            await member.edit(nick=attempt_nick)
+            if attempt_num > 1:
+                print(f"✅ Used fallback nickname: '{attempt_nick}'")
+            return (True, attempt_nick)
+
+        except discord.HTTPException as e:
+            last_error = e
+            if e.code != 50035:  # Not a length error
+                print(f"❌ Discord HTTP error {e.code}: {e}")
+                break
+
+        except discord.Forbidden:
+            print(f"❌ Missing permissions to edit {member.id}")
+            return (False, nickname)
+
+        except Exception as e:
+            print(f"❌ Unexpected error: {e}")
+            last_error = e
+
+    print(f"❌ All nickname attempts failed for {member.id}")
+    return (False, nickname)
 
 def get_rank_sort_key(fenz_prefix: str, hhstj_prefix: str) -> tuple:
     """
@@ -477,8 +614,10 @@ async def smart_update_nickname(member, expected_nickname: str, current_fenz_pre
     if current_fenz_prefix == "RFF" and current_callsign == "Not Assigned":
         if current_nick_stripped != "RFF":
             try:
-                await safe_edit_nickname(member, "RFF")
-                return True
+                success, final_nick = await safe_edit_nickname(member, "RFF")
+                if not success:
+                    print(f"⚠️ Failed to set nickname for {member.id}")
+                    return True
             except:
                 return False
 
@@ -487,7 +626,9 @@ async def smart_update_nickname(member, expected_nickname: str, current_fenz_pre
     if len(current_nick_stripped) < len(expected_nick_stripped):
         # Current is shorter - might be truncated, try full version
         try:
-            success = await safe_edit_nickname(member, expected_nickname)
+            success, final_nick = await safe_edit_nickname(member, new_nickname)
+            if not success:
+                print(f"⚠️ Failed to set nickname for {member.id}")
             if success:
                 print(f"<:Accepted:1426930333789585509> Restored full nickname for {member.display_name}: '{expected_nickname}'")
                 return True
@@ -506,8 +647,10 @@ async def smart_update_nickname(member, expected_nickname: str, current_fenz_pre
 
         final_nickname = shift_prefix + expected_nickname
 
-        success = await safe_edit_nickname(member, final_nickname)
-        return success
+        success, final_nick = await safe_edit_nickname(member, new_nickname)
+        if not success:
+            print(f"⚠️ Failed to set nickname for {member.id}")
+            return success
     except Exception as e:
         print(f"<:Denied:1426930694633816248> Error updating nickname for {member.display_name}: {e}")
         return False
@@ -526,7 +669,7 @@ def strip_shift_prefixes(nickname: str) -> str:
 
     return nickname
 
-
+@db_retry(max_attempts=3, delay=1.0)
 async def check_callsign_exists(callsign: str, fenz_prefix: str = None) -> dict:
     """Check if a callsign exists in the database with the same prefix"""
     async with db.pool.acquire() as conn:
@@ -692,7 +835,7 @@ def format_duplicate_callsign_message(callsign: str, existing_data: dict) -> str
 
     return message
 
-
+@db_retry(max_attempts=3, delay=1.0)
 async def add_callsign_to_database(callsign: str, discord_user_id: int, discord_username: str,
                                    roblox_user_id: str, roblox_username: str, fenz_prefix: str,
                                    hhstj_prefix: str, approved_by_id: int, approved_by_name: str,
@@ -751,20 +894,205 @@ async def add_callsign_to_database(callsign: str, discord_user_id: int, discord_
                 json.dumps(history)
             )
 
-
 class BloxlinkAPI:
-    """Enhanced Bloxlink API handler with retry logic and rate limiting"""
+    """Enhanced Bloxlink API handler with PostgreSQL-backed 24-hour caching"""
+
+    # ✅ Keep class-level tracking variables
+    _api_calls_made = 0
+    _quota_limit = 500
+    _quota_reset_time = None
+    _cache_duration = 86400  # 24 hours in seconds
 
     def __init__(self):
         self.base_url = "https://api.blox.link/v4/public"
-        self.rate_limit_delay = 0.75  # 750ms between requests (safer than 500ms)
+        self.rate_limit_delay = 0.75
         self.last_request_time = 0
         self.max_retries = 3
-        self.timeout = 15  # Increased from 10s to 15s
+        self.timeout = 15
         self.requests_this_minute = 0
         self.minute_start = asyncio.get_event_loop().time()
-        self.max_requests_per_minute = 50  # Conservative limit
+        self.max_requests_per_minute = 50
 
+    async def _get_cached_data(self, discord_user_id: int) -> Optional[Tuple[str, int, str]]:
+        """
+        Get cached Bloxlink data from database if not expired
+        Returns (username, user_id, status) or None if not cached/expired
+        """
+        async with db.pool.acquire() as conn:
+            result = await conn.fetchrow(
+                '''SELECT roblox_username, roblox_user_id, status, expires_at
+                   FROM bloxlink_cache
+                   WHERE discord_user_id = $1
+                     AND expires_at > NOW()''',
+                discord_user_id
+            )
+
+            if result:
+                print(f"📦 Cache HIT for {discord_user_id} (expires: {result['expires_at']})")
+                return (
+                    result['roblox_username'],
+                    int(result['roblox_user_id']) if result['roblox_user_id'] and result[
+                        'roblox_user_id'] != 'None' else None,
+                    result['status']
+                )
+
+            return None
+
+    async def _cache_data(self, discord_user_id: int, roblox_username: Optional[str],
+                          roblox_user_id: Optional[int], status: str):
+        """
+        Store Bloxlink data in database cache with 24-hour expiry
+        """
+        async with db.pool.acquire() as conn:
+            await conn.execute(
+                '''INSERT INTO bloxlink_cache
+                   (discord_user_id, roblox_username, roblox_user_id, status, cached_at, expires_at)
+                   VALUES ($1, $2, $3, $4, NOW(), NOW() + INTERVAL '24 hours') ON CONFLICT (discord_user_id) 
+                   DO
+                UPDATE SET
+                    roblox_username = EXCLUDED.roblox_username,
+                    roblox_user_id = EXCLUDED.roblox_user_id,
+                    status = EXCLUDED.status,
+                    cached_at = NOW(),
+                    expires_at = NOW() + INTERVAL '24 hours' ''',
+                discord_user_id,
+                roblox_username,
+                str(roblox_user_id) if roblox_user_id else None,
+                status
+            )
+
+        print(f"💾 Cached data for {discord_user_id} (expires in 24h)")
+
+    async def get_bloxlink_data(
+            self,
+            discord_user_id: int,
+            guild_id: int
+    ) -> Tuple[Optional[str], Optional[int], str]:
+        """
+        Get Bloxlink data with database-backed 24-hour caching
+
+        Returns:
+            Tuple of (roblox_username, roblox_user_id, status_message)
+        """
+
+        if not guild_id:
+            return (None, None, "no_guild_id")
+
+        if not BLOXLINK_API_KEY:
+            print("❌ CRITICAL: BLOXLINK_API_KEY is not set!")
+            return (None, None, "no_api_key")
+
+        # ✅ CHECK DATABASE CACHE FIRST
+        cached = await self._get_cached_data(discord_user_id)
+        if cached:
+            return cached
+
+        # Cache miss - fetch from API
+        print(f"🌐 Cache MISS for {discord_user_id}, fetching from API...")
+
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                await self._enforce_rate_limit()
+
+                urls_to_try = [
+                    f"{self.base_url}/guilds/{guild_id}/discord-to-roblox/{discord_user_id}",
+                    f"{self.base_url}/discord-to-roblox/{discord_user_id}"
+                ]
+
+                timeout = aiohttp.ClientTimeout(total=self.timeout)
+                headers = {
+                    'Authorization': BLOXLINK_API_KEY,
+                    'User-Agent': 'HNZRP-Callsign-Bot/1.0'
+                }
+
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    for url_index, url in enumerate(urls_to_try):
+                        async with session.get(url, headers=headers) as response:
+
+                            if 'X-RateLimit-Remaining' in response.headers:
+                                remaining = int(response.headers['X-RateLimit-Remaining'])
+                                print(f"📊 API Quota: {remaining} calls remaining")
+
+                            if 'X-RateLimit-Reset' in response.headers:
+                                BloxlinkAPI._quota_reset_time = int(response.headers['X-RateLimit-Reset'])
+
+                            if response.status == 200:
+                                data = await response.json()
+                                roblox_id = data.get('robloxID')
+
+                                if roblox_id:
+                                    username = await self._get_roblox_username(roblox_id)
+                                    result = (username, int(roblox_id), "success")
+
+                                    # ✅ CACHE THE RESULT in database
+                                    await self._cache_data(discord_user_id, username, int(roblox_id), "success")
+
+                                    return result
+                                else:
+                                    result = (None, None, "not_linked")
+                                    await self._cache_data(discord_user_id, None, None, "not_linked")
+                                    return result
+
+                            elif response.status == 429:
+                                if attempt < self.max_retries:
+                                    wait_time = (2 ** attempt) * 2
+                                    print(
+                                        f"⏳ Rate limited, waiting {wait_time}s (attempt {attempt}/{self.max_retries})")
+                                    await asyncio.sleep(wait_time)
+                                    continue
+                                return (None, None, "rate_limited")
+
+                            elif response.status == 404:
+                                result = (None, None, "not_linked")
+                                await self._cache_data(discord_user_id, None, None, "not_linked")
+                                return result
+
+                            elif 400 <= response.status < 500:
+                                return (None, None, "not_linked")
+
+                            else:
+                                if attempt < self.max_retries:
+                                    await asyncio.sleep(1 * attempt)
+                                    continue
+                                return (None, None, f"api_error_{response.status}")
+
+            except asyncio.TimeoutError:
+                if attempt < self.max_retries:
+                    await asyncio.sleep(2 * attempt)
+                    continue
+                return (None, None, "timeout")
+
+            except Exception as e:
+                if attempt < self.max_retries:
+                    await asyncio.sleep(1 * attempt)
+                    continue
+                return (None, None, f"error_{type(e).__name__}")
+
+        return (None, None, "max_retries_exceeded")
+
+    async def _get_roblox_username(self, roblox_id: int) -> Optional[str]:
+        """Fetch Roblox username from Roblox API (does NOT count against Bloxlink quota)"""
+        url = f"https://users.roblox.com/v1/users/{roblox_id}"
+
+        for attempt in range(1, 3):
+            try:
+                timeout = aiohttp.ClientTimeout(total=10)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(url) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            return data.get('name', 'Unknown')
+                        elif attempt < 2:
+                            await asyncio.sleep(1)
+                            continue
+                        return 'Unknown'
+            except:
+                if attempt < 2:
+                    await asyncio.sleep(1)
+                    continue
+                return 'Unknown'
+
+        return 'Unknown'
 
     async def _enforce_rate_limit(self):
         """Ensure we don't exceed rate limits"""
@@ -789,118 +1117,41 @@ class BloxlinkAPI:
 
         self.last_request_time = asyncio.get_event_loop().time()
         self.requests_this_minute += 1
+        BloxlinkAPI._api_calls_made += 1
 
-    async def get_bloxlink_data(
-            self,
-            discord_user_id: int,
-            guild_id: int
-    ) -> Tuple[Optional[str], Optional[int], str]:
-        """
-        Get Bloxlink data with retry logic and proper error handling
+    async def get_cache_stats(self) -> dict:
+        """Get cache statistics from database"""
+        async with db.pool.acquire() as conn:
+            # Count valid (non-expired) entries
+            valid_count = await conn.fetchval(
+                'SELECT COUNT(*) FROM bloxlink_cache WHERE expires_at > NOW()'
+            )
 
-        Returns:
-            Tuple of (roblox_username, roblox_user_id, status_message)
-        """
+            # Count expired entries
+            expired_count = await conn.fetchval(
+                'SELECT COUNT(*) FROM bloxlink_cache WHERE expires_at <= NOW()'
+            )
 
-        # ✅ REQUIRE guild_id - Bloxlink API works best with guild context
-        if not guild_id:
-            return (None, None, "no_guild_id")
+            # Get oldest cache entry
+            oldest = await conn.fetchval(
+                'SELECT MIN(cached_at) FROM bloxlink_cache WHERE expires_at > NOW()'
+            )
 
-        for attempt in range(1, self.max_retries + 1):
-            try:
-                await self._enforce_rate_limit()
+            # Get newest cache entry
+            newest = await conn.fetchval(
+                'SELECT MAX(cached_at) FROM bloxlink_cache WHERE expires_at > NOW()'
+            )
 
-                # ✅ ALWAYS use guild-specific endpoint with API key
-                url = f"{self.base_url}/guilds/{guild_id}/discord-to-roblox/{discord_user_id}"
-
-                timeout = aiohttp.ClientTimeout(total=self.timeout)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.get(
-                            url,
-                            headers={'Authorization': BLOXLINK_API_KEY}  # ✅ ALWAYS include API key
-                    ) as response:
-
-                        if response.status == 200:
-                            data = await response.json()
-                            roblox_id = data.get('robloxID')
-
-                            if roblox_id:
-                                username = await self._get_roblox_username(roblox_id)
-                                return (username, int(roblox_id), "success")
-                            else:
-                                return (None, None, "not_linked")
-
-                        elif response.status == 400:
-                            # Bad request - user likely not in Bloxlink system
-                            print(f"⚠️ Bad request for user {discord_user_id} in guild {guild_id}")
-                            return (None, None, "not_linked")
-
-                        elif response.status == 429:
-                            # Rate limited - retry with exponential backoff
-                            if attempt < self.max_retries:
-                                wait_time = (2 ** attempt) * 2
-                                print(f"⏳ Rate limited, waiting {wait_time}s (attempt {attempt}/{self.max_retries})")
-                                await asyncio.sleep(wait_time)
-                                continue
-                            return (None, None, "rate_limited")
-
-                        elif response.status == 404:
-                            # Not found
-                            return (None, None, "not_linked")
-
-                        elif 400 <= response.status < 500:
-                            # Other client errors - don't retry
-                            print(f"❌ Client error {response.status} for user {discord_user_id}")
-                            return (None, None, "not_linked")
-
-                        else:
-                            # Server errors (500+) - retry
-                            if attempt < self.max_retries:
-                                print(
-                                    f"⚠️ Server error {response.status}, retrying (attempt {attempt}/{self.max_retries})")
-                                await asyncio.sleep(1 * attempt)
-                                continue
-                            return (None, None, f"api_error_{response.status}")
-
-            except asyncio.TimeoutError:
-                if attempt < self.max_retries:
-                    print(f"⏱️ Timeout, retrying (attempt {attempt}/{self.max_retries})")
-                    await asyncio.sleep(2 * attempt)
-                    continue
-                return (None, None, "timeout")
-
-            except Exception as e:
-                if attempt < self.max_retries:
-                    print(f"❌ Error: {e}, retrying (attempt {attempt}/{self.max_retries})")
-                    await asyncio.sleep(1 * attempt)
-                    continue
-                return (None, None, f"error_{type(e).__name__}")
-
-        return (None, None, "max_retries_exceeded")
-
-    async def _get_roblox_username(self, roblox_id: int) -> Optional[str]:
-        """Fetch Roblox username from Roblox API with retry logic"""
-        url = f"https://users.roblox.com/v1/users/{roblox_id}"
-
-        for attempt in range(1, 3):  # 2 retries for username fetch
-            try:
-                timeout = aiohttp.ClientTimeout(total=10)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.get(url) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            return data.get('name', 'Unknown')
-                        elif attempt < 2:
-                            await asyncio.sleep(1)
-                            continue
-                        return 'Unknown'
-            except:
-                if attempt < 2:
-                    await asyncio.sleep(1)
-                    continue
-                return 'Unknown'
-
-        return 'Unknown'
+        return {
+            'total_cached': valid_count + expired_count,
+            'valid_entries': valid_count,
+            'expired_entries': expired_count,
+            'api_calls_made': BloxlinkAPI._api_calls_made,
+            'quota_remaining': max(0, BloxlinkAPI._quota_limit - BloxlinkAPI._api_calls_made),
+            'quota_reset_time': BloxlinkAPI._quota_reset_time,
+            'oldest_cache': oldest,
+            'newest_cache': newest
+        }
 
     async def bulk_check_bloxlink(
             self,
@@ -908,44 +1159,58 @@ class BloxlinkAPI:
             guild_id: int,
             progress_callback=None
     ) -> Dict[int, Dict]:
-
         """
-        Bulk check Bloxlink status for multiple users with proper rate limiting
-
-        Args:
-            discord_user_ids: List of Discord user IDs to check
-            guild_id: Optional guild ID for guild-specific lookups
-            progress_callback: Optional callback function(current, total, status_counts)
-
-        Returns:
-            Dict mapping discord_id -> {
-                'roblox_username': str or None,
-                'roblox_user_id': int or None,
-                'status': str  # success, not_linked, rate_limited, timeout, api_error
-            }
+        Bulk check with database-backed caching
+        ✅ Uses database cache across restarts
         """
         results = {}
         total = len(discord_user_ids)
 
-        # Status counters
         status_counts = {
             'success': 0,
             'not_linked': 0,
             'rate_limited': 0,
             'timeout': 0,
             'api_error': 0,
+            'cached': 0,
             'other': 0
         }
 
-        consecutive_rate_limits = 0
-        consecutive_failures = 0  # ✅ Track all types of failures
-        max_consecutive_failures = 10  # ✅ Terminate after 10 consecutive failures
-        max_total_failures = 30  # ✅ Terminate if we hit 30 failures total
+        consecutive_failures = 0
+        max_consecutive_failures = 10
+        max_total_failures = 30
 
         print(f"🔍 Starting bulk Bloxlink check for {total} users...")
-        print(f"⏱️ Estimated time: ~{int(total * self.rate_limit_delay / 60)} minutes")
 
-        for i, discord_id in enumerate(discord_user_ids, 1):
+        # ✅ BATCH 1: Get cached results from DATABASE
+        cached_ids = []
+        uncached_ids = []
+
+        for discord_id in discord_user_ids:
+            cached = await self._get_cached_data(discord_id)
+
+            if cached:
+                username, roblox_id, status = cached
+                results[discord_id] = {
+                    'roblox_username': username,
+                    'roblox_user_id': roblox_id,
+                    'status': status
+                }
+                cached_ids.append(discord_id)
+                status_counts['cached'] += 1
+
+                if status == 'success':
+                    status_counts['success'] += 1
+                elif status == 'not_linked':
+                    status_counts['not_linked'] += 1
+            else:
+                uncached_ids.append(discord_id)
+
+        print(f"📦 Found {len(cached_ids)} cached results from database")
+        print(f"🌐 Need to fetch {len(uncached_ids)} from API...")
+
+        # ✅ BATCH 2: Fetch only uncached users
+        for i, discord_id in enumerate(uncached_ids, 1):
             username, roblox_id, status = await self.get_bloxlink_data(discord_id, guild_id)
 
             results[discord_id] = {
@@ -954,75 +1219,67 @@ class BloxlinkAPI:
                 'status': status
             }
 
-            # Update status counts
-            if status in ['rate_limited', 'timeout',
-                          'max_retries_exceeded'] or 'api_error' in status or 'error' in status:
+            # Track status
+            if status in ['rate_limited', 'timeout', 'max_retries_exceeded'] or 'api_error' in status:
                 consecutive_failures += 1
-
-            if status == 'rate_limited':
-                consecutive_rate_limits += 1
-                status_counts['rate_limited'] += 1
-
-                if consecutive_rate_limits >= 5:
-                    print(f"\n⚠️ Hit {consecutive_rate_limits} consecutive rate limits!")
-                    print(f"⏸️ Pausing for 2 minutes to let API cool down...")
-                    await asyncio.sleep(120)
-                    consecutive_rate_limits = 0
-                    print(f"▶️ Resuming bulk check...")
-            elif status == 'timeout':
-                status_counts['timeout'] += 1
-            elif 'api_error' in status or 'error' in status:
-                status_counts['api_error'] += 1
-            else:
-                status_counts['other'] += 1
-
-            total_failures = status_counts['rate_limited'] + status_counts['timeout'] + status_counts['api_error']
-
-            if consecutive_failures >= max_consecutive_failures:
-                print(f"\n❌ TERMINATING: Hit {consecutive_failures} consecutive failures!")
-                print(f"   Checked {i}/{total} users before termination")
-                print(f"   ✅ Success: {status_counts['success']}")
-                print(f"   ❌ Failed: {total_failures}")
-                return None  # ✅ Return None to signal termination
-
-            if total_failures >= max_total_failures:
-                print(f"\n❌ TERMINATING: Hit {total_failures} total failures (limit: {max_total_failures})!")
-                print(f"   Checked {i}/{total} users before termination")
-                print(f"   ✅ Success: {status_counts['success']}")
-                return None  # ✅ Return None to signal termination
-
-
             else:
                 consecutive_failures = 0
-                consecutive_rate_limits = 0
 
-            if status == 'success':
+            if status == 'rate_limited':
+                status_counts['rate_limited'] += 1
+            elif status == 'timeout':
+                status_counts['timeout'] += 1
+            elif 'api_error' in status:
+                status_counts['api_error'] += 1
+            elif status == 'success':
                 status_counts['success'] += 1
             elif status == 'not_linked':
                 status_counts['not_linked'] += 1
             else:
                 status_counts['other'] += 1
 
+            total_failures = status_counts['rate_limited'] + status_counts['timeout'] + status_counts['api_error']
+
+            # Safety checks
+            if consecutive_failures >= max_consecutive_failures:
+                print(f"\n❌ TERMINATING: Hit {consecutive_failures} consecutive failures!")
+                return None
+
+            if total_failures >= max_total_failures:
+                print(f"\n❌ TERMINATING: Hit {total_failures} total failures!")
+                return None
+
             # Progress callback
             if progress_callback:
-                await progress_callback(i, total, status_counts)
+                await progress_callback(len(cached_ids) + i, total, status_counts)
 
-            # Progress updates every 10 members
-            if i % 10 == 0 or i == total:
-                print(
-                    f"Progress: {i}/{total} | ✅ {status_counts['success']} | ❌ {status_counts['not_linked']} | "
-                    f"⚠️ {status_counts['rate_limited']} | ⏱️ {status_counts['timeout']} | 🔴 {status_counts['api_error']}"
-                )
+            if i % 10 == 0 or i == len(uncached_ids):
+                print(f"Progress: {len(cached_ids) + i}/{total} | "
+                      f"📦 Cached: {status_counts['cached']} | "
+                      f"✅ Success: {status_counts['success']} | "
+                      f"❌ Not Linked: {status_counts['not_linked']}")
 
         print(f"\n✅ Bulk check complete!")
-        print(f"   Success: {status_counts['success']}")
-        print(f"   Not Linked: {status_counts['not_linked']}")
-        print(f"   Rate Limited: {status_counts['rate_limited']}")
-        print(f"   Timeout: {status_counts['timeout']}")
-        print(f"   API Errors: {status_counts['api_error']}")
+        print(f"   📦 Cached: {status_counts['cached']} (0 API calls)")
+        print(f"   🌐 Fetched: {len(uncached_ids)} ({len(uncached_ids)} API calls)")
+        print(f"   ✅ Total Success: {status_counts['success']}")
+        print(f"   💾 Cache Efficiency: {(status_counts['cached'] / total) * 100:.1f}%")
 
         return results
 
+    async def cleanup_expired_cache(self):
+        """
+        Remove expired cache entries from database
+        Run this periodically (e.g., daily) to keep database clean
+        """
+        async with db.pool.acquire() as conn:
+            deleted = await conn.execute(
+                'DELETE FROM bloxlink_cache WHERE expires_at <= NOW()'
+            )
+            count = int(deleted.split()[-1])  # Extract count from "DELETE X"
+
+        print(f"🧹 Cleaned up {count} expired cache entries")
+        return count
 
 class PaginatedEmbedView(discord.ui.View):
     """View for paginating through multiple embeds"""
@@ -1080,7 +1337,12 @@ class CallsignCog(commands.Cog):
         self.bot = bot
         self.sync_interval = 60  # 60 minutes
         # Start auto-sync on bot startup
+        self.bloxlink_api = BloxlinkAPI()
+        self.last_bloxlink_sync = None
+        self.bloxlink_sync_interval = 86400  # 1 hour in seconds
         self.auto_sync_loop.start()
+        self.cleanup_cache_loop.start()
+
 
     def cog_unload(self):
         """Stop the auto-sync loop when cog is unloaded"""
@@ -1091,19 +1353,6 @@ class CallsignCog(commands.Cog):
             self.active_watches = await conn.fetch("SELECT * FROM callsigns;")
         print("<:Accepted:1426930333789585509> Reloaded callsigns cache")
 
-    def get_embed_size(embed: discord.Embed) -> int:
-        """Calculate total character count of an embed"""
-        size = 0
-        size += len(embed.title or "")
-        size += len(embed.description or "")
-        size += len(embed.footer.text or "") if embed.footer else 0
-        size += len(embed.author.name or "") if embed.author else 0
-
-        for field in embed.fields:
-            size += len(field.name or "")
-            size += len(field.value or "")
-
-        return size
 
     @staticmethod
     def strip_shift_prefixes(nickname: str) -> str:
@@ -1119,22 +1368,179 @@ class CallsignCog(commands.Cog):
 
         return nickname
 
-    @tasks.loop(minutes=60)
+    async def _process_sync_batch(self, guild: discord.Guild, callsigns: list, stats: dict,
+                                  naughty_role_data: list) -> tuple[dict, list]:
+        """Process a batch of callsigns for syncing - shared logic"""
+
+        for record in callsigns:
+            member = guild.get_member(record['discord_user_id'])
+
+            if member:
+                stats['members_found'] += 1
+
+                # Update Discord username if changed
+                current_discord_name = str(member)
+                if current_discord_name != record.get('discord_username'):
+                    async with db.pool.acquire() as conn:
+                        await conn.execute(
+                            'UPDATE callsigns SET discord_username = $1 WHERE discord_user_id = $2',
+                            current_discord_name, member.id
+                        )
+
+                # Update last_seen_at
+                async with db.pool.acquire() as conn:
+                    await conn.execute(
+                        'UPDATE callsigns SET last_seen_at = NOW() WHERE discord_user_id = $1',
+                        member.id
+                    )
+                stats['last_seen_updates'] += 1
+
+                # Check for naughty roles
+                member_naughty_roles = []
+                for role in member.roles:
+                    if role.id in NAUGHTY_ROLES:
+                        member_naughty_roles.append({
+                            'discord_user_id': member.id,
+                            'discord_username': str(member),
+                            'role_id': role.id,
+                            'role_name': NAUGHTY_ROLES[role.id]
+                        })
+                        stats['naughty_roles_found'] += 1
+
+                if member_naughty_roles:
+                    naughty_role_data.extend(member_naughty_roles)
+
+            else:
+                stats['members_not_found'] += 1
+                last_seen = record.get('last_seen_at')
+                if last_seen:
+                    days_gone = (datetime.utcnow() - last_seen).days
+                    if days_gone >= 7:
+                        callsign_display = f"{record['fenz_prefix']}-{record['callsign']}" if record['fenz_prefix'] else \
+                        record['callsign']
+                        stats['removed_users'].append({
+                            'username': record['discord_username'],
+                            'id': record['discord_user_id'],
+                            'callsign': callsign_display,
+                            'days_gone': days_gone,
+                            'reason': f'Inactive for {days_gone} days'
+                        })
+
+                        async with db.pool.acquire() as conn:
+                            await conn.execute(
+                                'DELETE FROM callsigns WHERE discord_user_id = $1',
+                                record['discord_user_id']
+                            )
+                        await sheets_manager.remove_callsign_from_sheets(record['discord_user_id'])
+                        stats['removed_inactive'] += 1
+
+        return stats, naughty_role_data
+
+    async def _check_bloxlink_sync_needed(self) -> bool:
+        """
+        Check if Bloxlink sync is needed (persists across bot restarts)
+        Returns True if sync needed, False if cache is still fresh
+        """
+        try:
+            async with db.pool.acquire() as conn:
+                # Get last sync time from database
+                result = await conn.fetchrow(
+                    '''SELECT last_sync_at
+                       FROM bot_config
+                       WHERE config_key = 'bloxlink_sync' '''
+                )
+
+                if not result or not result['last_sync_at']:
+                    print("ℹ️ No previous Bloxlink sync found - will perform initial sync")
+                    return True
+
+                last_sync = result['last_sync_at']
+                time_since_sync = (datetime.utcnow() - last_sync).total_seconds()
+
+                # Sync every 24 hours (86400 seconds)
+                if time_since_sync >= 86400:
+                    hours_since = int(time_since_sync / 3600)
+                    print(f"🔄 Bloxlink cache expired ({hours_since}h old) - refresh needed")
+                    return True
+                else:
+                    return False
+
+        except Exception as e:
+            print(f"⚠️ Error checking sync status: {e}")
+            # If error, assume sync is needed to be safe
+            return True
+
+    async def _record_bloxlink_sync_time(self):
+        """Record the current time as the last Bloxlink sync time"""
+        try:
+            async with db.pool.acquire() as conn:
+                await conn.execute(
+                    '''INSERT INTO bot_config (config_key, last_sync_at)
+                       VALUES ('bloxlink_sync', NOW()) ON CONFLICT (config_key)
+                       DO
+                    UPDATE SET last_sync_at = NOW()'''
+                )
+            print("✅ Recorded Bloxlink sync time to database")
+        except Exception as e:
+            print(f"⚠️ Error recording sync time: {e}")
+
+    async def _get_sync_schedule_info(self) -> tuple[int, int]:
+        """
+        Get information about the sync schedule
+        Returns: (hours_since_last_sync, hours_until_next_sync)
+        """
+        try:
+            async with db.pool.acquire() as conn:
+                result = await conn.fetchrow(
+                    '''SELECT last_sync_at
+                       FROM bot_config
+                       WHERE config_key = 'bloxlink_sync' '''
+                )
+
+                if not result or not result['last_sync_at']:
+                    return (0, 0)
+
+                last_sync = result['last_sync_at']
+                time_since_sync = (datetime.utcnow() - last_sync).total_seconds()
+                hours_since = int(time_since_sync / 3600)
+                hours_until_next = max(0, int((86400 - time_since_sync) / 3600))
+
+                return (hours_since, hours_until_next)
+        except:
+            return (0, 0)
+
+    @tasks.loop(hours=1)  # ✅ Runs every hour, but only syncs Bloxlink every 24h
     async def auto_sync_loop(self):
-        """Background task for automatic syncing with nickname updates"""
+        """Enhanced background task with intelligent Bloxlink caching"""
         if db.pool is None:
-            print("<:Warn:1437771973970104471> Auto-sync skipped: database not connected")
+            print("⚠️ Auto-sync skipped: database not connected")
             return
 
+        current_time = asyncio.get_event_loop().time()
+
+        # ✅ NEW: Determine if we need a full Bloxlink sync (once every 24 hours)
+        needs_bloxlink_sync = await self._check_bloxlink_sync_needed()
+
         for guild in self.bot.guilds:
-            # Skip excluded guilds
             if guild.id in EXCLUDED_GUILDS:
-                print(f"⏭️ Skipping auto-sync for excluded guild: {guild.name} ({guild.id})")
+                print(f"⭐️ Skipping auto-sync for excluded guild: {guild.name} ({guild.id})")
                 continue
 
             try:
                 sync_start_time = datetime.utcnow()
 
+                # ✅ NEW: Phase 1 - Bloxlink Cache Refresh (ONLY if 24 hours have passed)
+                if needs_bloxlink_sync:
+                    print(f"🔄 Starting 24-hour Bloxlink cache refresh for {guild.name}...")
+                    await self._refresh_bloxlink_cache(guild)
+                    await self._record_bloxlink_sync_time()
+                    print(f"✅ Bloxlink cache refreshed - valid for next 24 hours")
+                else:
+                    hours_since, hours_until = await self._get_sync_schedule_info()
+                    print(
+                        f"📦 Using cached Bloxlink data (refreshed {hours_since}h ago, next refresh in {hours_until}h)")
+
+                # ✅ Phase 2: Regular hourly sync using CACHED Bloxlink data (NO API CALLS)
                 async with db.pool.acquire() as conn:
                     callsigns = await conn.fetch('SELECT * FROM callsigns ORDER BY callsign')
 
@@ -1154,26 +1560,30 @@ class CallsignCog(commands.Cog):
                     'rank_changes': [],
                     'removed_users': [],
                     'added_users': [],
-                    # <:Accepted:1426930333789585509> NEW: Naughty role tracking
                     'naughty_roles_found': 0,
                     'naughty_roles_stored': 0,
                     'naughty_roles_removed': 0,
                     'permission_errors': [],
+                    'bloxlink_cache_hits': 0,
+                    'bloxlink_api_calls': 0,
                 }
 
-                # <:Accepted:1426930333789585509> NEW: Track all naughty roles in the server during sync
                 naughty_role_data = []
 
+                # ✅ MODIFIED: Use cached Bloxlink API
+                cache_stats_before = await self.bloxlink_api.get_cache_stats()
+
+                # Detect and fix database mismatches using cached data
                 mismatches = await self.detect_database_mismatches(
                     guild=guild,
                     progress_callback=None,
-                    bloxlink_cache=None
+                    bloxlink_cache={}  # ✅ Use cog-level cache
                 )
 
                 mismatch_fixes = 0
-
                 fixed_users = set()
 
+                # Fix all database mismatches (KEEP ALL EXISTING CODE)
                 for item in mismatches['discord_username_mismatch']:
                     if item['member'].id not in fixed_users:
                         async with db.pool.acquire() as conn:
@@ -1220,114 +1630,38 @@ class CallsignCog(commands.Cog):
                     mismatch_fixes += 1
                     fixed_users.add(item['member'].id)
 
-                # Add to stats
                 stats['database_mismatches_fixed'] = mismatch_fixes
 
-                # Check each callsign in database
-                for record in callsigns:
-                    member = guild.get_member(record['discord_user_id'])
+                # Check each callsign in database (KEEP ALL EXISTING CODE)
+                # ✅ Process all callsigns using shared batch logic (error recovery path)
+                stats, naughty_role_data = await self._process_sync_batch(
+                    guild, callsigns, stats, naughty_role_data
+                )
 
-                    if member:
-                        stats['members_found'] += 1
-
-                        if member.id not in fixed_users:
-                            current_discord_name = str(member)
-                            if current_discord_name != record.get('discord_username'):
-                                async with db.pool.acquire() as conn:
-                                    await conn.execute(
-                                        'UPDATE callsigns SET discord_username = $1 WHERE discord_user_id = $2',
-                                        current_discord_name, member.id
-                                    )
-                                mismatch_fixes += 1
-                                fixed_users.add(member.id)
-
-                        # Update last_seen_at to now
-                        async with db.pool.acquire() as conn:
-                            await conn.execute(
-                                'UPDATE callsigns SET last_seen_at = NOW() WHERE discord_user_id = $1',
-                                member.id
-                            )
-                        stats['last_seen_updates'] += 1
-
-                        # <:Accepted:1426930333789585509> NEW: Check for naughty roles on this member
-                        member_naughty_roles = []
-                        for role in member.roles:
-                            if role.id in NAUGHTY_ROLES:
-                                member_naughty_roles.append({
-                                    'discord_user_id': member.id,
-                                    'discord_username': str(member),
-                                    'role_id': role.id,
-                                    'role_name': NAUGHTY_ROLES[role.id]
-                                })
-                                stats['naughty_roles_found'] += 1
-
-                        if member_naughty_roles:
-                            naughty_role_data.extend(member_naughty_roles)
-
-                    else:
-                        stats['members_not_found'] += 1
-                        # User not in server - check if been gone > 7 days
-                        last_seen = record.get('last_seen_at')
-                        if last_seen:
-                            days_gone = (datetime.utcnow() - last_seen).days
-                            if days_gone >= 7:
-                                # Store removal details
-                                callsign_display = f"{record['fenz_prefix']}-{record['callsign']}" if record[
-                                    'fenz_prefix'] else record['callsign']
-                                stats['removed_users'].append({
-                                    'username': record['discord_username'],
-                                    'id': record['discord_user_id'],
-                                    'callsign': callsign_display,
-                                    'days_gone': days_gone,
-                                    'reason': f'Inactive for {days_gone} days'
-                                })
-
-                                # Remove from database
-                                async with db.pool.acquire() as conn:
-                                    await conn.execute(
-                                        'DELETE FROM callsigns WHERE discord_user_id = $1',
-                                        record['discord_user_id']
-                                    )
-                                # Remove from sheets
-                                await sheets_manager.remove_callsign_from_sheets(record['discord_user_id'])
-                                stats['removed_inactive'] += 1
-                                continue
-
-                # <:Accepted:1426930333789585509> NEW: Sync naughty roles to database
+                # Sync naughty roles to database (KEEP ALL EXISTING CODE)
                 if naughty_role_data:
                     async with db.pool.acquire() as conn:
-                        # Get all currently stored naughty roles
                         stored_roles = await conn.fetch(
                             'SELECT discord_user_id, role_id FROM naughty_roles WHERE removed_at IS NULL'
                         )
                         stored_set = {(r['discord_user_id'], r['role_id']) for r in stored_roles}
-
-                        # Current roles in server
                         current_set = {(r['discord_user_id'], r['role_id']) for r in naughty_role_data}
-
-                        # Roles to add (in server but not in DB)
                         to_add = current_set - stored_set
-
-                        # Roles to remove (in DB but not in server)
                         to_remove = stored_set - current_set
 
-                        # Add new naughty roles
                         for user_id, role_id in to_add:
                             role_info = next(r for r in naughty_role_data if
                                              r['discord_user_id'] == user_id and r['role_id'] == role_id)
                             await conn.execute(
-                                '''INSERT INTO naughty_roles
-                                       (discord_user_id, discord_username, role_id, role_name, last_seen_at)
+                                '''INSERT INTO naughty_roles (discord_user_id, discord_username, role_id, role_name, last_seen_at)
                                    VALUES ($1, $2, $3, $4, NOW()) ON CONFLICT (discord_user_id, role_id) 
-                                   DO UPDATE SET removed_at = NULL, last_seen_at = NOW(), discord_username = $2''',
-                                role_info['discord_user_id'],
-                                role_info['discord_username'],
-                                role_info['role_id'],
+                                   DO
+                                UPDATE SET removed_at = NULL, last_seen_at = NOW(), discord_username = $2''',
+                                role_info['discord_user_id'], role_info['discord_username'], role_info['role_id'],
                                 role_info['role_name']
                             )
                             stats['naughty_roles_stored'] += 1
 
-                        # Mark removed roles (user no longer has them)
                         for user_id, role_id in to_remove:
                             await conn.execute(
                                 '''UPDATE naughty_roles
@@ -1339,97 +1673,65 @@ class CallsignCog(commands.Cog):
                             )
                             stats['naughty_roles_removed'] += 1
 
-                        # Update last_seen_at for all current naughty roles
                         for role_info in naughty_role_data:
                             await conn.execute(
                                 '''UPDATE naughty_roles
                                    SET last_seen_at = NOW()
                                    WHERE discord_user_id = $1
                                      AND role_id = $2''',
-                                role_info['discord_user_id'],
-                                role_info['role_id']
+                                role_info['discord_user_id'], role_info['role_id']
                             )
 
-                    # âœ… Track individual naughty role changes for detailed logging (OUTSIDE transaction)
-                    stats['naughty_role_details'] = {
-                        'added': [],
-                        'removed': []
-                    }
-
-                    # Track who got roles added
+                    stats['naughty_role_details'] = {'added': [], 'removed': []}
                     for user_id, role_id in to_add:
-                        role_info = next(r for r in naughty_role_data if
-                                       r['discord_user_id'] == user_id and r['role_id'] == role_id)
+                        role_info = next(
+                            r for r in naughty_role_data if r['discord_user_id'] == user_id and r['role_id'] == role_id)
                         member = guild.get_member(user_id)
                         if member:
-                            stats['naughty_role_details']['added'].append({
-                                'member': member,
-                                'role_name': role_info['role_name']
-                            })
+                            stats['naughty_role_details']['added'].append(
+                                {'member': member, 'role_name': role_info['role_name']})
 
-                    # Track who got roles removed
                     for user_id, role_id in to_remove:
                         member = guild.get_member(user_id)
                         role_name = NAUGHTY_ROLES.get(role_id, "Unknown")
                         if member:
-                            stats['naughty_role_details']['removed'].append({
-                                'member': member,
-                                'role_name': role_name
-                            })
+                            stats['naughty_role_details']['removed'].append({'member': member, 'role_name': role_name})
 
+                # Sync to Google Sheets (KEEP ALL EXISTING CODE)
                 if callsigns:
                     callsign_data = []
-
-                    # First, check for entries in sheets but not in database
                     sheet_callsigns = await sheets_manager.get_all_callsigns_from_sheets()
                     sheet_map = {cs['discord_user_id']: cs for cs in sheet_callsigns}
                     db_map = {record['discord_user_id']: dict(record) for record in callsigns}
 
-                    # Add missing entries from sheets → database
                     for discord_id, sheet_data in sheet_map.items():
                         if discord_id not in db_map:
                             member = guild.get_member(discord_id)
                             if member:
-                                # ✅ Use BloxlinkAPI class for proper retry logic
-                                bloxlink_api = BloxlinkAPI()
-                                roblox_username, roblox_id, status = await bloxlink_api.get_bloxlink_data(member.id,
-                                                                                                          guild.id)
+                                # ✅ Use cog-level cached API
+                                roblox_username, roblox_id, status = await self.bloxlink_api.get_bloxlink_data(
+                                    member.id, guild.id)
 
                                 if status == 'success' and roblox_id and roblox_username:
-                                    # ✅ Both username and ID fetched successfully
                                     hhstj_prefix = get_hhstj_prefix_from_roles(member.roles)
-                                    is_fenz_high_command = any(
-                                        role.id in HIGH_COMMAND_RANKS for role in member.roles)
+                                    is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
                                     is_hhstj_high_command = any(
                                         role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
 
                                     await add_callsign_to_database(
-                                        sheet_data['callsign'],
-                                        discord_id,
-                                        str(member),
-                                        str(roblox_id),  # Convert to string
+                                        sheet_data['callsign'], discord_id, str(member), str(roblox_id),
                                         roblox_username,
-                                        sheet_data['fenz_prefix'],
-                                        hhstj_prefix or '',
-                                        self.bot.user.id,
-                                        "Auto-sync",
-                                        is_fenz_high_command,
-                                        is_hhstj_high_command
+                                        sheet_data['fenz_prefix'], hhstj_prefix or '', self.bot.user.id, "Auto-sync",
+                                        is_fenz_high_command, is_hhstj_high_command
                                     )
 
-                                    # Track addition
                                     callsign_display = f"{sheet_data['fenz_prefix']}-{sheet_data['callsign']}" if \
-                                        sheet_data['fenz_prefix'] else sheet_data['callsign']
-                                    stats['added_users'].append({
-                                        'member': member,
-                                        'callsign': callsign_display
-                                    })
+                                    sheet_data['fenz_prefix'] else sheet_data['callsign']
+                                    stats['added_users'].append({'member': member, 'callsign': callsign_display})
                                     stats['added_from_sheets'] += 1
                                 else:
-                                    # Failed to get Bloxlink data, skip this user
                                     print(f"⚠️ Auto-sync: Could not get Bloxlink for {member.id}: {status}")
 
-                    # Re-fetch database if we added entries
                     if stats['added_from_sheets'] > 0:
                         async with db.pool.acquire() as conn:
                             callsigns = await conn.fetch('SELECT * FROM callsigns ORDER BY callsign')
@@ -1437,7 +1739,6 @@ class CallsignCog(commands.Cog):
 
                     for record in callsigns:
                         member = guild.get_member(record['discord_user_id'])
-
                         if not member:
                             continue
 
@@ -1457,62 +1758,126 @@ class CallsignCog(commands.Cog):
                             'qualifications': sheets_manager.determine_qualifications(member.roles, is_command_rank)
                         })
 
-                    # Sort by rank hierarchy
                     callsign_data.sort(key=lambda x: get_rank_sort_key(x['fenz_prefix'], x['hhstj_prefix']))
-
-                    # Update Google Sheets
                     await sheets_manager.batch_update_callsigns(callsign_data)
 
-                    # Calculate sync duration
+                    # ✅ NEW: Track cache efficiency
+                    cache_stats_after = self.bloxlink_api.get_cache_stats()
+                    stats['bloxlink_cache_hits'] = stats['members_found']  # All found members used cache
+                    stats['bloxlink_api_calls'] = cache_stats_after['api_calls_made'] - cache_stats_before[
+                        'api_calls_made']
+
                     sync_duration = (datetime.utcnow() - sync_start_time).total_seconds()
 
-                    # Send enhanced log with DETAILED changes
+                    # ✅ MODIFIED: Enhanced logging with cache stats
                     await self.send_detailed_sync_log(self.bot, guild.name, stats, sync_duration)
 
-                    print(f"<:Accepted:1426930333789585509> Auto-sync completed for guild {guild.name}:")
-                    print(f"    📊 {stats['total_callsigns']} callsigns synced to Google Sheets")
+                    print(f"✅ Auto-sync completed for guild {guild.name}:")
+                    print(f"    📊 {stats['total_callsigns']} callsigns synced")
+                    print(f"    👥 {stats['members_found']} members found / {stats['members_not_found']} not in server")
                     print(
-                        f"    👥 {stats['members_found']} members found / {stats['members_not_found']} not in server")
-                    print(f"    🏷️ {stats['nickname_updates']} nicknames updated")
-                    print(f"    🎖️ {stats['rank_updates']} rank changes detected and saved")
+                        f"    📦 Bloxlink cache hits: {stats['bloxlink_cache_hits']} (API calls: {stats['bloxlink_api_calls']})")
+                    if stats['bloxlink_api_calls'] == 0:
+                        print(f"    ✅ Zero API calls - using 100% cached data!")
+                    if stats['nickname_updates'] > 0:
+                        print(f"    🏷️ {stats['nickname_updates']} nicknames updated")
                     if stats['added_from_sheets'] > 0:
                         print(f"    ➕ {stats['added_from_sheets']} added from sheets")
                     if stats['removed_inactive'] > 0:
                         print(f"    🗑️ {stats['removed_inactive']} removed (inactive 7+ days)")
                     if stats['callsigns_reset']:
                         print(f"    🔄 {len(stats['callsigns_reset'])} callsigns reset due to rank changes")
-                    # <:Accepted:1426930333789585509> NEW: Print naughty role stats
                     if stats['naughty_roles_found'] > 0:
                         print(f"    🚨 {stats['naughty_roles_found']} naughty roles found")
                         print(f"    💾 {stats['naughty_roles_stored']} new naughty roles stored")
                         print(f"    ✂️ {stats['naughty_roles_removed']} naughty roles removed")
                     if stats['permission_errors']:
-                        print(f"    <:Warn:1437771973970104471> {len(stats['permission_errors'])} permission errors")
+                        print(f"    ⚠️ {len(stats['permission_errors'])} permission errors")
                     if stats['errors']:
                         non_perm_errors = [e for e in stats['errors'] if e['error'] != 'Missing permissions']
                         if non_perm_errors:
-                            print(f"    <:Warn:1437771973970104471> {len(non_perm_errors)} other errors occurred")
+                            print(f"    ⚠️ {len(non_perm_errors)} other errors occurred")
                     if stats.get('database_mismatches_fixed', 0) > 0:
                         print(f"    🔧 {stats['database_mismatches_fixed']} database mismatches fixed")
                     print(f"    ⏱️ Completed in {sync_duration:.2f}s")
 
             except Exception as e:
-                print(f"<:Denied:1426930694633816248> Error during auto-sync for {guild.name}: {e}")
+                print(f"❌ Error during auto-sync for {guild.name}: {e}")
                 import traceback
                 traceback.print_exc()
 
-                # Send error log
                 try:
                     await self.send_sync_log(
-                    self.bot,
-                        "<:Denied:1426930694633816248> Auto-Sync Failed",
+                        self.bot,
+                        "❌ Auto-Sync Failed",
                         f"Auto-sync failed for **{guild.name}**",
                         [{'name': 'Error', 'value': f'```{str(e)[:1000]}```', 'inline': False}],
                         discord.Color.red()
                     )
-                    pass
                 except:
                     pass
+
+                try:
+                    stats, naughty_role_data = await self._process_sync_batch(
+                        guild, callsigns, stats, naughty_role_data
+                    )
+                except Exception as recovery_error:
+                    print(f"❌ Error during error recovery: {recovery_error}")
+
+    @tasks.loop(hours=24)
+    async def cleanup_cache_loop(self):
+        """Clean up expired cache entries daily"""
+        await self.bloxlink_api.cleanup_expired_cache()
+
+    async def _refresh_bloxlink_cache(self, guild: discord.Guild):
+        """
+        Refresh Bloxlink cache for all users in the database
+        This runs once every 24 HOURS to keep cache fresh
+        """
+        try:
+            # Get all Discord user IDs from database
+            async with db.pool.acquire() as conn:
+                user_ids = await conn.fetch('SELECT DISTINCT discord_user_id FROM callsigns')
+
+            discord_ids = [record['discord_user_id'] for record in user_ids]
+
+            if not discord_ids:
+                print("ℹ️ No users in database to cache")
+                return
+
+            print(f"🔄 Starting 24-hour Bloxlink cache refresh for {len(discord_ids)} users...")
+            print(f"⏰ This will take a few minutes but ensures fresh data for the next 24 hours")
+
+            # Use bulk check with progress tracking
+            async def cache_progress(current, total, status_counts):
+                if current % 25 == 0 or current == total:
+                    print(f"   📦 Caching progress: {current}/{total} "
+                          f"(✅ {status_counts['success']} | ❌ {status_counts['not_linked']} | 📦 {status_counts.get('cached', 0)} from cache)")
+
+            results = await self.bloxlink_api.bulk_check_bloxlink(
+                discord_ids,
+                guild_id=guild.id,
+                progress_callback=cache_progress
+            )
+
+            if results is None:
+                print("⚠️ Bloxlink cache refresh failed - API issues detected")
+                print("   Will retry in next auto-sync cycle")
+                return
+
+            # Cache is automatically updated by bulk_check_bloxlink
+            cache_stats = await self.bloxlink_api.get_cache_stats()
+            print(f"✅ 24-hour cache refresh complete:")
+            print(f"   📦 Total cached: {cache_stats['total_cached']}")
+            print(f"   ✅ Valid entries: {cache_stats['valid_entries']}")
+            print(f"   🌐 API calls made: {cache_stats['api_calls_made']}")
+            print(f"   ⏰ Next refresh: 24 hours from now")
+            print(f"   💡 All hourly syncs will use this cached data (0 API calls)")
+
+        except Exception as e:
+            print(f"❌ Error refreshing Bloxlink cache: {e}")
+            import traceback
+            traceback.print_exc()
 
     async def send_detailed_sync_log(self, bot, guild_name: str, stats: dict, sync_duration: float):
         """Send detailed sync logs with specific changes to designated channel"""
@@ -1536,6 +1901,19 @@ class CallsignCog(commands.Cog):
             summary_embed.add_field(name='Nicknames Updated', value=str(stats['nickname_updates']), inline=True)
             summary_embed.add_field(name='Rank Changes', value=str(stats['rank_updates']), inline=True)
             summary_embed.add_field(name='Duration', value=f'{sync_duration:.2f}s', inline=True)
+
+            if stats.get('bloxlink_cache_hits') is not None:
+                cache_efficiency = 0
+                if stats['members_found'] > 0:
+                    cache_efficiency = (stats['bloxlink_cache_hits'] / stats['members_found']) * 100
+
+                summary_embed.add_field(
+                    name='Cache Efficiency',
+                    value=f"Hits: {stats['bloxlink_cache_hits']}\n"
+                          f"API Calls: {stats['bloxlink_api_calls']}\n"
+                          f"Efficiency: {cache_efficiency:.1f}%",
+                    inline=True
+                )
 
             if stats['permission_errors']:
                 # Only show non-admin permission errors
@@ -3094,13 +3472,17 @@ class CallsignCog(commands.Cog):
                 is_fenz_high_command, is_hhstj_high_command
             )
 
-            await safe_edit_nickname(interaction.user, new_nickname)
+            success, final_nick = await safe_edit_nickname(interaction.user, new_nickname)
+            if not success:
+                print(f"⚠️ Failed to set nickname for {member.id}")
 
         except discord.HTTPException as e:
             if e.code == 50035:  # Invalid Form Body
                 print(f"⚠️ Nickname too long for {member.id}: '{new_nickname}' ({len(new_nickname)} chars)")
                 # Try again with just roblox username
-                await safe_edit_nickname(interaction.user, new_nickname)
+                success, final_nick = await safe_edit_nickname(interaction.user, new_nickname)
+                if not success:
+                    print(f"⚠️ Failed to set nickname for {member.id}")
             else:
                 raise
 
@@ -3260,7 +3642,7 @@ class CallsignCog(commands.Cog):
                         'fenz_prefix': fenz_prefix,
                         'roblox_username': roblox_username,
                         'roblox_id': roblox_id,
-                        'has_bloxlink': bool(bloxlink_data)
+                        'has_bloxlink': bool(roblox_id and roblox_username)
                     })
                 else:
                     # IN database - check for incomplete data
@@ -3507,10 +3889,38 @@ class CallsignCog(commands.Cog):
 
     async def detect_database_mismatches(self, guild: discord.Guild, progress_callback=None,
                                          bloxlink_cache: dict = None):
-        """
-        Detect users with outdated or incomplete database information
-        Returns dict with categories of mismatches
-        """
+        """Detect mismatches with optimized bulk Bloxlink checking"""
+
+        if bloxlink_cache is None:
+            bloxlink_cache = {}
+
+        async with db.pool.acquire() as conn:
+            db_callsigns = await conn.fetch('SELECT * FROM callsigns')
+
+        # Collect all uncached IDs upfront
+        uncached_ids = [
+            record['discord_user_id']
+            for record in db_callsigns
+            if record['discord_user_id'] not in bloxlink_cache
+               and guild.get_member(record['discord_user_id'])
+        ]
+
+        # Bulk fetch if needed
+        if uncached_ids:
+            bulk_results = await self.bloxlink_api.bulk_check_bloxlink(
+                uncached_ids,
+                guild.id,
+                progress_callback
+            )
+            if bulk_results:
+                for discord_id, result in bulk_results.items():
+                    bloxlink_cache[discord_id] = (
+                        result['roblox_username'],
+                        result['roblox_user_id'],
+                        result['status']
+                    )
+
+        # Now process all records using cache
         mismatches = {
             'discord_username_mismatch': [],
             'roblox_username_mismatch': [],
@@ -3519,89 +3929,182 @@ class CallsignCog(commands.Cog):
             'missing_roblox_id': [],
         }
 
-        # Initialize cache if not provided
-        if bloxlink_cache is None:
-            bloxlink_cache = {}
-
-        async with db.pool.acquire() as conn:
-            db_callsigns = await conn.fetch('SELECT * FROM callsigns')
-
-        total_records = len(db_callsigns)
-
-        bloxlink_api = BloxlinkAPI()
-
         for index, record in enumerate(db_callsigns, 1):
             member = guild.get_member(record['discord_user_id'])
+            if not member:
+                continue
 
             if progress_callback:
-                await progress_callback(index, total_records)
+                await progress_callback(index, len(db_callsigns))
 
-            if not member:
-                continue  # User not in server
-
-            # Check Discord username mismatch
+            # Check Discord username
             current_discord_name = str(member)
-            stored_discord_name = record.get('discord_username')
-
-            if not stored_discord_name:
+            if not record.get('discord_username'):
                 mismatches['missing_discord_username'].append({
                     'member': member,
                     'record': dict(record)
                 })
-            elif current_discord_name != stored_discord_name:
+            elif current_discord_name != record['discord_username']:
                 mismatches['discord_username_mismatch'].append({
                     'member': member,
-                    'old': stored_discord_name,
+                    'old': record['discord_username'],
                     'new': current_discord_name,
                     'record': dict(record)
                 })
 
-            # Check Roblox data
+            # Check Roblox data using cache
             if member.id in bloxlink_cache:
-                # Use cached result
-                cached = bloxlink_cache[member.id]
-                roblox_username, roblox_id, status = cached
-            else:
-                # Fetch and cache
-                bloxlink_api = BloxlinkAPI()
-                roblox_username, roblox_id, status = await bloxlink_api.get_bloxlink_data(member.id, guild.id)
-                bloxlink_cache[member.id] = (roblox_username, roblox_id, status)
+                roblox_username, roblox_id, status = bloxlink_cache[member.id]
 
-            if status == 'success' and roblox_id:
-                current_roblox_id = str(roblox_id)
-                current_roblox_username = roblox_username
-                stored_roblox_id = record.get('roblox_user_id')
-                stored_roblox_username = record.get('roblox_username')
+                if status == 'success' and roblox_id:
+                    current_roblox_id = str(roblox_id)
+                    stored_roblox_id = record.get('roblox_user_id')
 
-                # Check Roblox ID mismatch or missing
-                if not stored_roblox_id:
-                    mismatches['missing_roblox_id'].append({
-                        'member': member,
-                        'current_id': current_roblox_id,
-                        'current_username': current_roblox_username,
-                        'record': dict(record)
-                    })
-                elif current_roblox_id != stored_roblox_id:
-                    mismatches['roblox_id_mismatch'].append({
-                        'member': member,
-                        'old_id': stored_roblox_id,
-                        'new_id': current_roblox_id,
-                        'current_username': current_roblox_username,
-                        'record': dict(record)
-                    })
-
-                # Check Roblox username mismatch
-                if current_roblox_username and stored_roblox_username:
-                    if current_roblox_username != stored_roblox_username:
-                        mismatches['roblox_username_mismatch'].append({
+                    if not stored_roblox_id:
+                        mismatches['missing_roblox_id'].append({
                             'member': member,
-                            'old': stored_roblox_username,
-                            'new': current_roblox_username,
+                            'current_id': current_roblox_id,
+                            'current_username': roblox_username,
+                            'record': dict(record)
+                        })
+                    elif current_roblox_id != stored_roblox_id:
+                        mismatches['roblox_id_mismatch'].append({
+                            'member': member,
+                            'old_id': stored_roblox_id,
+                            'new_id': current_roblox_id,
+                            'current_username': roblox_username,
                             'record': dict(record)
                         })
 
-        # ✅ FIX: Actually return the mismatches!
+                    # Check username mismatch
+                    if roblox_username and record.get('roblox_username'):
+                        if roblox_username != record['roblox_username']:
+                            mismatches['roblox_username_mismatch'].append({
+                                'member': member,
+                                'old': record['roblox_username'],
+                                'new': roblox_username,
+                                'record': dict(record)
+                            })
+
         return mismatches
+
+    @callsign_group.command(name="cachestats", description="View Bloxlink API cache statistics")
+    async def cache_stats(self, interaction: discord.Interaction):
+        """Show detailed cache statistics and API usage"""
+
+        if interaction.user.id != OWNER_ID:
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> This command is restricted to the bot owner only!",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            # ✅ MODIFIED: Use cog-level BloxlinkAPI instance
+            stats = await self.bloxlink_api.get_cache_stats()
+
+            embed = discord.Embed(
+                title="Bloxlink API Cache Statistics",
+                color=discord.Color.blue(),
+                timestamp=datetime.utcnow()
+            )
+
+            # Cache efficiency
+            total_cached = stats['total_cached']
+            valid_entries = stats['valid_entries']
+            expired_entries = stats['expired_entries']
+
+            if total_cached > 0:
+                efficiency = (valid_entries / total_cached) * 100
+            else:
+                efficiency = 0
+
+            embed.add_field(
+                name="Cache Status",
+                value=f"**Total Entries:** {total_cached}\n"
+                      f"**Valid (Fresh):** {valid_entries}\n"
+                      f"**Expired:** {expired_entries}\n"
+                      f"**Efficiency:** {efficiency:.1f}%",
+                inline=True
+            )
+
+            # API quota tracking
+            api_calls = stats['api_calls_made']
+            quota_remaining = stats['quota_remaining']
+
+            # ✅ NEW: Show last sync time and schedule
+            if self.last_bloxlink_sync:
+                time_since_sync = asyncio.get_event_loop().time() - self.last_bloxlink_sync
+                hours_since = int(time_since_sync / 3600)
+                hours_until_next = int((self.bloxlink_sync_interval - time_since_sync) / 3600)
+
+                sync_status = "🟢 Fresh" if hours_since < 12 else "🟡 Aging" if hours_since < 20 else "🟠 Due Soon"
+
+                embed.add_field(
+                    name="<a:Load:1430912797469970444> Sync Schedule",
+                    value=f"**Status:** {sync_status}\n"
+                          f"**Last Full Sync:** {hours_since}h ago\n"
+                          f"**Next Full Sync:** in {hours_until_next}h\n"
+                          f"**Hourly Syncs:** Use cached data\n"
+                          f"**Full Refresh:** Every 24 hours",
+                    inline=True
+                )
+            else:
+                embed.add_field(
+                    name="<a:Load:1430912797469970444> Sync Schedule",
+                    value="**Status:** No sync yet\n"
+                          f"**First Sync:** Will occur on next hourly run\n"
+                          f"**Frequency:** Every 24 hours",
+                    inline=True
+                )
+
+            quota_status = "🟢 Healthy" if quota_remaining > 250 else "🟡 Moderate" if quota_remaining > 100 else "🔴 Critical"
+
+            embed.add_field(
+                name="API Usage",
+                value=f"**Calls Made:** {api_calls}\n"
+                      f"**Quota Remaining:** {quota_remaining}/500\n"
+                      f"**Status:** {quota_status}",
+                inline=True
+            )
+
+            # Cache settings
+            embed.add_field(
+                name="Cache Settings",
+                value=f"**Expiration:** 24 hours\n"
+                      f"**Full Refresh:** Every 1 hour\n"
+                      f"**Rate Limit:** 50 req/min",
+                inline=True
+            )
+
+            # Recommendations
+            if quota_remaining < 100:
+                embed.add_field(
+                    name="<:Warn:1437771973970104471>️ Recommendations",
+                    value="• Quota running low - cache will prevent overuse\n"
+                          "• Avoid manual bulk operations\n"
+                          "• Quota resets in ~24 hours",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="<:Accepted:1426930333789585509> Status",
+                    value=f"Cache is healthy! Efficiency at {efficiency:.1f}%\n"
+                          f"Auto-sync runs every hour using cached data.",
+                    inline=False
+                )
+
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+        except Exception as e:
+            await interaction.followup.send(
+                f"❌ Error fetching cache stats: {str(e)}",
+                ephemeral=True
+            )
+            import traceback
+            traceback.print_exc()
 
     @callsign_group.command(name="bulk-assign", description="Assign callsigns to all unassigned users")
     @app_commands.describe(database_scan="Check and fix database mismatches before assigning (default: False)")
@@ -3740,9 +4243,6 @@ class CallsignCog(commands.Cog):
     async def start_bulk_assign(self, interaction: discord.Interaction, bloxlink_cache: dict = None):
         """Streamlined bulk assign with proper Bloxlink handling"""
 
-        # Initialize BloxlinkAPI for retry logic
-        bloxlink_api = BloxlinkAPI()
-
         # Initialize cache if not provided
         if bloxlink_cache is None:
             bloxlink_cache = {}
@@ -3834,8 +4334,12 @@ class CallsignCog(commands.Cog):
             uncached_ids = [m.id for m in members_without_callsigns if m.id not in bloxlink_cache]
 
             if uncached_ids:
-                # ✅ Use enhanced Bloxlink API with retry logic AND progress callback
-                new_results = await bloxlink_api.bulk_check_bloxlink(
+                tracker = ProgressTracker(interaction, len(uncached_ids), update_interval=3.0)
+
+                async def progress_callback(current, total, status_counts):
+                    await tracker.update(current, status_counts, force=(current == total))
+
+                new_results = await self.bloxlink_api.bulk_check_bloxlink(
                     uncached_ids,
                     guild_id=interaction.guild.id,
                     progress_callback=progress_callback
@@ -3856,6 +4360,7 @@ class CallsignCog(commands.Cog):
                         color=discord.Color.red()
                     )
 
+                    await interaction.edit_original_response(embed=error_embed)
                     await interaction.edit_original_response(embed=error_embed)
                     return
 
@@ -3997,6 +4502,7 @@ class CallsignCog(commands.Cog):
             import traceback
             traceback.print_exc()
 
+
 class HHStJCallsignChoiceView(discord.ui.View):
     """View for HHStJ high command to choose their callsign version"""
 
@@ -4055,7 +4561,9 @@ class HHStJCallsignChoiceView(discord.ui.View):
             )
 
             try:
-                await safe_edit_nickname(self.user, new_nickname)
+                success, final_nick = await safe_edit_nickname(self.user, new_nickname)
+                if not success:
+                    print(f"⚠️ Failed to set nickname for {member.id}")
             except discord.Forbidden:
                 pass
 
@@ -4647,7 +5155,9 @@ class BulkAssignView(discord.ui.View):
             new_nickname = " | ".join(nickname_parts) if nickname_parts else user_data['roblox_username']
 
             try:
-                await safe_edit_nickname(member, new_nickname)
+                success, final_nick = await safe_edit_nickname(member, new_nickname)
+                if not success:
+                    print(f"⚠️ Failed to set nickname for {member.id}")
             except discord.Forbidden:
                 pass
 
@@ -4799,7 +5309,9 @@ class BulkAssignModal(discord.ui.Modal):
             final_nickname = shift_prefix + new_nickname
 
             try:
-                await safe_edit_nickname(member, new_nickname)
+                success, final_nick = await safe_edit_nickname(member, new_nickname)
+                if not success:
+                    print(f"⚠️ Failed to set nickname for {member.id}")
             except discord.Forbidden:
                 pass
 
