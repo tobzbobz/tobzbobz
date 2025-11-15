@@ -3,6 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 from typing import Optional
 
+LEADERSHIP = [1285474077556998196, 1389550689113473024]
 
 class StationOfficerCog(commands.Cog):
     """Station Officer application management commands"""
@@ -11,6 +12,16 @@ class StationOfficerCog(commands.Cog):
         self.bot = bot
 
     so_group = app_commands.Group(name="so", description="Station Officer application commands")
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """Check if user has leadership role"""
+        if not any(role.id in LEADERSHIP for role in interaction.user.roles):
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> This command is restricted to Leadership only!",
+                ephemeral=True
+            )
+            return False
+        return True
 
     @so_group.command(name="result", description="Send SO application results to a user")
     @app_commands.describe(
@@ -23,6 +34,7 @@ class StationOfficerCog(commands.Cog):
         app_commands.Choice(name="Pass", value="pass"),
         app_commands.Choice(name="Fail", value="fail")
     ])
+
     async def so_result(
             self,
             interaction: discord.Interaction,
@@ -114,7 +126,7 @@ class StationOfficerCog(commands.Cog):
 
             # Notes
             if notes and notes.strip():
-                message += f"**Notes:**\n{notes}\n\n"
+                message += f"**Notes:**{notes}\n\n"
 
             # Special case: score < 30 but overridden to pass
             if result < 30 and override == "pass":
@@ -161,7 +173,7 @@ class StationOfficerCog(commands.Cog):
             try:
                 dm_embed = discord.Embed(
                     title="Station Officer Application Received",
-                    description="Your Station Officer application has been received!\n\nPlease wait while we review your application. You will be contacted shortly after the application period lapses with your results.",
+                    description="\nYour Station Officer application has been received!\n\nPlease wait while we review your application. You will be contacted shortly after the application period lapses with your results.",
                     color=discord.Color(0x000000)
                 )
                 dm_embed.set_author(name='FENZ | Leadership', icon_url='https://cdn.discordapp.com/attachments/1425358898831036507/1439358965770092666/cropped_circle_image_1.png?ex=691a3aff&is=6918e97f&hm=311a99a24f20e90e24190639c29c9365252b839a169d3b22a97814824c3401db&')
