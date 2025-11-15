@@ -1110,18 +1110,62 @@ class ShiftManagementCog(commands.Cog):
     async def get_quota_info(self, member: discord.Member, type: str = None) -> dict:
         """Get quota information for a user including percentage and bypass status"""
         quota_seconds = await self.get_user_quota(member, type)
+        active_seconds = await self.get_total_active_time(member.id, type)
+
+        # Check for bypass roles FIRST
+        user_role_ids = {role.id for role in member.roles}
+
+        # If user has QB or LOA, they're always completed regardless of quota
+        if QUOTA_BYPASS_ROLE in user_role_ids:
+            return {
+                'has_quota': True,
+                'quota_seconds': quota_seconds,
+                'active_seconds': active_seconds,
+                'percentage': 100,
+                'completed': True,
+                'bypass_type': 'QB'
+            }
+        elif LOA_ROLE in user_role_ids:
+            return {
+                'has_quota': True,
+                'quota_seconds': quota_seconds,
+                'active_seconds': active_seconds,
+                'percentage': 100,
+                'completed': True,
+                'bypass_type': 'LOA'
+            }
 
         # Special handling for 0-second quotas - they're always completed
         if quota_seconds == 0:
-            active_seconds = await self.get_total_active_time(member.id, type)
             return {
-                'has_quota': True,  # Changed from False
+                'has_quota': True,
                 'quota_seconds': 0,
                 'active_seconds': active_seconds,
-                'percentage': 100,  # Always 100%
-                'completed': True,  # Always completed
+                'percentage': 100,
+                'completed': True,
                 'bypass_type': None
             }
+
+        # Check for RA (Reduced Activity)
+        if REDUCED_ACTIVITY_ROLE in user_role_ids:
+            bypass_type = 'RA'
+            modified_quota = quota_seconds * 0.5
+            percentage = (active_seconds / modified_quota * 100) if modified_quota > 0 else 0
+            completed = percentage >= 100
+        else:
+            bypass_type = None
+            percentage = (active_seconds / quota_seconds) * 100 if quota_seconds > 0 else 0
+            completed = percentage >= 100
+
+        return {
+            'has_quota': True,
+            'quota_seconds': quota_seconds,
+            'modified_quota_seconds': modified_quota if bypass_type == 'RA' else quota_seconds,
+            'active_seconds': active_seconds,
+            'percentage': percentage,
+            'completed': completed,
+            'bypass_type': bypass_type
+        }
 
         active_seconds = await self.get_total_active_time(member.id, type)
 
@@ -2002,8 +2046,9 @@ class ShiftManagementCog(commands.Cog):
 
                 quota_info = quota_infos.get(row['discord_user_id'], {'has_quota': False, 'bypass_type': None})
 
-                # Skip users without quota requirements OR with 0-second quotas
-                if not quota_info['has_quota'] or quota_info.get('quota_seconds', 0) == 0:
+                # FIXED: Only skip if they have no quota at all
+                # Users with 0-second quotas should still appear (they're automatically completed)
+                if not quota_info.get('has_quota', False):
                     continue
 
                 quota_status = ""
@@ -4007,6 +4052,9 @@ class AdminActionsSelect(discord.ui.Select):
 
     async def show_modify_shift(self, interaction: discord.Interaction):
         """Show modify shift interface"""
+
+        await interaction.response.defer(ephemeral=True)
+
         # Create embed for selection panel
         embed = discord.Embed(
             title="**Modify Shift**",
@@ -4036,6 +4084,9 @@ class AdminActionsSelect(discord.ui.Select):
 
     async def show_delete_shift(self, interaction: discord.Interaction):
         """Show delete shift interface"""
+
+        await interaction.response.defer(ephemeral=True)
+
         # Create embed for selection panel
         embed = discord.Embed(
             title="**Delete Shift**",

@@ -2689,15 +2689,17 @@ class WatchCog(commands.Cog):
                 colour=discord.Colour(0xffffff)
             )
 
+            watch_status_value = (
+                "‎\n⚫ - **No watch is active** • Make sure it's SSU and wait for a FENZ Management member to start one!\n"
+                "🗳️¸ - **Vote Occuring** • Vote up to participate!\n"
+                "🟢 - **Watch Starting Soon** • A vote has passed, waiting for scheduled start time!\n"
+                "🔴 / 🟡 / 🔵 / 🟤 - **Watch Colour** • Active watch colour!\n"
+                "1️⃣ / 2️⃣ - **Watch Station** • Active station!\n‎\n\n"
+            )
+
             stats_embed.add_field(
                 name="🔄️ | Watch Status",
-                value=(
-                    "‎\n⚫ - **No watch is active**, make sure it is SSU and wait for a FENZ Supervisor or Leadership member to start a watch!\n"
-                    "🗳️¸ - **A watch vote is occurring**, vote up if you want to participate in the watch!\n"
-                    "🟠  - **A watch will be active soon**, as a watch vote has succeeded, and is waiting its designated start time!\n"
-                    "🔴 / 🟡 / 🔵 / 🟤 - **Watch Colour**, a watch of this colour has been started!\n"
-                    "1️⃣ / 2️⃣ - **Watch Station**, a watch at this station has been started!\n‎\n\n"
-                ),
+                value=self.truncate_field_value(watch_status_value),
                 inline=False
             )
 

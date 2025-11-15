@@ -403,12 +403,14 @@ def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_u
     hhstj_priority = has_hhstj_high_command and not has_fenz_high_command
 
     if callsign == "Not Assigned":
-        # <:Accepted:1426930333789585509> SPECIAL CASE: RFF-Not Assigned → Just "RFF"
-        if fenz_prefix == "RFF":
-            nickname_parts = ["RFF"]
-            # Try to add HHStJ if space allows
+        # ALL ranks with "Not Assigned" should just show their prefix
+        if fenz_prefix:
+            # For ANY rank with Not Assigned, just show the prefix
+            nickname_parts = [fenz_prefix]
+
+            # Try to add HHStJ if space allows (only if not a full callsign)
             if hhstj_prefix and "-" not in hhstj_prefix:
-                test_parts = ["RFF", hhstj_prefix]
+                test_parts = [fenz_prefix, hhstj_prefix]
                 if roblox_username:
                     test_parts.append(roblox_username)
                 test_result = try_format(test_parts)
@@ -417,13 +419,20 @@ def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_u
 
             # Try to add just roblox username
             if roblox_username:
-                test_parts = ["RFF", roblox_username]
+                test_parts = [fenz_prefix, roblox_username]
                 test_result = try_format(test_parts)
                 if test_result:
                     return test_result
 
-            # Return just "RFF" if nothing else fits
-            return "RFF"
+            # Return just the prefix if nothing else fits
+            return fenz_prefix
+        else:
+            # No FENZ prefix at all
+            nickname_parts = ["Not Assigned"]
+            if hhstj_prefix and "-" not in hhstj_prefix:
+                nickname_parts.append(hhstj_prefix)
+            if roblox_username:
+                nickname_parts.append(roblox_username)
 
         # For OTHER ranks: Show "{PREFIX}-Not Assigned"
         if hhstj_priority and hhstj_prefix:
@@ -974,8 +983,29 @@ class BloxlinkAPI:
                           roblox_user_id: Optional[int], status: str):
         """
         Store Bloxlink data in database cache with 24-hour expiry
+        Only overwrites existing cache if new data is successful
         """
+        # Check if this is an error status
+        error_statuses = ['rate_limited', 'timeout', 'quota_exhausted', 'api_error',
+                          'max_retries_exceeded', 'no_guild_id', 'no_api_key']
+        is_error = status in error_statuses or status.startswith('api_error_') or status.startswith('error_')
+
         async with db.pool.acquire() as conn:
+            if is_error:
+                # Check if we have existing valid cache
+                existing = await conn.fetchrow(
+                    '''SELECT roblox_username, roblox_user_id, status, expires_at
+                       FROM bloxlink_cache
+                       WHERE discord_user_id = $1''',
+                    discord_user_id
+                )
+
+                if existing and existing['status'] in ['success', 'not_linked']:
+                    # We have valid cached data, don't overwrite with error
+                    print(f"⚠️ Preserving existing cache for {discord_user_id} - API returned {status}")
+                    return
+
+            # Either no existing cache, or new data is successful - update normally
             await conn.execute(
                 '''INSERT INTO bloxlink_cache
                    (discord_user_id, roblox_username, roblox_user_id, status, cached_at, expires_at)
@@ -1686,6 +1716,82 @@ class CallsignCog(commands.Cog):
                     fixed_users.add(item['member'].id)
 
                 stats['database_mismatches_fixed'] = mismatch_fixes
+
+                # Process each callsign for nickname updates
+                for record in callsigns:
+                    member = guild.get_member(record['discord_user_id'])
+                    if not member:
+                        continue
+
+                    # Get current rank information
+                    is_fenz_hc = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
+                    is_hhstj_hc = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
+
+                    current_fenz_prefix = record['fenz_prefix']
+                    current_hhstj_prefix = record['hhstj_prefix']
+                    current_callsign = record['callsign']
+
+                    # Get correct FENZ rank from current roles
+                    correct_fenz_prefix = None
+                    for role_id, (rank_name, prefix) in FENZ_RANK_MAP.items():
+                        if any(role.id == role_id for role in member.roles):
+                            correct_fenz_prefix = prefix
+                            break
+
+                    # Get correct HHStJ rank from current roles
+                    correct_hhstj_prefix = get_hhstj_prefix_from_roles(member.roles)
+
+                    # Calculate expected nickname based on callsign status
+                    if current_callsign == "Not Assigned":
+                        # Special handling for Not Assigned
+                        if correct_fenz_prefix == "RFF":
+                            expected_nickname = "RFF"
+                        else:
+                            expected_nickname = correct_fenz_prefix or "Not Assigned"
+                    elif current_callsign == "BLANK":
+                        expected_nickname = format_nickname(
+                            correct_fenz_prefix, "BLANK", correct_hhstj_prefix,
+                            record['roblox_username'], is_fenz_hc, is_hhstj_hc
+                        )
+                    else:
+                        expected_nickname = format_nickname(
+                            correct_fenz_prefix, current_callsign, correct_hhstj_prefix,
+                            record['roblox_username'], is_fenz_hc, is_hhstj_hc
+                        )
+
+                    # Get current nickname (strip shift prefixes)
+                    current_nick = strip_shift_prefixes(member.nick) if member.nick else member.name
+
+                    # Update if different
+                    if current_nick != expected_nickname:
+                        try:
+                            # Preserve shift prefix if exists
+                            shift_prefix = ""
+                            if member.nick:
+                                for prefix in ["DUTY | ", "BRK | ", "LOA | "]:
+                                    if member.nick.startswith(prefix):
+                                        shift_prefix = prefix
+                                        break
+
+                            final_nickname = shift_prefix + expected_nickname
+
+                            success, final_nick = await safe_edit_nickname(member, final_nickname)
+
+                            if success:
+                                stats['nickname_changes'].append({
+                                    'member': member,
+                                    'old': current_nick,
+                                    'new': expected_nickname
+                                })
+                                stats['nickname_updates'] += 1
+                        except discord.Forbidden:
+                            stats['permission_errors'].append(member)
+                        except Exception as e:
+                            stats['errors'].append({
+                                'member': member,
+                                'username': str(member),
+                                'error': str(e)
+                            })
 
                 # Check each callsign in database (KEEP ALL EXISTING CODE)
                 # ✅ Process all callsigns using shared batch logic (error recovery path)

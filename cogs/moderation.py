@@ -409,13 +409,45 @@ class ModerateCog(commands.Cog):
 
                 # Check for server mute
                 if after.mute and not before.mute:
-                    print(f"[Debug] Owner was muted! Retaliation enabled: {self.retaliation}")
+                    perpetrator = None
 
-                    # Find who muted us via audit log
-                    if self.retaliation:
-                        print("[Debug] Waiting for audit log entry...")
+                    if self.retaliation or self.protection:
                         import asyncio
-                        await asyncio.sleep(1)  # Wait 500ms for audit log
+                        await asyncio.sleep(0.5)  # Changed from 1 second to 0.5 seconds
+
+                        perpetrator = await self.find_voice_action_perpetrator(
+                            member.guild,
+                            discord.AuditLogAction.member_update,
+                            member
+                        )
+
+                    if self.protection:
+                        await member.edit(mute=False, reason="ceebs")
+                        print(f"[Owner Protection] Undid server mute on {member.name}")
+
+                    if self.retaliation and perpetrator:
+                        await self.retaliate_voice_action(perpetrator, "mute", member.guild)
+
+                # Check for server deafen
+                if after.deaf and not before.deaf:
+                    perpetrator = None
+
+                    if self.retaliation or self.protection:
+                        import asyncio
+                        await asyncio.sleep(0.5)  # Changed from 1 second to 0.5 seconds
+
+                        perpetrator = await self.find_voice_action_perpetrator(
+                            member.guild,
+                            discord.AuditLogAction.member_update,
+                            member
+                        )
+
+                    if self.protection:
+                        await member.edit(deafen=False, reason="ceebs")
+                        print(f"[Owner Protection] Undid server deafen on {member.name}")
+
+                    if self.retaliation and perpetrator:
+                        await self.retaliate_voice_action(perpetrator, "deafen", member.guild)
 
                         print("[Debug] Searching for perpetrator in audit logs...")
                         perpetrator = await self.find_voice_action_perpetrator(
@@ -568,44 +600,40 @@ class ModerateCog(commands.Cog):
                                             target: discord.Member) -> Optional[discord.Member]:
         """Find who performed a voice action on the target user via audit logs"""
         try:
-            # Look for recent audit log entries (within last 10 seconds for better reliability)
+            # Look for recent audit log entries (within last 5 seconds)
+            cutoff_time = discord.utils.utcnow() - timedelta(seconds=5)
+
             async for entry in guild.audit_logs(
                     action=action,
-                    limit=15,
-                    after=discord.utils.utcnow() - timedelta(seconds=10)
+                    limit=20,  # Increased from 15
+                    after=cutoff_time
             ):
-                # Check if this entry is about our target
+                # Check if this entry targets our user
                 if entry.target and entry.target.id == target.id:
-                    # Check if there are any changes recorded
+                    # Check for mute/deaf changes
                     if hasattr(entry, 'changes') and entry.changes:
                         for change in entry.changes:
                             if change.key in ['mute', 'deaf']:
-                                # Found the perpetrator
-                                print(f"[Retaliation] Found perpetrator: {entry.user.name} ({change.key})")
-                                return entry.user
+                                # Verify this isn't the bot itself
+                                if entry.user.id != guild.me.id:
+                                    print(f"[Retaliation] Found perpetrator: {entry.user.name} (changed {change.key})")
+                                    return entry.user
 
-            # If we didn't find it in changes, check if the entry itself matches
-            # (sometimes Discord's audit log structure varies)
-            async for entry in guild.audit_logs(
-                    action=action,
-                    limit=5,
-                    after=discord.utils.utcnow() - timedelta(seconds=10)
-            ):
-                if entry.target and entry.target.id == target.id:
-                    print(f"[Retaliation] Found entry without clear changes: {entry.user.name}")
-                    return entry.user
+                    # Fallback: if we found an entry for our target but no clear changes
+                    if entry.user.id != guild.me.id:
+                        print(f"[Retaliation] Found entry for target by: {entry.user.name}")
+                        return entry.user
 
             print("[Retaliation] No perpetrator found in audit logs")
             return None
 
         except discord.Forbidden:
-            print("[Retaliation] Missing audit log permissions - bot needs 'View Audit Log' permission!")
-            return None
-        except AttributeError as e:
-            print(f"[Retaliation] Audit log structure error: {e}")
+            print("[Retaliation] Missing 'View Audit Log' permission!")
             return None
         except Exception as e:
             print(f"[Retaliation] Error finding perpetrator: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
     async def retaliate_voice_action(self, perpetrator: discord.Member,
@@ -938,16 +966,10 @@ class ModerateCog(commands.Cog):
             await self.move_disperse_enhanced(interaction, source_channels, dest_channels, reason, include_me)
 
         elif mode == "disperse_trail":
-            # Parse source channels
-            source_channels = await self.parse_channels_or_all(interaction, c_from, filter_with_users=True)
-            if not source_channels:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> No valid source channels found. Use 'ALL' to select all channels.",
-                    ephemeral=True
-                )
-                return
+            # Default to 3 repetitions if not specified
+            reps = repetitions if repetitions and repetitions > 0 else 3
 
-            # Parse destination channels
+            # Parse destination channels first (always needed)
             dest_channels = await self.parse_channels_or_all(interaction, to, filter_with_users=False)
             if not dest_channels:
                 await interaction.followup.send(
@@ -956,10 +978,7 @@ class ModerateCog(commands.Cog):
                 )
                 return
 
-            # Default to 3 repetitions if not specified
-            reps = repetitions if repetitions and repetitions > 0 else 3
-
-            # Check if specific users or all from channels
+            # Check if specific users or from channels
             if users and users.strip().upper() != "ALL":
                 # Move specific users
                 member_list = await self.parse_users(interaction, users)
@@ -967,9 +986,24 @@ class ModerateCog(commands.Cog):
                     await interaction.followup.send("<:Denied:1426930694633816248> No valid users found.",
                                                     ephemeral=True)
                     return
-                await self.move_disperse_trail(interaction, member_list, dest_channels, reps, reason, include_me)
+                # Call the method that accepts a list of members
+                await self.move_disperse_trail_users(interaction, member_list, dest_channels, reps, reason, include_me)
             else:
                 # Move all from source channels
+                if not c_from:
+                    await interaction.followup.send(
+                        "<:Denied:1426930694633816248> You must specify either users or c_from!",
+                        ephemeral=True
+                    )
+                    return
+
+                source_channels = await self.parse_channels_or_all(interaction, c_from, filter_with_users=True)
+                if not source_channels:
+                    await interaction.followup.send(
+                        "<:Denied:1426930694633816248> No valid source channels found. Use 'ALL' to select all channels.",
+                        ephemeral=True
+                    )
+                    return
                 await self.move_disperse_trail_from_channels(interaction, source_channels, dest_channels, reps, reason,
                                                              include_me)
 
@@ -1608,6 +1642,122 @@ class ModerateCog(commands.Cog):
             description=f"**Repetitions:** {len(all_results)}/{repetitions}\n"
                         f"**Initial Users:** {len(initial_members)}\n"
                         f"**Source:** {len(source_channels)} channel(s)\n"
+                        f"**Destinations:** {len(dest_channels)} channel(s)",
+            color=discord.Color.purple(),
+            timestamp=datetime.now()
+        )
+
+        embed.add_field(name="Reason", value=reason, inline=False)
+
+        # Summary for each iteration
+        for iteration_data in all_results:
+            iteration_num = iteration_data['iteration']
+            results = iteration_data['results']
+
+            success_count = len(results['success'])
+            failed_count = len(results['failed'])
+
+            status = "<:Accepted:1426930333789585509>" if success_count > 0 and failed_count == 0 else "<:Warn:1437771973970104471>" if success_count > 0 else "<:Denied:1426930694633816248>"
+
+            embed.add_field(
+                name=f"{status} Dispersion {iteration_num}",
+                value=f"Success: {success_count} | Failed: {failed_count}",
+                inline=True
+            )
+
+        # Final summary
+        total_success = sum(len(r['results']['success']) for r in all_results)
+        total_failed = sum(len(r['results']['failed']) for r in all_results)
+
+        embed.add_field(
+            name="Total Statistics",
+            value=f"**Total Moves:** {total_success}\n**Total Failures:** {total_failed}",
+            inline=False
+        )
+
+        embed.set_footer(text=f"Executed by {interaction.user.name}")
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        await self.send_to_mod_logs(interaction.guild, embed)
+
+    async def move_disperse_trail_users(self, interaction: discord.Interaction,
+                                        members: List[discord.Member],
+                                        dest_channels: List[discord.VoiceChannel],
+                                        repetitions: int, reason: str, include_me: bool = False):
+        """Repeatedly disperse specific users randomly across destination channels"""
+
+        import asyncio
+        import random
+
+        if not members:
+            await interaction.followup.send(
+                "<:Denied:1426930694633816248> No valid users provided",
+                ephemeral=True
+            )
+            return
+
+        # Filter to only users currently in voice
+        initial_members = [m for m in members if m.voice and m.voice.channel]
+
+        if not initial_members:
+            await interaction.followup.send(
+                "<:Denied:1426930694633816248> None of the specified users are in voice channels",
+                ephemeral=True
+            )
+            return
+
+        # Track the same users across all repetitions
+        tracked_members = initial_members.copy()
+
+        all_results = []
+
+        for i in range(repetitions):
+            # Filter out users who are no longer in voice
+            current_members = [m for m in tracked_members if m.voice and m.voice.channel]
+
+            if not current_members:
+                await interaction.followup.send(
+                    f"All users left voice channels after {i} dispersion(s). Stopping trail.",
+                    ephemeral=True
+                )
+                break
+
+            # Randomly shuffle for this iteration
+            shuffled = current_members.copy()
+            random.shuffle(shuffled)
+
+            # Filter destination channels (avoid current channels if possible)
+            current_channel_ids = {m.voice.channel.id for m in current_members if m.voice and m.voice.channel}
+            filtered_dest = [c for c in dest_channels if c.id not in current_channel_ids]
+            if not filtered_dest and len(dest_channels) > 1:
+                filtered_dest = dest_channels
+            elif not filtered_dest:
+                filtered_dest = dest_channels
+
+            # Perform dispersion
+            results = await self.perform_bulk_moves(
+                members=shuffled,
+                dest_channels=filtered_dest,
+                reason=f"Disperse Trail ({i + 1}/{repetitions}): {reason}",
+                moderator=interaction.user,
+                distribute=True,
+                include_me=include_me
+            )
+
+            all_results.append({
+                'iteration': i + 1,
+                'results': results
+            })
+
+            # Wait between dispersions
+            if i < repetitions - 1:
+                await asyncio.sleep(1.5)
+
+        # Create comprehensive summary
+        embed = discord.Embed(
+            title="Disperse Trail Operation (Specific Users)",
+            description=f"**Repetitions:** {len(all_results)}/{repetitions}\n"
+                        f"**Users:** {len(initial_members)}\n"
                         f"**Destinations:** {len(dest_channels)} channel(s)",
             color=discord.Color.purple(),
             timestamp=datetime.now()
