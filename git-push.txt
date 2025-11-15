@@ -1,7 +1,7 @@
 SETUP
 
 Directory
-cd c:\Users\Owner\PycharmProjects\DiscordBot
+    cd c:\Users\Owner\PycharmProjects\DiscordBot
 
 1. Check if git is already initialized
 git status

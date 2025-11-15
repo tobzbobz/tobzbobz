@@ -478,10 +478,17 @@ class JishakuCog(commands.Cog):
         await interaction.delete_original_response()
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @py_group.command(name="reload", description="Reload a specific cog")
-    @app_commands.describe(cog="The name of the cog to reload")
-    async def py_reload(self, interaction: discord.Interaction, cog: str):
-        """Reload a specific cog"""
+    @py_group.command(name="cog", description="Manage bot cogs (load, unload, reload)")
+    @app_commands.describe(
+        mode="Choose the operation to perform",
+        cog="The name of the cog (or select from dropdown)"
+    )
+    @app_commands.choices(mode=[
+        app_commands.Choice(name="Toggle Cog (Load/Unload)", value="toggle"),
+        app_commands.Choice(name="Reload Cog", value="reload"),
+    ])
+    async def py_cog(self, interaction: discord.Interaction, mode: app_commands.Choice[str], cog: str):
+        """Manage cogs - load, unload, or reload"""
         if interaction.user.id != OWNER_ID:
             await interaction.response.send_message(
                 "<:Denied:1426930694633816248> This command is restricted to the bot owner only!",
@@ -489,39 +496,116 @@ class JishakuCog(commands.Cog):
             )
             return
 
-        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Reloading",
-                                                ephemeral=True)
+        await interaction.response.send_message(
+            content=f"<a:Load:1430912797469970444> Processing {mode.name}",
+            ephemeral=True
+        )
+
+        # Normalize cog name
+        cog_name = f"cogs.{cog}" if not cog.startswith("cogs.") else cog
 
         try:
-            # Reload the cog
-            await self.bot.reload_extension(f"cogs.{cog}" if not cog.startswith("cogs.") else cog)
+            if mode.value == "toggle":
+                # Check if cog is loaded
+                if cog_name in self.bot.extensions:
+                    # Unload the cog
+                    await self.bot.unload_extension(cog_name)
+                    embed = discord.Embed(
+                        title="<:Accepted:1426930333789585509> Cog Unloaded",
+                        description=f"Successfully unloaded `{cog}`",
+                        color=discord.Color.orange()
+                    )
+                else:
+                    # Load the cog
+                    await self.bot.load_extension(cog_name)
+                    embed = discord.Embed(
+                        title="<:Accepted:1426930333789585509> Cog Loaded",
+                        description=f"Successfully loaded `{cog}`",
+                        color=discord.Color.green()
+                    )
 
-            embed = discord.Embed(
-                title="<:Accepted:1426930333789585509> Cog Reloaded",
-                description=f"Successfully reloaded `{cog}`",
-                color=discord.Color.green()
-            )
+            elif mode.value == "reload":
+                # Reload the cog
+                await self.bot.reload_extension(cog_name)
+                embed = discord.Embed(
+                    title="<:Accepted:1426930333789585509> Cog Reloaded",
+                    description=f"Successfully reloaded `{cog}`",
+                    color=discord.Color.green()
+                )
+
         except commands.ExtensionNotLoaded:
             embed = discord.Embed(
                 title="<:Warn:1437771973970104471> Not Loaded",
-                description=f"Cog `{cog}` is not currently loaded. Use `/py load` instead.",
+                description=f"Cog `{cog}` is not currently loaded.",
                 color=discord.Color.orange()
             )
         except commands.ExtensionNotFound:
             embed = discord.Embed(
                 title="<:Denied:1426930694633816248> Not Found",
-                description=f"Cog `{cog}` does not exist.",
+                description=f"Cog `{cog}` does not exist in the cogs directory.",
                 color=discord.Color.red()
+            )
+        except commands.ExtensionAlreadyLoaded:
+            embed = discord.Embed(
+                title="<:Warn:1437771973970104471> Already Loaded",
+                description=f"Cog `{cog}` is already loaded. Use 'Reload Cog' mode instead.",
+                color=discord.Color.orange()
             )
         except Exception as e:
             embed = discord.Embed(
-                title="<:Denied:1426930694633816248> Reload Failed",
+                title="<:Denied:1426930694633816248> Operation Failed",
                 description=f"```py\n{e.__class__.__name__}: {e}\n```",
                 color=discord.Color.red()
             )
+
+        # Add current status footer
+        status = "Loaded" if cog_name in self.bot.extensions else "Unloaded"
+        embed.set_footer(text=f"Current Status: {status} | Total Cogs: {len(self.bot.extensions)}")
+
         await interaction.delete_original_response()
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    @py_cog.autocomplete('cog')
+    async def cog_autocomplete(
+            self,
+            interaction: discord.Interaction,
+            current: str,
+    ) -> list[app_commands.Choice[str]]:
+        """Autocomplete for cog names"""
+        # Get all available cogs from the cogs directory
+        import os
+        cog_files = []
+
+        # Get loaded cogs
+        loaded_cogs = [ext.replace("cogs.", "") for ext in self.bot.extensions.keys()]
+
+        # Try to get all cog files from directory
+        try:
+            cogs_path = "cogs"
+            if os.path.exists(cogs_path):
+                for file in os.listdir(cogs_path):
+                    if file.endswith(".py") and not file.startswith("_"):
+                        cog_name = file[:-3]  # Remove .py extension
+                        if cog_name not in cog_files:
+                            cog_files.append(cog_name)
+        except Exception:
+            pass
+
+        # Combine loaded cogs with discovered files
+        all_cogs = list(set(loaded_cogs + cog_files))
+
+        # Filter based on current input
+        filtered = [
+            app_commands.Choice(
+                name=f"{cog} {'✅' if cog in loaded_cogs else '❌'}",
+                value=cog
+            )
+            for cog in all_cogs
+            if current.lower() in cog.lower()
+        ]
+
+        # Return up to 25 choices (Discord limit)
+        return filtered[:25]
 
 async def setup(bot):
     await bot.add_cog(JishakuCog(bot))
