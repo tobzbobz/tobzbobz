@@ -1978,7 +1978,7 @@ class CallsignCog(commands.Cog):
 
             # Main summary embed
             summary_embed = discord.Embed(
-                title="🔄 Auto-Sync Completed",
+                title="Auto-Sync Completed",
                 description=f"Automatic sync completed for **{guild_name}**",
                 color=discord.Color.green(),
                 timestamp=datetime.utcnow()
@@ -1998,7 +1998,7 @@ class CallsignCog(commands.Cog):
                     cache_efficiency = (stats['bloxlink_cache_hits'] / stats['members_found']) * 100
 
                 summary_embed.add_field(
-                    name='📦 Cache Efficiency',
+                    name='Cache Efficiency',
                     value=f"Hits: {stats['bloxlink_cache_hits']}\n"
                           f"API Calls: {stats['bloxlink_api_calls']}\n"
                           f"Efficiency: {cache_efficiency:.1f}%",
@@ -2007,14 +2007,14 @@ class CallsignCog(commands.Cog):
 
                 # Quota status warning if exhausted
                 if BloxlinkAPI._quota_exhausted:
-                    quota_text = "🚫 **API QUOTA EXHAUSTED**\n"
+                    quota_text = "<:No:1437788507111428228> **API QUOTA EXHAUSTED**\n"
                     if BloxlinkAPI._quota_reset_time:
                         quota_text += f"Resets: <t:{int(BloxlinkAPI._quota_reset_time)}:R>"
                     else:
                         quota_text += "Will reset in ~24 hours"
 
                     summary_embed.add_field(
-                        name='⚠️ Quota Status',
+                        name='<:Warn:1437771973970104471>️ Quota Status',
                         value=quota_text,
                         inline=True
                     )
@@ -2030,7 +2030,7 @@ class CallsignCog(commands.Cog):
                         mentions += f"\n... and {len(non_admin_errors) - 25} more"
 
                     summary_embed.add_field(
-                        name=f'⚠️ Permission Errors ({len(non_admin_errors)})',
+                        name=f'<:Warn:1437771973970104471>️ Permission Errors ({len(non_admin_errors)})',
                         value=mentions,
                         inline=False
                     )
@@ -2038,7 +2038,7 @@ class CallsignCog(commands.Cog):
                 admin_count = len(stats['permission_errors']) - len(non_admin_errors)
                 if admin_count > 0:
                     summary_embed.add_field(
-                        name='🛡️ Admin Permission Skips',
+                        name='Admin Permission Skips',
                         value=f"{admin_count} administrators (cannot edit their nicknames)",
                         inline=False
                     )
@@ -2046,7 +2046,7 @@ class CallsignCog(commands.Cog):
             # Naughty role stats
             if stats.get('naughty_roles_found', 0) > 0:
                 summary_embed.add_field(
-                    name='🚨 Naughty Roles',
+                    name='Naughty Roles',
                     value=f"Found: {stats['naughty_roles_found']}\n"
                           f"Stored: {stats['naughty_roles_stored']}\n"
                           f"Removed: {stats['naughty_roles_removed']}",
@@ -2056,7 +2056,7 @@ class CallsignCog(commands.Cog):
             # Database fixes
             if stats.get('database_mismatches_fixed', 0) > 0:
                 summary_embed.add_field(
-                    name='🔧 Database Fixes',
+                    name='Database Fixes',
                     value=str(stats['database_mismatches_fixed']),
                     inline=True
                 )
@@ -2064,7 +2064,7 @@ class CallsignCog(commands.Cog):
             # Added from sheets
             if stats.get('added_from_sheets', 0) > 0:
                 summary_embed.add_field(
-                    name='➕ Added from Sheets',
+                    name='Added from Sheets',
                     value=str(stats['added_from_sheets']),
                     inline=True
                 )
@@ -2072,7 +2072,7 @@ class CallsignCog(commands.Cog):
             # Removed inactive
             if stats.get('removed_inactive', 0) > 0:
                 summary_embed.add_field(
-                    name='🗑️ Removed (Inactive 7+ days)',
+                    name='<:Wipe:1434954284851658762> Removed (Inactive 7+ days)',
                     value=str(stats['removed_inactive']),
                     inline=True
                 )
@@ -2087,7 +2087,7 @@ class CallsignCog(commands.Cog):
                     chunk = stats['nickname_changes'][i:i + 3]
 
                     embed = discord.Embed(
-                        title=f"🏷️ Nickname Updates ({i + 1}-{min(i + 3, len(stats['nickname_changes']))} of {len(stats['nickname_changes'])})",
+                        title=f"Nickname Updates ({i + 1}-{min(i + 3, len(stats['nickname_changes']))} of {len(stats['nickname_changes'])})",
                         color=discord.Color.green()
                     )
 
@@ -2097,7 +2097,8 @@ class CallsignCog(commands.Cog):
 
                         embed.add_field(
                             name=f"{change['member'].display_name[:50]}",
-                            value=f"**Before:** `{old_nick}`\n**After:** `{new_nick}`",
+                            value=f"{change['member'].mention}\n**Before:** `{old_nick}`\n**After:** `{new_nick}`",
+                            # ✅ Added mention
                             inline=False
                         )
 
@@ -2113,14 +2114,15 @@ class CallsignCog(commands.Cog):
                     chunk = stats['rank_changes'][i:i + 3]
 
                     embed = discord.Embed(
-                        title=f"📊 Rank Changes ({i + 1}-{min(i + 3, len(stats['rank_changes']))} of {len(stats['rank_changes'])})",
+                        title=f"Rank Changes ({i + 1}-{min(i + 3, len(stats['rank_changes']))} of {len(stats['rank_changes'])})",
                         color=discord.Color.gold()
                     )
 
                     for change in chunk:
                         embed.add_field(
                             name=f"{change['member'].display_name[:50]}",
-                            value=f"**Type:** {change['type']}\n**{change['old_rank']}** → **{change['new_rank']}**",
+                            value=f"{change['member'].mention}\n**Type:** {change['type']}\n**{change['old_rank']}** → **{change['new_rank']}**",
+                            # ✅ Added mention
                             inline=False
                         )
 
@@ -2136,13 +2138,13 @@ class CallsignCog(commands.Cog):
                     chunk = stats['callsigns_reset'][i:i + 3]
 
                     embed = discord.Embed(
-                        title=f"🔄 Callsigns Reset ({i + 1}-{min(i + 3, len(stats['callsigns_reset']))} of {len(stats['callsigns_reset'])})",
+                        title=f"Callsigns Reset ({i + 1}-{min(i + 3, len(stats['callsigns_reset']))} of {len(stats['callsigns_reset'])})",
                         description="These callsigns were reset to Not Assigned due to rank changes",
                         color=discord.Color.orange()
                     )
 
                     for reset in chunk:
-                        value_parts = []
+                        value_parts = [reset['member'].mention]  # ✅ Start with mention
                         if reset.get('type'):
                             value_parts.append(f"**Type:** {reset['type']}")
                         if reset.get('old_rank') and reset.get('new_rank'):
@@ -2172,7 +2174,7 @@ class CallsignCog(commands.Cog):
                     chunk = stats['added_users'][i:i + 10]
 
                     embed = discord.Embed(
-                        title=f"➕ Added from Sheets ({i + 1}-{min(i + 10, len(stats['added_users']))} of {len(stats['added_users'])})",
+                        title=f"Added from Sheets ({i + 1}-{min(i + 10, len(stats['added_users']))} of {len(stats['added_users'])})",
                         description="Users found in sheets but not in database (now added)",
                         color=discord.Color.teal()
                     )
@@ -2192,13 +2194,14 @@ class CallsignCog(commands.Cog):
                     chunk = stats['removed_users'][i:i + 10]
 
                     embed = discord.Embed(
-                        title=f"🗑️ Removed (Inactive) ({i + 1}-{min(i + 10, len(stats['removed_users']))} of {len(stats['removed_users'])})",
+                        title=f"<:Wipe:1434954284851658762> Removed (Inactive) ({i + 1}-{min(i + 10, len(stats['removed_users']))} of {len(stats['removed_users'])})",
                         description="Users removed from database (not in server for 7+ days)",
                         color=discord.Color.dark_red()
                     )
 
                     for removed in chunk:
                         value_parts = [
+                            f"<@{removed['id']}>",  # ✅ Added mention using user ID
                             f"**Callsign:** {removed['callsign']}",
                             f"**Days Gone:** {removed['days_gone']}",
                             f"**Reason:** {removed['reason']}"
@@ -2223,7 +2226,7 @@ class CallsignCog(commands.Cog):
                     chunk = added_roles[i:i + 5]
 
                     embed = discord.Embed(
-                        title=f"🚨 Naughty Roles Added ({i + 1}-{min(i + 5, len(added_roles))} of {len(added_roles)})",
+                        title=f"Naughty Roles Added ({i + 1}-{min(i + 5, len(added_roles))} of {len(added_roles)})",
                         description="These users received naughty roles during sync",
                         color=discord.Color.red()
                     )
@@ -2248,7 +2251,7 @@ class CallsignCog(commands.Cog):
                     chunk = removed_roles[i:i + 5]
 
                     embed = discord.Embed(
-                        title=f"✅ Naughty Roles Removed ({i + 1}-{min(i + 5, len(removed_roles))} of {len(removed_roles)})",
+                        title=f"<:Accepted:1426930333789585509> Naughty Roles Removed ({i + 1}-{min(i + 5, len(removed_roles))} of {len(removed_roles)})",
                         description="These users no longer have naughty roles",
                         color=discord.Color.green()
                     )
@@ -2274,17 +2277,17 @@ class CallsignCog(commands.Cog):
                     chunk = non_permission_errors[i:i + 5]
 
                     embed = discord.Embed(
-                        title=f"❌ Other Errors ({i + 1}-{min(i + 5, len(non_permission_errors))} of {len(non_permission_errors)})",
+                        title=f"<:Denied:1426930694633816248> Other Errors ({i + 1}-{min(i + 5, len(non_permission_errors))} of {len(non_permission_errors)})",
                         description="Non-permission errors that occurred during sync",
                         color=discord.Color.red()
                     )
 
                     for error in chunk:
                         member_mention = error['member'].mention if error.get(
-                            'member') else f"`{error.get('username', 'Unknown')}`"
+                            'member') else f"<@{error.get('user_id', 'Unknown')}>"  # ✅ Added fallback mention
                         embed.add_field(
-                            name=member_mention,
-                            value=f"**Error:** {error['error']}",
+                            name=f"User: {error.get('username', 'Unknown')}",
+                            value=f"{member_mention}\n**Error:** {error['error']}",  # ✅ Added mention
                             inline=False
                         )
 
@@ -2294,7 +2297,7 @@ class CallsignCog(commands.Cog):
             print(f"❌ Error sending detailed sync log: {e}")
             import traceback
             traceback.print_exc()
-    
+
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
         """Restore naughty roles when a user rejoins"""
