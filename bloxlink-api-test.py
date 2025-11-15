@@ -1,8 +1,11 @@
 import aiohttp
 import asyncio
+import asyncpg
 from dotenv import load_dotenv
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
+from database import db
+
 
 load_dotenv()
 
@@ -38,6 +41,9 @@ async def test_bloxlink():
         timeout = aiohttp.ClientTimeout(total=15)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url, headers=headers) as response:
+                print("\n📬 RAW HEADERS:")
+                for k, v in response.headers.items():
+                    print(f"   {k}: {v}")
                 print(f"\n📊 Response:")
                 print(f"   Status: {response.status}")
 
@@ -69,7 +75,12 @@ async def test_bloxlink():
                         minutes = int((time_until_reset.total_seconds() % 3600) // 60)
                         print(f"   ⏰ Rate Limit Resets In: {hours}h {minutes}m")
                         print(f"   📅 Reset Time: {reset_time.strftime('%Y-%m-%d %I:%M:%S %p')}")
-                    except:
+
+                        await db.increment_api_calls(reset_time)
+                        usage = await db.get_api_usage()
+                        print(f"\n📊 Total API calls today: {usage['calls']} / {quota_info.get('limit', 'Unknown')}")
+                    except Exception as e:
+                        print(f"   ⚠️ Failed to track API usage: {e}")
                         print(f"   ⏰ Rate Limit Reset: {rate_limit_reset}")
 
                 # Get response body
@@ -102,6 +113,7 @@ async def test_bloxlink():
                         limit = quota_info['limit']
                         used = limit - remaining
                         usage_percent = (used / limit) * 100
+
 
                         print(f"📊 QUOTA STATUS:")
                         print(f"   Limit: {limit} calls/day")
@@ -152,6 +164,11 @@ async def test_bloxlink():
                         print(f"   Daily limit: {quota_info['limit']} requests")
                     if quota_info.get('reset_time'):
                         print(f"   Quota resets at: {quota_info['reset_time'].strftime('%I:%M %p on %B %d, %Y')}")
+                    if quota_info.get("reset_time"):
+                        reset = quota_info["reset_time"]
+                        print(f"   Server reset time: {reset.strftime('%I:%M:%S %p')}")
+                    else:
+                        print("   (No reset header returned — using local midnight reset)")
                     print("\n💡 Options:")
                     print("   • Wait for quota reset (shown above)")
                     print("   • Upgrade to Bloxlink Premium ($5-10/month)")

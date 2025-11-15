@@ -752,6 +752,44 @@ class Database:
             )
             return True
 
+    async def increment_api_calls(self, reset_time: datetime):
+        """Increment daily API calls; reset if quota resets"""
+        async with self.pool.acquire() as conn:
+            today = datetime.utcnow().date()
+            record = await conn.fetchrow(
+                "SELECT * FROM bloxlink_api_usage WHERE api_date=$1",
+                today
+            )
+
+            if record:
+                # Reset counter if reset_time changed
+                if record['reset_time'] != reset_time:
+                    await conn.execute(
+                        "UPDATE bloxlink_api_usage SET calls=1, reset_time=$1 WHERE id=$2",
+                        reset_time, record['id']
+                    )
+                else:
+                    await conn.execute(
+                        "UPDATE bloxlink_api_usage SET calls=calls+1 WHERE id=$1",
+                        record['id']
+                    )
+            else:
+                await conn.execute(
+                    "INSERT INTO bloxlink_api_usage(api_date, calls, reset_time) VALUES($1, $2, $3)",
+                    today, 1, reset_time
+                )
+
+    async def get_api_usage(self):
+        """Get total API calls for today"""
+        async with self.pool.acquire() as conn:
+            today = datetime.utcnow().date()
+            record = await conn.fetchrow(
+                "SELECT * FROM bloxlink_api_usage WHERE api_date=$1",
+                today
+            )
+            return dict(record) if record else {"calls": 0, "reset_time": None}
+
+
 # === GLOBAL DATABASE INSTANCE ===
 db = Database()
 

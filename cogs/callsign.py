@@ -4,7 +4,7 @@ from discord import app_commands
 from dotenv import load_dotenv
 import aiohttp
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from database import db
 from dataclasses import dataclass
 from typing import Optional, Dict, Set, Tuple
@@ -902,6 +902,7 @@ class BloxlinkAPI:
     _quota_limit = 500
     _quota_reset_time = None
     _cache_duration = 86400  # 24 hours in seconds
+    _quota_exhausted = False
 
     def __init__(self):
         self.base_url = "https://api.blox.link/v4/public"
@@ -912,6 +913,37 @@ class BloxlinkAPI:
         self.requests_this_minute = 0
         self.minute_start = asyncio.get_event_loop().time()
         self.max_requests_per_minute = 50
+
+    async def _check_daily_quota(self) -> bool:
+        """
+        Check if we have API quota remaining. Returns True if we can make calls.
+        Automatically resets quota tracking after 24 hours.
+        """
+        # Check if quota reset time has passed
+        if BloxlinkAPI._quota_reset_time:
+            current_time = asyncio.get_event_loop().time()
+            if current_time >= BloxlinkAPI._quota_reset_time:
+                print("✅ 24-hour quota period expired - resetting counters")
+                BloxlinkAPI._api_calls_made = 0
+                BloxlinkAPI._quota_exhausted = False
+                BloxlinkAPI._quota_reset_time = None
+
+        # Check if we're at or over the limit
+        if BloxlinkAPI._api_calls_made >= BloxlinkAPI._quota_limit:
+            if not BloxlinkAPI._quota_exhausted:
+                BloxlinkAPI._quota_exhausted = True
+
+                # Set reset time to 24 hours from now if not already set
+                if not BloxlinkAPI._quota_reset_time:
+                    BloxlinkAPI._quota_reset_time = asyncio.get_event_loop().time() + 86400
+                    reset_datetime = datetime.utcnow() + timedelta(seconds=86400)
+                    print(
+                        f"🚫 Daily API quota exhausted ({BloxlinkAPI._api_calls_made}/{BloxlinkAPI._quota_limit} calls used)")
+                    print(f"⏰ Quota will reset at: {reset_datetime.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+
+            return False
+
+        return True
 
     async def _get_cached_data(self, discord_user_id: int) -> Optional[Tuple[str, int, str]]:
         """
@@ -989,6 +1021,11 @@ class BloxlinkAPI:
 
         # Cache miss - fetch from API
         print(f"🌐 Cache MISS for {discord_user_id}, fetching from API...")
+
+        # 🚫 NEW: Check if we have quota remaining before making API call
+        if not await self._check_daily_quota():
+            print(f"🚫 Quota exhausted - cannot fetch data for {discord_user_id}")
+            return (None, None, "quota_exhausted")
 
         for attempt in range(1, self.max_retries + 1):
             try:
@@ -1218,6 +1255,15 @@ class BloxlinkAPI:
                 'roblox_user_id': roblox_id,
                 'status': status
             }
+
+            # 🚫 NEW: Stop if quota is exhausted
+            if status == 'quota_exhausted':
+                print(f"\n🚫 STOPPING: Daily API quota exhausted")
+                print(f"   Processed {i}/{len(uncached_ids)} uncached users before hitting limit")
+                print(f"   Cached users: {len(cached_ids)}")
+                print(f"   ⏰ Quota will reset in ~24 hours")
+                # Return results with what we have so far
+                return results
 
             # Track status
             if status in ['rate_limited', 'timeout', 'max_retries_exceeded'] or 'api_error' in status:
@@ -1516,7 +1562,9 @@ class CallsignCog(commands.Cog):
             print("⚠️ Auto-sync skipped: database not connected")
             return
 
-        current_time = asyncio.get_event_loop().time()
+        print(f"\n{'=' * 60}")
+        print(f"🔄 Auto-sync started at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
+        print(f"{'=' * 60}")
 
         # ✅ NEW: Determine if we need a full Bloxlink sync (once every 24 hours)
         needs_bloxlink_sync = await self._check_bloxlink_sync_needed()
@@ -1535,6 +1583,13 @@ class CallsignCog(commands.Cog):
                     await self._refresh_bloxlink_cache(guild)
                     await self._record_bloxlink_sync_time()
                     print(f"✅ Bloxlink cache refreshed - valid for next 24 hours")
+
+                    # Check if quota was exhausted during refresh
+                    if BloxlinkAPI._quota_exhausted:
+                        print(f"⚠️ Warning: API quota exhausted during cache refresh")
+                        print(f"   Some users may not have fresh data")
+                        print(f"   Will retry in next sync cycle (1 hour)")
+
                 else:
                     hours_since, hours_until = await self._get_sync_schedule_info()
                     print(
@@ -1762,7 +1817,7 @@ class CallsignCog(commands.Cog):
                     await sheets_manager.batch_update_callsigns(callsign_data)
 
                     # ✅ NEW: Track cache efficiency
-                    cache_stats_after = self.bloxlink_api.get_cache_stats()
+                    cache_stats_after = await self.bloxlink_api.get_cache_stats()
                     stats['bloxlink_cache_hits'] = stats['members_found']  # All found members used cache
                     stats['bloxlink_api_calls'] = cache_stats_after['api_calls_made'] - cache_stats_before[
                         'api_calls_made']
@@ -1779,6 +1834,15 @@ class CallsignCog(commands.Cog):
                         f"    📦 Bloxlink cache hits: {stats['bloxlink_cache_hits']} (API calls: {stats['bloxlink_api_calls']})")
                     if stats['bloxlink_api_calls'] == 0:
                         print(f"    ✅ Zero API calls - using 100% cached data!")
+                        # Show quota status
+                    if BloxlinkAPI._quota_exhausted:
+                        print(f"    🚫 API QUOTA EXHAUSTED - waiting for reset")
+                        if BloxlinkAPI._quota_reset_time:
+                            reset_time = datetime.utcfromtimestamp(BloxlinkAPI._quota_reset_time)
+                            print(f"    ⏰ Resets at: {reset_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+                    else:
+                        remaining = max(0, BloxlinkAPI._quota_limit - BloxlinkAPI._api_calls_made)
+                        print(f"    📊 API Quota remaining: {remaining}/{BloxlinkAPI._quota_limit}")
                     if stats['nickname_updates'] > 0:
                         print(f"    🏷️ {stats['nickname_updates']} nicknames updated")
                     if stats['added_from_sheets'] > 0:
@@ -1824,10 +1888,35 @@ class CallsignCog(commands.Cog):
                 except Exception as recovery_error:
                     print(f"❌ Error during error recovery: {recovery_error}")
 
+    @auto_sync_loop.before_loop
+    async def before_auto_sync(self):
+        """Wait for bot AND database to be ready before starting auto-sync"""
+        await self.bot.wait_until_ready()
+
+        # Wait for database connection with timeout
+        max_wait = 60  # Maximum 60 seconds wait
+        waited = 0
+        while db.pool is None and waited < max_wait:
+            print(f"⏳ Auto-sync waiting for database connection... ({waited}s)")
+            await asyncio.sleep(5)
+            waited += 5
+
+        if db.pool is None:
+            print("❌ Auto-sync failed to start: Database not connected after 60s")
+        else:
+            print("✅ Auto-sync ready - database connected")
+
     @tasks.loop(hours=24)
     async def cleanup_cache_loop(self):
         """Clean up expired cache entries daily"""
         await self.bloxlink_api.cleanup_expired_cache()
+
+    @cleanup_cache_loop.before_loop
+    async def before_cleanup_cache(self):
+        """Wait for bot to be ready before cleanup"""
+        await self.bot.wait_until_ready()
+        print("✅ Cache cleanup loop ready")
+
 
     async def _refresh_bloxlink_cache(self, guild: discord.Guild):
         """
@@ -1889,7 +1978,7 @@ class CallsignCog(commands.Cog):
 
             # Main summary embed
             summary_embed = discord.Embed(
-                title="Auto-Sync Completed",
+                title="🔄 Auto-Sync Completed",
                 description=f"Automatic sync completed for **{guild_name}**",
                 color=discord.Color.green(),
                 timestamp=datetime.utcnow()
@@ -1902,21 +1991,36 @@ class CallsignCog(commands.Cog):
             summary_embed.add_field(name='Rank Changes', value=str(stats['rank_updates']), inline=True)
             summary_embed.add_field(name='Duration', value=f'{sync_duration:.2f}s', inline=True)
 
+            # Cache efficiency stats
             if stats.get('bloxlink_cache_hits') is not None:
                 cache_efficiency = 0
                 if stats['members_found'] > 0:
                     cache_efficiency = (stats['bloxlink_cache_hits'] / stats['members_found']) * 100
 
                 summary_embed.add_field(
-                    name='Cache Efficiency',
+                    name='📦 Cache Efficiency',
                     value=f"Hits: {stats['bloxlink_cache_hits']}\n"
                           f"API Calls: {stats['bloxlink_api_calls']}\n"
                           f"Efficiency: {cache_efficiency:.1f}%",
                     inline=True
                 )
 
-            if stats['permission_errors']:
-                # Only show non-admin permission errors
+                # Quota status warning if exhausted
+                if BloxlinkAPI._quota_exhausted:
+                    quota_text = "🚫 **API QUOTA EXHAUSTED**\n"
+                    if BloxlinkAPI._quota_reset_time:
+                        quota_text += f"Resets: <t:{int(BloxlinkAPI._quota_reset_time)}:R>"
+                    else:
+                        quota_text += "Will reset in ~24 hours"
+
+                    summary_embed.add_field(
+                        name='⚠️ Quota Status',
+                        value=quota_text,
+                        inline=True
+                    )
+
+            # Permission errors - separate admin from non-admin
+            if stats.get('permission_errors'):
                 non_admin_errors = [m for m in stats['permission_errors']
                                     if not m.guild_permissions.administrator]
 
@@ -1926,83 +2030,96 @@ class CallsignCog(commands.Cog):
                         mentions += f"\n... and {len(non_admin_errors) - 25} more"
 
                     summary_embed.add_field(
-                        name=f'<:Warn:1437771973970104471>️ Permission Errors ({len(non_admin_errors)})',
+                        name=f'⚠️ Permission Errors ({len(non_admin_errors)})',
                         value=mentions,
                         inline=False
                     )
 
-                # Add admin count separately if any
                 admin_count = len(stats['permission_errors']) - len(non_admin_errors)
                 if admin_count > 0:
                     summary_embed.add_field(
-                        name='Admin Permission Skips',
+                        name='🛡️ Admin Permission Skips',
                         value=f"{admin_count} administrators (cannot edit their nicknames)",
                         inline=False
                     )
 
-            # <:Accepted:1426930333789585509> Naughty role stats
+            # Naughty role stats
             if stats.get('naughty_roles_found', 0) > 0:
                 summary_embed.add_field(
-                    name='Naughty Roles',
+                    name='🚨 Naughty Roles',
                     value=f"Found: {stats['naughty_roles_found']}\n"
                           f"Stored: {stats['naughty_roles_stored']}\n"
                           f"Removed: {stats['naughty_roles_removed']}",
                     inline=True
                 )
 
+            # Database fixes
             if stats.get('database_mismatches_fixed', 0) > 0:
                 summary_embed.add_field(
-                    name='Database Fixes',
+                    name='🔧 Database Fixes',
                     value=str(stats['database_mismatches_fixed']),
+                    inline=True
+                )
+
+            # Added from sheets
+            if stats.get('added_from_sheets', 0) > 0:
+                summary_embed.add_field(
+                    name='➕ Added from Sheets',
+                    value=str(stats['added_from_sheets']),
+                    inline=True
+                )
+
+            # Removed inactive
+            if stats.get('removed_inactive', 0) > 0:
+                summary_embed.add_field(
+                    name='🗑️ Removed (Inactive 7+ days)',
+                    value=str(stats['removed_inactive']),
                     inline=True
                 )
 
             await channel.send(embed=summary_embed)
 
+            # ========== DETAILED CHANGE LOGS ==========
+
             # 1. Nickname Changes - SHOW WHO AND WHAT CHANGED
-            if stats['nickname_changes']:
-                for i in range(0, len(stats['nickname_changes']),3):
+            if stats.get('nickname_changes'):
+                for i in range(0, len(stats['nickname_changes']), 3):
                     chunk = stats['nickname_changes'][i:i + 3]
 
-                    # Around line 750-800
                     embed = discord.Embed(
-                        title=f"Nickname Updates ({i + 1}-{min(i + 3, len(stats['nickname_changes']))})",
-                        description=' '.join([change['member'].mention for change in chunk]),  # Mentions here WILL ping
+                        title=f"🏷️ Nickname Updates ({i + 1}-{min(i + 3, len(stats['nickname_changes']))} of {len(stats['nickname_changes'])})",
                         color=discord.Color.green()
                     )
 
                     for change in chunk:
-                        # ✅ Truncate long nicknames
                         old_nick = change['old'][:100] if len(change['old']) > 100 else change['old']
                         new_nick = change['new'][:100] if len(change['new']) > 100 else change['new']
 
                         embed.add_field(
-                            name=f"{change['member'].display_name[:50]}",  # ✅ Limit name length
+                            name=f"{change['member'].display_name[:50]}",
                             value=f"**Before:** `{old_nick}`\n**After:** `{new_nick}`",
                             inline=False
                         )
 
-                        # ✅ Validate size before sending
-                        if get_embed_size(embed) > 5500:
-                            print(f"⚠️️ Embed too large, reducing chunk size further")
-                            # Split into even smaller chunks if needed
-                            continue
+                    if get_embed_size(embed) > 5500:
+                        print(f"⚠️ Embed too large, skipping")
+                        continue
 
                     await channel.send(embed=embed)
 
             # 2. Rank Changes - SHOW WHO AND WHAT RANK CHANGED
-            if stats['rank_changes']:
+            if stats.get('rank_changes'):
                 for i in range(0, len(stats['rank_changes']), 3):
                     chunk = stats['rank_changes'][i:i + 3]
 
                     embed = discord.Embed(
-                        title=f"Rank Changes ({i + 1}-{min(i + 3, len(stats['rank_changes']))} of {len(stats['rank_changes'])})",
+                        title=f"📊 Rank Changes ({i + 1}-{min(i + 3, len(stats['rank_changes']))} of {len(stats['rank_changes'])})",
                         color=discord.Color.gold()
                     )
 
                     for change in chunk:
                         embed.add_field(
-                            name=f"{change['member'].display_name[:50]}",  # ✅ Limit name length
+                            name=f"{change['member'].display_name[:50]}",
                             value=f"**Type:** {change['type']}\n**{change['old_rank']}** → **{change['new_rank']}**",
                             inline=False
                         )
@@ -2014,20 +2131,32 @@ class CallsignCog(commands.Cog):
                     await channel.send(embed=embed)
 
             # 3. Callsigns Reset - SHOW WHO AND WHY
-            if stats['callsigns_reset']:
+            if stats.get('callsigns_reset'):
                 for i in range(0, len(stats['callsigns_reset']), 3):
                     chunk = stats['callsigns_reset'][i:i + 3]
 
                     embed = discord.Embed(
-                        title=f"Callsigns Reset ({i + 1}-{min(i + 3, len(stats['callsigns_reset']))} of {len(stats['callsigns_reset'])})",
+                        title=f"🔄 Callsigns Reset ({i + 1}-{min(i + 3, len(stats['callsigns_reset']))} of {len(stats['callsigns_reset'])})",
                         description="These callsigns were reset to Not Assigned due to rank changes",
                         color=discord.Color.orange()
                     )
 
-                    for change in chunk:
+                    for reset in chunk:
+                        value_parts = []
+                        if reset.get('type'):
+                            value_parts.append(f"**Type:** {reset['type']}")
+                        if reset.get('old_rank') and reset.get('new_rank'):
+                            value_parts.append(f"**{reset['old_rank']}** → **{reset['new_rank']}**")
+                        if reset.get('old_callsign'):
+                            value_parts.append(f"**Old Callsign:** {reset['old_callsign']}")
+                        if reset.get('new_prefix'):
+                            value_parts.append(f"**New Prefix:** {reset['new_prefix']}")
+                        if reset.get('reason'):
+                            value_parts.append(f"**Reason:** {reset['reason']}")
+
                         embed.add_field(
-                            name=f"{change['member'].display_name[:50]}",  # ✅ Limit name length
-                            value=f"**Type:** {change['type']}\n**{change['old_rank']}** → **{change['new_rank']}**",
+                            name=f"{reset['member'].display_name[:50]}",
+                            value="\n".join(value_parts) if value_parts else "Rank changed",
                             inline=False
                         )
 
@@ -2038,19 +2167,19 @@ class CallsignCog(commands.Cog):
                     await channel.send(embed=embed)
 
             # 4. Added from Sheets - SHOW WHO WAS ADDED
-            if stats['added_users']:
+            if stats.get('added_users'):
                 for i in range(0, len(stats['added_users']), 10):
                     chunk = stats['added_users'][i:i + 10]
 
                     embed = discord.Embed(
-                        title=f"Added from Sheets ({i + 1}-{min(i + 10, len(stats['added_users']))} of {len(stats['added_users'])})",
+                        title=f"➕ Added from Sheets ({i + 1}-{min(i + 10, len(stats['added_users']))} of {len(stats['added_users'])})",
                         description="Users found in sheets but not in database (now added)",
                         color=discord.Color.teal()
                     )
 
                     for added in chunk:
                         embed.add_field(
-                            name=f"{added['member'].mention} ({added['member'].display_name})",
+                            name=f"{added['member'].mention}",
                             value=f"**Callsign:** {added['callsign']}",
                             inline=True
                         )
@@ -2058,20 +2187,26 @@ class CallsignCog(commands.Cog):
                     await channel.send(embed=embed)
 
             # 5. Removed Users - SHOW WHO WAS REMOVED AND WHY
-            if stats['removed_users']:
+            if stats.get('removed_users'):
                 for i in range(0, len(stats['removed_users']), 10):
                     chunk = stats['removed_users'][i:i + 10]
 
                     embed = discord.Embed(
-                        title=f"Removed (Inactive) ({i + 1}-{min(i + 10, len(stats['removed_users']))} of {len(stats['removed_users'])})",
+                        title=f"🗑️ Removed (Inactive) ({i + 1}-{min(i + 10, len(stats['removed_users']))} of {len(stats['removed_users'])})",
                         description="Users removed from database (not in server for 7+ days)",
                         color=discord.Color.dark_red()
                     )
 
-                    for change in chunk:
+                    for removed in chunk:
+                        value_parts = [
+                            f"**Callsign:** {removed['callsign']}",
+                            f"**Days Gone:** {removed['days_gone']}",
+                            f"**Reason:** {removed['reason']}"
+                        ]
+
                         embed.add_field(
-                            name=f"{change['member'].display_name[:50]}",  # ✅ Limit name length
-                            value=f"**Type:** {change['type']}\n**{change['old_rank']}** → **{change['new_rank']}**",
+                            name=f"{removed['username']} (ID: {removed['id']})",
+                            value="\n".join(value_parts),
                             inline=False
                         )
 
@@ -2088,14 +2223,14 @@ class CallsignCog(commands.Cog):
                     chunk = added_roles[i:i + 5]
 
                     embed = discord.Embed(
-                        title=f"Naughty Roles Added ({i + 1}-{min(i + 5, len(added_roles))} of {len(added_roles)})",
+                        title=f"🚨 Naughty Roles Added ({i + 1}-{min(i + 5, len(added_roles))} of {len(added_roles)})",
                         description="These users received naughty roles during sync",
                         color=discord.Color.red()
                     )
 
                     for item in chunk:
                         embed.add_field(
-                            name=f"{item['member'].mention} ({item['member'].display_name})",
+                            name=f"{item['member'].mention}",
                             value=f"**Role:** {item['role_name']}",
                             inline=True
                         )
@@ -2113,14 +2248,14 @@ class CallsignCog(commands.Cog):
                     chunk = removed_roles[i:i + 5]
 
                     embed = discord.Embed(
-                        title=f"Naughty Roles Removed ({i + 1}-{min(i + 5, len(removed_roles))} of {len(removed_roles)})",
+                        title=f"✅ Naughty Roles Removed ({i + 1}-{min(i + 5, len(removed_roles))} of {len(removed_roles)})",
                         description="These users no longer have naughty roles",
                         color=discord.Color.green()
                     )
 
                     for item in chunk:
                         embed.add_field(
-                            name=f"{item['member'].mention} ({item['member'].display_name})",
+                            name=f"{item['member'].mention}",
                             value=f"**Role:** {item['role_name']}",
                             inline=True
                         )
@@ -2131,22 +2266,22 @@ class CallsignCog(commands.Cog):
 
                     await channel.send(embed=embed)
 
-            # 8. Errors - SHOW WHO HAD NON-PERMISSION ERRORS
-            # Filter out permission errors since they're shown in the summary
-            non_permission_errors = [e for e in stats['errors'] if e['error'] != 'Missing permissions']
+            # 8. Other Errors - SHOW WHO HAD NON-PERMISSION ERRORS
+            non_permission_errors = [e for e in stats.get('errors', []) if e.get('error') != 'Missing permissions']
 
             if non_permission_errors:
                 for i in range(0, len(non_permission_errors), 5):
                     chunk = non_permission_errors[i:i + 5]
 
                     embed = discord.Embed(
-                        title=f"<:Denied:1426930694633816248> Other Errors ({i + 1}-{min(i + 5, len(non_permission_errors))} of {len(non_permission_errors)})",
+                        title=f"❌ Other Errors ({i + 1}-{min(i + 5, len(non_permission_errors))} of {len(non_permission_errors)})",
                         description="Non-permission errors that occurred during sync",
                         color=discord.Color.red()
                     )
 
                     for error in chunk:
-                        member_mention = error['member'].mention if error.get('member') else f"`{error['username']}`"
+                        member_mention = error['member'].mention if error.get(
+                            'member') else f"`{error.get('username', 'Unknown')}`"
                         embed.add_field(
                             name=member_mention,
                             value=f"**Error:** {error['error']}",
@@ -2156,10 +2291,10 @@ class CallsignCog(commands.Cog):
                     await channel.send(embed=embed)
 
         except Exception as e:
-            print(f"<:Denied:1426930694633816248> Error sending detailed sync log: {e}")
+            print(f"❌ Error sending detailed sync log: {e}")
             import traceback
             traceback.print_exc()
-
+    
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
         """Restore naughty roles when a user rejoins"""
@@ -4034,6 +4169,12 @@ class CallsignCog(commands.Cog):
             api_calls = stats['api_calls_made']
             quota_remaining = stats['quota_remaining']
 
+            # Format quota reset time if available
+            quota_reset_text = ""
+            if BloxlinkAPI._quota_exhausted and BloxlinkAPI._quota_reset_time:
+                reset_timestamp = int(BloxlinkAPI._quota_reset_time)
+                quota_reset_text = f"\n**Resets:** <t:{reset_timestamp}:R>"
+
             # ✅ NEW: Show last sync time and schedule
             if self.last_bloxlink_sync:
                 time_since_sync = asyncio.get_event_loop().time() - self.last_bloxlink_sync
@@ -4060,13 +4201,16 @@ class CallsignCog(commands.Cog):
                     inline=True
                 )
 
-            quota_status = "🟢 Healthy" if quota_remaining > 250 else "🟡 Moderate" if quota_remaining > 100 else "🔴 Critical"
+            if BloxlinkAPI._quota_exhausted:
+                quota_status = "<:No:1437788507111428228> EXHAUSTED - Waiting for reset"
+            else:
+                quota_status = "🟢 Healthy" if quota_remaining > 250 else "🟡 Moderate" if quota_remaining > 100 else "🔴 Critical"
 
             embed.add_field(
                 name="API Usage",
                 value=f"**Calls Made:** {api_calls}\n"
                       f"**Quota Remaining:** {quota_remaining}/500\n"
-                      f"**Status:** {quota_status}",
+                      f"**Status:** {quota_status}{quota_reset_text}",
                 inline=True
             )
 
@@ -4078,6 +4222,16 @@ class CallsignCog(commands.Cog):
                       f"**Rate Limit:** 50 req/min",
                 inline=True
             )
+
+            if BloxlinkAPI._quota_exhausted:
+                embed.add_field(
+                    name="<:No:1437788507111428228> Quota Exhausted",
+                    value="• All API calls are blocked until reset\n"
+                          "• Bot will use cached data only\n"
+                          "• Hourly syncs will continue with cache\n"
+                          "• Wait for automatic 24-hour reset",
+                    inline=False
+                )
 
             # Recommendations
             if quota_remaining < 100:
@@ -4095,6 +4249,12 @@ class CallsignCog(commands.Cog):
                           f"Auto-sync runs every hour using cached data.",
                     inline=False
                 )
+
+            # Check if quota is already exhausted before starting
+            if not await self.bloxlink_api._check_daily_quota():
+                print("🚫 Cannot refresh cache - API quota exhausted")
+                print("   Will use existing cache and retry in next cycle")
+                return
 
             await interaction.followup.send(embed=embed, ephemeral=True)
 
