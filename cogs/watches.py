@@ -495,22 +495,49 @@ class WatchRegulationsDropdown(discord.ui.View):
                 colour=discord.Colour(0xffffff)
             )
 
-            # Add your regulations here
+            # Split into multiple fields to avoid character limits
             regulations_embed.add_field(
                 name="Positions during the Watch:",
-                value="- Watch Manager (Person hosting the watch, SO+)\n- FIRE COMMS (Dispatch, needs COMMS Cert. or SO+)\n- Active Station Officer (Assigned OIC from each station, must be SO+)\n-FFs (Anyone can take this positon, there is no limit to the amount of FFs online. Should be proportionally spread between S1 and S2 if both stations have an active watch.",
+                value=(
+                    "`➢` Watch Manager (Person hosting the watch, SO+)\n"
+                    "`➢` FIRE COMMS (Dispatch, needs COMMS Cert. or SO+)\n"
+                    "`➢` Active Station Officer (Assigned OIC from each station, must be SO+)\n"
+                    "`➢` FFs (Anyone can take this position, there is no limit to the amount of FFs online. Should be proportionally spread between S1 and S2 if both stations have an active watch.)"
+                ),
                 inline=False
             )
 
             regulations_embed.add_field(
-                name="Other Watch Rules",
-                value="- All vehicles can be spawned at any station. If only S2's Watch Red is active and HAM415 is required, HAM415 can be spawned from either station independent of Watch Red's appliance designations. When going K1, the radio callout would be \"FIRE COMMS, HAM415, K1 delayed turnout due to distance\" regardless of which station it was spawned from. HAM415 should wait a short moment/take a longer route to the call to create a realistic approach.\n- S1 and S2 can be active at the same time. This would mean 2 different watches active at the same time - which we believe can be possible. Preferably, there would be at least one SO+ at S1, and one SO+ at S2 - not a strong requirement.\n- Even if 2 watches are online at the same time, there would still only be one person on FIRE COMMS. The station they are assigned to is irrelevant.\n- Only SO+ can host a watch. This relies on you being able to properly perform sit-reps at most calls, even if you are also FIRE COMMS. When you are FIRE COMMS as well as making a sit-rep, you simply voice both yourself as SO-XXX and FIRE COMMS respectively, but with a RTO break in-between as well as an initial name callout performed normally.\n- The person that runs FIRE COMMS does not need to be a person hosting a Watch.\n- Upon joining the FD team and starting your shift in Discord, you should still ask the Watch Manager which appliance you can operate (if any).",
+                name="Watch Rules - Part 1",
+                value=(
+                    "• All vehicles can be spawned at any station. If only S2's Watch Red is active and HAM415 is required, HAM415 can be spawned from either station.\n"
+                    "• When going K1, radio callout: \"FIRE COMMS, HAM415, K1 delayed turnout due to distance\" regardless of station.\n"
+                    "• S1 and S2 can be active at the same time with 2 different watches. Preferably at least one SO+ at each station."
+                ),
+                inline=False
+            )
+
+            regulations_embed.add_field(
+                name="‎",
+                value=(
+                    "• Even if 2 watches are online, there is only one person on FIRE COMMS.\n"
+                    "• Only SO+ can host a watch. Must be able to perform sit-reps at most calls.\n"
+                    "• When on FIRE COMMS while making a sit-rep, voice both yourself as SO-XXX and FIRE COMMS respectively with RTO break in-between.\n"
+                    "• The person running FIRE COMMS doesn't need to be hosting a Watch.\n"
+                    "• Upon joining FD team, ask the Watch Manager which appliance you can operate."
+                ),
                 inline=False
             )
 
             regulations_embed.add_field(
                 name="Quick Rules",
-                value="- Any FENZ Supervisor+ can host a watch.\n- Watches should not remain ongoing with less than three people on.\n- Before the watch, the watch must be started using `/watch start` or `/watch vote` and after the watch, ended using `/watch end`.\n- At any time during the watch you may boost it using `/watch low`.\n- Click Watch Ping to be notified of when watches occur!",
+                value=(
+                    "1. Any FENZ Supervisor+ can host a watch.\n"
+                    "2. Watches should not remain ongoing with less than three people on.\n"
+                    "3. Before: start using `/watch start` or `/watch vote`. After: end using `/watch end`.\n"
+                    "4. Boost watches anytime using `/watch low`.\n"
+                    "5. Click Watch Ping to be notified of when watches occur!"
+                ),
                 inline=False
             )
 
