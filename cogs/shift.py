@@ -868,10 +868,11 @@ class ShiftManagementCog(commands.Cog):
 
             total_duration = timedelta(0)
             for shift in shifts:
-                duration = shift['end_time'] - shift['start_time']
-                if shift.get('pause_duration'):
-                    duration -= timedelta(seconds=shift['pause_duration'])
-                total_duration += duration
+                if shift['end_time'] and shift['start_time']:  # ADD THIS CHECK
+                    duration = shift['end_time'] - shift['start_time']
+                    if shift.get('pause_duration'):
+                        duration -= timedelta(seconds=shift['pause_duration'])
+                    total_duration += duration
 
             return {
                 'count': len(shifts),
@@ -2037,7 +2038,8 @@ class ShiftManagementCog(commands.Cog):
                 if not member:
                     continue
 
-                quota_info = quota_infos.get(row['discord_user_id'], {'has_quota': False, 'bypass_type': None})
+                quota_info = quota_infos.get(row['discord_user_id'], {'has_quota': False, 'bypass_type': None,
+                                                                      'completed': False})  # ADD completed
 
                 if wave is None:  # Only filter on current wave
                     if not quota_info.get('has_quota', False):
@@ -4643,7 +4645,6 @@ class ModifyShiftSelectView(discord.ui.View):
             shift_time = shift['end_time'].strftime('%a, %d %b %Y %H:%M:%S GMT UTC')
             label = f"{shift_id} | {shift_time}"
 
-            # Discord limits option labels to 100 characters
             if len(label) > 100:
                 label = label[:97] + "..."
 
@@ -4668,7 +4669,6 @@ class ModifyShiftSelectView(discord.ui.View):
 
         shift_id = int(interaction.data['values'][0])
 
-        # Fetch the selected shift
         async with db.pool.acquire() as conn:
             shift = await conn.fetchrow(
                 '''SELECT *
@@ -4686,13 +4686,7 @@ class ModifyShiftSelectView(discord.ui.View):
             return
 
         shift_dict = dict(shift)
-
-        # For ModifyShiftSelectView
-        if hasattr(self, 'show_modify_panel'):
-            await self.show_modify_panel(interaction, shift_dict)
-        # For DeleteShiftSelectView
-        elif hasattr(self, 'show_delete_confirm'):
-            await self.show_delete_confirm(interaction, shift_dict)
+        await self.show_delete_confirm(interaction, shift_dict)
 
 
     async def show_modify_panel(self, interaction: discord.Interaction, shift: dict):
@@ -5093,7 +5087,7 @@ class DeleteShiftConfirmView(discord.ui.View):
                     item.disabled = True
                     item.style = discord.ButtonStyle.secondary
 
-        await interaction.message.edit(view=self)
+        await interaction.edit_original_response(view=self)
 
     @discord.ui.button(label="Delete Shift", style=discord.ButtonStyle.secondary, disabled=True, custom_id="delete",
                        emoji="<:Reset:1434959478796714074>")
@@ -5254,7 +5248,7 @@ class ClearShiftsScopeView(discord.ui.View):
             None  # No wave number for current
         )
 
-        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        await interaction.edit_original_response(embed=embed, view=view)
 
     @discord.ui.button(label="Previous Waves", style=discord.ButtonStyle.primary, emoji="🔙")
     async def previous_waves_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -5330,7 +5324,7 @@ class ClearShiftsScopeView(discord.ui.View):
             None  # No wave number for all time
         )
 
-        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        await interaction.edit_original_response(embed=embed, view=view)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="<:Denied:1426930694633816248>")
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -5405,7 +5399,7 @@ class ClearShiftsConfirmView(discord.ui.View):
                     item.disabled = True
                     item.label = f"Clear {self.count} User Shifts"
 
-            await interaction.message.edit(view=self)
+            await interaction.edit_original_response(view=self)
 
     @discord.ui.button(label="Clear User Shifts", style=discord.ButtonStyle.secondary, disabled=True,
                        custom_id="clear_shifts")
@@ -5658,7 +5652,7 @@ class WaveNumberModal(discord.ui.Modal):
                 wave_number
             )
 
-            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+            await interaction.edit_original_response(embed=embed, view=view)
 
         except ValueError:
             await interaction.followup.send(
@@ -5728,8 +5722,8 @@ class ResetConfirmView(discord.ui.View):
                 if isinstance(item, discord.ui.Button) and item.custom_id == "reset":
                     item.disabled = True
 
-        await interaction.message.edit(view=self)
-
+        await interaction.edit_original_response(view=self)
+        
     @discord.ui.button(label="Execute Reset", style=discord.ButtonStyle.danger, disabled=True, custom_id="reset")
     async def reset_button(self, interaction: discord.Interaction, button: discord.ui.Button):
 
