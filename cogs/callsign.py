@@ -2223,6 +2223,10 @@ class CallsignCog(commands.Cog):
                         rank_type = change.get('type', 'Unknown')
                         old_rank = change.get('old_rank', 'Unknown')
                         new_rank = change.get('new_rank', 'Unknown')
+                        member = change.get('member')
+
+                        if not member:
+                            continue
 
                         embed.add_field(
                             name=f"{change['member'].display_name[:50]}",
@@ -2722,6 +2726,14 @@ class CallsignCog(commands.Cog):
                             current_fenz_prefix = correct_fenz_prefix
                             current_callsign = "Not Assigned"
                             stats['rank_updates'] += 1
+
+                            stats['rank_changes'].append({
+                                'member': member,
+                                'type': 'FENZ',
+                                'old_rank': current_fenz_prefix,
+                                'new_rank': correct_fenz_prefix
+                            })
+
                         else:
                             # No conflict, just reset callsign
                             if not dry_run:
@@ -2742,6 +2754,13 @@ class CallsignCog(commands.Cog):
                             current_fenz_prefix = correct_fenz_prefix
                             current_callsign = "Not Assigned"
                             stats['rank_updates'] += 1
+
+                            stats['rank_changes'].append({
+                                'member': member,
+                                'type': 'FENZ',
+                                'old_rank': current_fenz_prefix,
+                                'new_rank': correct_fenz_prefix
+                            })
 
                     elif fenz_rank_changed:
                         # Just update prefix

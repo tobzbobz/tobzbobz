@@ -1418,6 +1418,7 @@ class ShiftManagementCog(commands.Cog):
             minutes: int = 0,
             type: app_commands.Choice[str] = None
     ):
+        await interaction.response.defer(ephemeral=True)
 
         try:
             if action == "view":
@@ -2038,12 +2039,8 @@ class ShiftManagementCog(commands.Cog):
                 if not member:
                     continue
 
-                quota_info = quota_infos.get(row['discord_user_id'], {'has_quota': False, 'bypass_type': None,
-                                                                      'completed': False})  # ADD completed
-
-                if wave is None:  # Only filter on current wave
-                    if not quota_info.get('has_quota', False):
-                        continue
+                quota_info = quota_infos.get(row['discord_user_id'],
+                                             {'has_quota': False, 'bypass_type': None, 'completed': False})
 
                 quota_status = ""
                 if quota_info['has_quota']:
@@ -4686,8 +4683,7 @@ class ModifyShiftSelectView(discord.ui.View):
             return
 
         shift_dict = dict(shift)
-        await self.show_delete_confirm(interaction, shift_dict)
-
+        await self.show_modify_panel(interaction, shift_dict)
 
     async def show_modify_panel(self, interaction: discord.Interaction, shift: dict):
         """Show the modify options for a shift"""
@@ -5007,6 +5003,71 @@ class DeleteShiftSelectView(discord.ui.View):
     async def search_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = ShiftIDModal(self.cog, self.admin, self.target_user, "delete")
         await interaction.response.send_modal(modal)
+
+    async def populate_shift_dropdown(self):
+        """Add a dropdown with recent shifts"""
+        async with db.pool.acquire() as conn:
+            recent_shifts = await conn.fetch(
+                '''SELECT *
+                   FROM shifts
+                   WHERE discord_user_id = $1
+                     AND type = $2
+                     AND end_time IS NOT NULL
+                   ORDER BY end_time DESC LIMIT 10''',
+                self.target_user.id, self.type
+            )
+
+        if not recent_shifts:
+            return
+
+        options = []
+        for shift in recent_shifts:
+            shift_id = str(shift['id'])
+            shift_time = shift['end_time'].strftime('%a, %d %b %Y %H:%M:%S GMT UTC')
+            label = f"{shift_id} | {shift_time}"
+
+            if len(label) > 100:
+                label = label[:97] + "..."
+
+            options.append(discord.SelectOption(
+                label=label,
+                value=str(shift['id']),
+                description=f"Duration: {self.cog.format_duration(shift['end_time'] - shift['start_time'])}"[:100]
+            ))
+
+        select = discord.ui.Select(
+            placeholder="Or select from recent shifts...",
+            options=options,
+            custom_id="shift_select"
+        )
+        select.callback = self.shift_select_callback
+        self.add_item(select)
+
+    async def shift_select_callback(self, interaction: discord.Interaction):
+        """Handle shift selection from dropdown"""
+        await interaction.response.defer()
+
+        shift_id = int(interaction.data['values'][0])
+
+        async with db.pool.acquire() as conn:
+            shift = await conn.fetchrow(
+                '''SELECT *
+                   FROM shifts
+                   WHERE id = $1
+                     AND discord_user_id = $2''',
+                shift_id, self.target_user.id
+            )
+
+        if not shift:
+            await interaction.followup.send(
+                "<:Denied:1426930694633816248> Shift not found.",
+                ephemeral=True
+            )
+            return
+
+        shift_dict = dict(shift)
+        await self.show_delete_confirm(interaction, shift_dict)
+
 
     async def show_delete_confirm(self, interaction: discord.Interaction, shift: dict):
         """Show delete confirmation"""
@@ -5329,7 +5390,18 @@ class ClearShiftsScopeView(discord.ui.View):
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="<:Denied:1426930694633816248>")
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
-        await interaction.followup.send("Cancelled.", ephemeral=True)
+
+        # Disable all buttons
+        for item in self.children:
+            item.disabled = True
+
+        embed = discord.Embed(
+            title="Cancelled",
+            description="Operation cancelled.",
+            color=discord.Color.red()
+        )
+
+        await interaction.edit_original_response(embed=embed, view=self)
         self.stop()
 
 class ClearShiftsConfirmView(discord.ui.View):
@@ -5384,9 +5456,10 @@ class ClearShiftsConfirmView(discord.ui.View):
             for item in self.children:
                 if isinstance(item, discord.ui.Button) and item.custom_id == "clear_shifts":
                     item.disabled = False
+                    item.style = discord.ButtonStyle.danger
                     item.label = f"Clear {self.count} User Shifts"
 
-            await interaction.message.edit(view=self)
+            await interaction.edit_original_response(view=self)
         else:
             # Switch back to ARM
             button.label = "ARM"
@@ -5397,6 +5470,7 @@ class ClearShiftsConfirmView(discord.ui.View):
             for item in self.children:
                 if isinstance(item, discord.ui.Button) and item.custom_id == "clear_shifts":
                     item.disabled = True
+                    item.style = discord.ButtonStyle.secondary
                     item.label = f"Clear {self.count} User Shifts"
 
             await interaction.edit_original_response(view=self)
@@ -5712,6 +5786,7 @@ class ResetConfirmView(discord.ui.View):
             for item in self.children:
                 if isinstance(item, discord.ui.Button) and item.custom_id == "reset":
                     item.disabled = False
+                    item.style = discord.ButtonStyle.danger
         else:
             button.label = "ARM"
             button.emoji = discord.PartialEmoji(name="ARM", id=1435117432791633921)
@@ -5721,9 +5796,10 @@ class ResetConfirmView(discord.ui.View):
             for item in self.children:
                 if isinstance(item, discord.ui.Button) and item.custom_id == "reset":
                     item.disabled = True
+                    item.style = discord.ButtonStyle.secondary
 
         await interaction.edit_original_response(view=self)
-        
+
     @discord.ui.button(label="Execute Reset", style=discord.ButtonStyle.danger, disabled=True, custom_id="reset")
     async def reset_button(self, interaction: discord.Interaction, button: discord.ui.Button):
 
