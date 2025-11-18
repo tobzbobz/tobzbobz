@@ -491,7 +491,7 @@ class WatchRegulationsDropdown(discord.ui.View):
         try:
             regulations_embed = discord.Embed(
                 title="<:FENZ:1389200656090533970> | FENZ Watch Regulations",
-                description="All colour watches refer to a set of different appliances run out of X station. Instead of the IRL 4 on 4 off system, each station can have different watches that refer to what vehicles to be run. When Supervisory intend to be online for more than 30 minutes, they can call \"Watch (insert colour here)\" and all vehicles will be automatically known.",
+                description="All colour watches refer to a set of different appliances run out of X station. Instead of the IRL 4 on 4 off system, each station can have different watches that refer to what vehicles to be run. When Supervisory intend to be online for more than 30 minutes, they can call \"Watch (insert colour here)\" and all vehicles will be automatically known.\n",
                 colour=discord.Colour(0xffffff)
             )
 
@@ -502,7 +502,7 @@ class WatchRegulationsDropdown(discord.ui.View):
                     "`➢` Watch Manager (Person hosting the watch, SO+)\n"
                     "`➢` FIRE COMMS (Dispatch, needs COMMS Cert. or SO+)\n"
                     "`➢` Active Station Officer (Assigned OIC from each station, must be SO+)\n"
-                    "`➢` FFs (Anyone can take this position, there is no limit to the amount of FFs online. Should be proportionally spread between S1 and S2 if both stations have an active watch.)"
+                    "`➢` FFs (Anyone can take this position, there is no limit to the amount of FFs online. Should be proportionally spread between S1 and S2 if both stations have an active watch.)\n"
                 ),
                 inline=False
             )
@@ -524,7 +524,7 @@ class WatchRegulationsDropdown(discord.ui.View):
                     "• Only SO+ can host a watch. Must be able to perform sit-reps at most calls.\n"
                     "• When on FIRE COMMS while making a sit-rep, voice both yourself as SO-XXX and FIRE COMMS respectively with RTO break in-between.\n"
                     "• The person running FIRE COMMS doesn't need to be hosting a Watch.\n"
-                    "• Upon joining FD team, ask the Watch Manager which appliance you can operate."
+                    "• Upon joining FD team, ask the Watch Manager which appliance you can operate.\n"
                 ),
                 inline=False
             )
@@ -2674,8 +2674,7 @@ class WatchCog(commands.Cog):
                 await interaction.response.send_message(embed=permission_embed, ephemeral=True)
                 return
 
-            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Sending Watch Embed",
-                                                    ephemeral=True)
+            await interaction.response.defer(ephemeral=True)
 
             guild_config = get_guild_config(interaction.guild.id)
             watch_channel_id = guild_config.get('watch_channel_id')

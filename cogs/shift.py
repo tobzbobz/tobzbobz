@@ -226,27 +226,30 @@ class WeeklyShiftManager:
             shifts = await conn.fetch(
                 '''SELECT discord_user_id,
                           type,
+                          guild_id,
                           SUM(EXTRACT(EPOCH FROM (end_time - start_time)) -
                               COALESCE(pause_duration, 0)) as total_seconds
                    FROM shifts
                    WHERE wave_number = $1
                      AND end_time IS NOT NULL
-                   GROUP BY discord_user_id, type
+                   GROUP BY discord_user_id, type, guild_id
                    ORDER BY type, total_seconds DESC''',
                 wave_number
             )
 
             if not shifts:
+                print(f"No shifts found for wave {wave_number}")
                 return
 
-            guild = self.bot.get_guild(shifts[0]['guild_id']) if 'guild_id' in shifts[0] else None
-            if not guild:
-                for g in self.bot.guilds:
-                    if g.get_member(shifts[0]['discord_user_id']):
-                        guild = g
-                        break
+            # Get guild
+            guild = None
+            for g in self.bot.guilds:
+                if g.get_member(shifts[0]['discord_user_id']):
+                    guild = g
+                    break
 
             if not guild:
+                print("Could not find guild for weekly report")
                 return
 
             # Get all role quotas
@@ -258,141 +261,130 @@ class WeeklyShiftManager:
                 key = (q['role_id'], q['type'])
                 quota_map[key] = q['quota_seconds']
 
-            # 🆕 GET IGNORED ROLES
+            # GET IGNORED ROLES (FIXED INDENTATION)
             ignored_roles = await conn.fetch(
                 'SELECT role_id, type FROM quota_ignored_roles'
             )
             ignored_set = {(r['role_id'], r['type']) for r in ignored_roles}
 
-            # Get guild
-            guild = self.bot.get_guild(shifts[0]['guild_id']) if 'guild_id' in shifts[0] else None
-            if not guild:
-                # Try to find guild from bot's guilds
-                for g in self.bot.guilds:
-                    if g.get_member(shifts[0]['discord_user_id']):
-                        guild = g
+        # Organize by shift type
+        types = {}
+        for shift in shifts:
+            shift_type = shift['type']
+            if shift_type not in types:
+                types[shift_type] = []
+            types[shift_type].append(shift)
+
+        # Build report embeds
+        embeds = []
+
+        for shift_type, type_shifts in types.items():
+            user_ids = list(set(s['discord_user_id'] for s in type_shifts))
+            members_dict = {m.id: m for m in guild.members if m.id in user_ids}
+
+            lines = []
+
+            for shift_data in type_shifts:
+                member = guild.get_member(shift_data['discord_user_id'])
+                if not member:
+                    continue
+
+                # Get user's highest quota for this shift type
+                max_quota = 0
+                user_ignored = False
+
+                for role in member.roles:
+                    # CHECK IF ROLE IS IGNORED
+                    if (role.id, shift_type) in ignored_set:
+                        user_ignored = True
                         break
 
-            if not guild:
-                print("Could not find guild for weekly report")
-                return
+                    quota = quota_map.get((role.id, shift_type), 0)
+                    if quota > max_quota:
+                        max_quota = quota
 
-            # Organize by shift type
-            types = {}
-            for shift in shifts:
-                type = shift['type']
-                if type not in types:
-                    types[type] = []
-                types[type].append(shift)
+                # SKIP IGNORED USERS
+                if user_ignored:
+                    continue
 
-            # Build report embeds
-            embeds = []
+                # Skip users without quota requirements
+                if max_quota == 0:
+                    continue
 
-            for type, type_shifts in types.items():
-                user_ids = list(set(s['discord_user_id'] for s in type_shifts))
-                members_dict = {m.id: m for m in guild.members if m.id in user_ids}
+                active_seconds = shift_data['total_seconds']
 
-                lines = []
+                # Check bypass roles
+                user_role_ids = {role.id for role in member.roles}
+                bypass_type = None
+                completed = False
 
-                for shift_data in type_shifts:
-                    member = guild.get_member(shift_data['discord_user_id'])
-                    if not member:
-                        continue
-
-                    # Get user's highest quota for this shift type
-                    max_quota = 0
-                    user_ignored = False  # 🆕 Track if user should be ignored
-
-                    for role in member.roles:
-                        # 🆕 CHECK IF ROLE IS IGNORED
-                        if (role.id, type) in ignored_set:
-                            user_ignored = True
-                            break
-
-                        quota = quota_map.get((role.id, type), 0)
-                        if quota > max_quota:
-                            max_quota = quota
-
-                    # 🆕 SKIP IGNORED USERS
-                    if user_ignored:
-                        continue
-
-                    # Skip users without quota requirements
-                    if max_quota == 0:
-                        continue
-
-                    active_seconds = shift_data['total_seconds']
-
-                    # Check bypass roles
-                    user_role_ids = {role.id for role in member.roles}
+                if QUOTA_BYPASS_ROLE in user_role_ids:
+                    bypass_type = 'QB'
+                    completed = True
+                    status = f"<:Accepted:1426930333789585509> {member.mention} - {self.cog.format_duration(timedelta(seconds=active_seconds))} / {self.cog.format_duration(timedelta(seconds=max_quota))} **(QB Bypass)**"
+                elif LOA_ROLE in user_role_ids:
+                    bypass_type = 'LOA'
+                    completed = True
+                    status = f"<:Accepted:1426930333789585509> {member.mention} - {self.cog.format_duration(timedelta(seconds=active_seconds))} / {self.cog.format_duration(timedelta(seconds=max_quota))} **(LOA Exempt)**"
+                elif REDUCED_ACTIVITY_ROLE in user_role_ids:
+                    bypass_type = 'RA'
+                    modified_quota = max_quota * 0.5
+                    percentage = (active_seconds / modified_quota * 100) if modified_quota > 0 else 0
+                    completed = percentage >= 100
+                    emoji = "<:Accepted:1426930333789585509>" if completed else "<:Denied:1426930694633816248>"
+                    status = f"{emoji} {member.mention} - {self.cog.format_duration(timedelta(seconds=active_seconds))} / {self.cog.format_duration(timedelta(seconds=max_quota))} **({percentage:.1f}% - RA 50% Required)**"
+                else:
                     bypass_type = None
-                    completed = False
+                    percentage = (active_seconds / max_quota * 100) if max_quota > 0 else 0
+                    completed = percentage >= 100
+                    emoji = "<:Accepted:1426930333789585509>" if completed else "<:Denied:1426930694633816248>"
+                    status = f"{emoji} {member.mention} - {self.cog.format_duration(timedelta(seconds=active_seconds))} / {self.cog.format_duration(timedelta(seconds=max_quota))} **({percentage:.1f}%)**"
 
-                    if QUOTA_BYPASS_ROLE in user_role_ids:
-                        bypass_type = 'QB'
-                        completed = True
-                        status = f"<:Accepted:1426930333789585509> {member.mention} - {self.cog.format_duration(timedelta(seconds=active_seconds))} / {self.cog.format_duration(timedelta(seconds=max_quota))} **(QB Bypass)**"
-                    elif LOA_ROLE in user_role_ids:
-                        bypass_type = 'LOA'
-                        completed = True
-                        status = f"<:Accepted:1426930333789585509> {member.mention} - {self.cog.format_duration(timedelta(seconds=active_seconds))} / {self.cog.format_duration(timedelta(seconds=max_quota))} **(LOA Exempt)**"
-                    elif REDUCED_ACTIVITY_ROLE in user_role_ids:
-                        bypass_type = 'RA'
-                        modified_quota = max_quota * 0.5
-                        percentage = (active_seconds / modified_quota * 100) if modified_quota > 0 else 0
-                        completed = percentage >= 100
-                        emoji = "<:Accepted:1426930333789585509>" if completed else "<:Denied:1426930694633816248>"
-                        status = f"{emoji} {member.mention} - {self.cog.format_duration(timedelta(seconds=active_seconds))} / {self.cog.format_duration(timedelta(seconds=max_quota))} **({percentage:.1f}% - RA 50% Required)**"
-                    else:
-                        bypass_type = None
-                        percentage = (active_seconds / max_quota * 100) if max_quota > 0 else 0
-                        completed = percentage >= 100
-                        emoji = "<:Accepted:1426930333789585509>" if completed else "<:Denied:1426930694633816248>"
-                        status = f"{emoji} {member.mention} - {self.cog.format_duration(timedelta(seconds=active_seconds))} / {self.cog.format_duration(timedelta(seconds=max_quota))} **({percentage:.1f}%)**"
+                lines.append(status)
 
-                    lines.append(status)
+            if lines:
+                embed = discord.Embed(
+                    title=f"**{shift_type.replace('Shift ', '')} Weekly Report**",
+                    description="\n".join(lines),
+                    color=discord.Color(0x000000)
+                )
 
-                if lines:
-                    embed = discord.Embed(
-                        title=f"**{type.replace('Shift ', '')} Weekly Report**",
-                        description="\n".join(lines),
-                        color=discord.Color(0x000000)
-                    )
-
-                    # Get week dates from wave
+                # Get week dates from wave
+                async with self.cog.db.pool.acquire() as conn:
                     week_start = await conn.fetchval(
                         'SELECT MIN(week_identifier) FROM shifts WHERE wave_number = $1',
                         wave_number
                     )
 
-                    if week_start:
-                        week_end = week_start + timedelta(days=6)
-                        embed.set_footer(
-                            text=f"Wave {wave_number} • {week_start.strftime('%d %b')} - {week_end.strftime('%d %b %Y')}"
+                if week_start:
+                    week_end = week_start + timedelta(days=6)
+                    embed.set_footer(
+                        text=f"Wave {wave_number} • {week_start.strftime('%d %b')} - {week_end.strftime('%d %b %Y')}"
+                    )
+                else:
+                    embed.set_footer(text=f"Wave {wave_number}")
+
+                embeds.append(embed)
+
+        # Send to multiple channels (FIXED INDENTATION)
+        if embeds:
+            ping_mentions = " ".join([f"<@&{role_id}>" for role_id in WEEKLY_REPORT_PING_ROLES])
+
+            for channel_id in WEEKLY_REPORT_CHANNELS:
+                channel = self.bot.get_channel(channel_id)
+                if channel:
+                    try:
+                        await channel.send(
+                            content=f"||{ping_mentions}||\n**Weekly Shift Report**",
+                            embeds=embeds
                         )
-                    else:
-                        embed.set_footer(text=f"Wave {wave_number}")
-
-                    embeds.append(embed)
-
-            # Send to channel
-            # Send to multiple channels
-            if embeds:
-                ping_mentions = " ".join([f"<@&{role_id}>" for role_id in WEEKLY_REPORT_PING_ROLES])
-
-                for channel_id in WEEKLY_REPORT_CHANNELS:
-                    channel = self.bot.get_channel(channel_id)
-                    if channel:
-                        try:
-                            await channel.send(
-                                content=f"||{ping_mentions}||\n**Weekly Shift Report**",
-                                embeds=embeds
-                            )
-                            print(f"Sent weekly report to channel {channel_id} with {len(embeds)} embeds")
-                        except Exception as e:
-                            print(f"Failed to send weekly report to channel {channel_id}: {e}")
-                    else:
-                        print(f"Warning: Channel {channel_id} not found")
+                        print(f"Sent weekly report to channel {channel_id} with {len(embeds)} embeds")
+                    except Exception as e:
+                        print(f"Failed to send weekly report to channel {channel_id}: {e}")
+                else:
+                    print(f"Warning: Channel {channel_id} not found")
+        else:
+            print(f"No embeds generated for wave {wave_number}")
 
 class ShiftManagementCog(commands.Cog):
     shift_group = app_commands.Group(name="shift", description="Shift management commands")
@@ -1976,15 +1968,16 @@ class ShiftManagementCog(commands.Cog):
                                           COALESCE(pause_duration, 0)) as total_seconds
                                FROM shifts
                                WHERE end_time IS NOT NULL
-                                 AND wave_number = $1
+                                 AND (wave_number = $1 OR round_number = $1)
                                  AND type = $2
                                GROUP BY discord_user_id, discord_username
                                ORDER BY total_seconds DESC LIMIT 25'''
                     results = await conn.fetch(query, wave, type.value)
 
-                    # Get week dates for this wave
                     week_start = await conn.fetchval(
-                        'SELECT MIN(week_identifier) FROM shifts WHERE wave_number = $1',
+                        '''SELECT MIN(week_identifier) 
+                           FROM shifts 
+                           WHERE (wave_number = $1 OR round_number = $1)''',
                         wave
                     )
 
@@ -2046,10 +2039,9 @@ class ShiftManagementCog(commands.Cog):
 
                 quota_info = quota_infos.get(row['discord_user_id'], {'has_quota': False, 'bypass_type': None})
 
-                # FIXED: Only skip if they have no quota at all
-                # Users with 0-second quotas should still appear (they're automatically completed)
-                if not quota_info.get('has_quota', False):
-                    continue
+                if wave is None:  # Only filter on current wave
+                    if not quota_info.get('has_quota', False):
+                        continue
 
                 quota_status = ""
                 if quota_info['has_quota']:
@@ -2079,6 +2071,76 @@ class ShiftManagementCog(commands.Cog):
             )
             import traceback
             traceback.print_exc()
+
+    @shift_leaderboard.autocomplete('wave')
+    async def wave_autocomplete(
+            self,
+            interaction: discord.Interaction,
+            current: str
+    ) -> list[app_commands.Choice[int]]:
+        """Autocomplete to suggest recent waves while allowing custom entry"""
+
+        try:
+            async with db.pool.acquire() as conn:
+                # Get the last 25 waves (Discord's limit for autocomplete options)
+                recent_waves = await conn.fetch(
+                    '''SELECT DISTINCT 
+                              COALESCE(wave_number, round_number) as wave_num,
+                              MIN(week_identifier) as week_start
+                       FROM shifts 
+                       WHERE wave_number IS NOT NULL OR round_number IS NOT NULL
+                       GROUP BY COALESCE(wave_number, round_number)
+                       ORDER BY COALESCE(wave_number, round_number) DESC 
+                       LIMIT 25'''
+                )
+
+            if not recent_waves:
+                return []
+
+            choices = []
+            for wave in recent_waves:
+                wave_num = wave['wave_number']
+                week_start = wave['week_start']
+
+                # Format the label with wave number and date
+                if week_start:
+                    week_end = week_start + timedelta(days=6)
+                    label = f"Wave {wave_num} ({week_start.strftime('%d %b')} - {week_end.strftime('%d %b %Y')})"
+                else:
+                    label = f"Wave {wave_num}"
+
+                # Truncate label if too long (Discord limit is 100 chars)
+                if len(label) > 100:
+                    label = label[:97] + "..."
+
+                choices.append(app_commands.Choice(name=label, value=wave_num))
+
+            # Filter by current input if provided
+            if current:
+                try:
+                    # If user is typing a number, filter to waves containing that number
+                    search_num = int(current)
+                    filtered = [
+                        choice for choice in choices
+                        if str(search_num) in str(choice.value)
+                    ]
+                    if filtered:
+                        return filtered
+                except ValueError:
+                    # Not a number, do string search on the label
+                    pass
+
+                # Fallback to string search
+                return [
+                    choice for choice in choices
+                    if current.lower() in choice.name.lower()
+                ]
+
+            return choices
+
+        except Exception as e:
+            print(f"Error in wave autocomplete: {e}")
+            return []
 
     '''@shift_group.command(name="reset", description="[ADMIN] Reset shifts for a wave")
     @app_commands.describe(
@@ -2150,12 +2212,7 @@ class ShiftManagementCog(commands.Cog):
 
     @shift_group.command(name="manage", description="Manage your shifts")
     @app_commands.describe(type="Select your shift type")
-    @app_commands.choices(type=[
-        app_commands.Choice(name="Shift FENZ", value="Shift FENZ"),
-        app_commands.Choice(name="Shift HHStJ", value="Shift HHStJ"),
-        app_commands.Choice(name="Shift CC", value="Shift CC")
-    ])
-    async def shift_manage(self, interaction: discord.Interaction, type: app_commands.Choice[str]):
+    async def shift_manage(self, interaction: discord.Interaction, type: str):
         """Main shift management command"""
         await interaction.response.defer()
 
@@ -2177,17 +2234,23 @@ class ShiftManagementCog(commands.Cog):
                 )
                 return
 
+            # Validate the selected type
+            if type not in types:
+                await interaction.followup.send(
+                    f"<:Denied:1426930694633816248> You don't have access to {type}.",
+                    ephemeral=True
+                )
+                return
+
             # Check if user has an active shift
             active_shift = await self.get_active_shift(interaction.user.id)
-
-            
 
             if active_shift:
                 # User has an active shift - show shift status
                 await self.show_active_shift_panel(interaction, active_shift)
             else:
                 # No active shift - show statistics and start option
-                await self.show_shift_statistics_panel(interaction, types, show_last_shift=False)
+                await self.show_shift_statistics_panel(interaction, [type], show_last_shift=False)
 
         except Exception as e:
             await interaction.followup.send(
@@ -2196,6 +2259,29 @@ class ShiftManagementCog(commands.Cog):
             )
             import traceback
             traceback.print_exc()
+
+    @shift_manage.autocomplete('type')
+    async def shift_type_autocomplete(
+            self,
+            interaction: discord.Interaction,
+            current: str
+    ) -> list[app_commands.Choice[str]]:
+        """Autocomplete to show only shift types the user has access to"""
+
+        # Get user's available shift types
+        types = await self.get_user_types(interaction.user)
+
+        # Create choices from available types
+        choices = [app_commands.Choice(name=type, value=type) for type in types]
+
+        # Filter by current input if any
+        if current:
+            return [
+                choice for choice in choices
+                if current.lower() in choice.name.lower()
+            ]
+
+        return choices
 
     @shift_group.command(name="active", description="View all active shifts")
     async def shift_active(self, interaction: discord.Interaction):
@@ -4616,8 +4702,8 @@ class ModifyShiftSelectView(discord.ui.View):
         embed.set_footer(text=f"Shift ID: {shift['id']} • Shift Type: {shift['type']}")
 
         view = ModifyShiftActionsView(self.cog, self.admin, self.target_user, shift)
-
-        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        message = await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        view.message = message
 
 class ModifyShiftActionsView(discord.ui.View):
     """View for modifying a shift"""
@@ -4650,23 +4736,23 @@ class ModifyShiftActionsView(discord.ui.View):
         return True
 
     @discord.ui.button(label="Add Time", emoji="<:Add:1434959063329931396>", style=discord.ButtonStyle.success)
-    async def add_time_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = TimeModifyModal(self.cog, self.admin, self.target_user, self.shift, "add")
+    async def add_time_button(self, interaction, button):
+        modal = TimeModifyModal(self.cog, self.admin, self.target_user, self.shift, "add", view=self)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Remove Time", emoji="<:Remove:1434959215830499470>", style=discord.ButtonStyle.danger)
-    async def remove_time_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = TimeModifyModal(self.cog, self.admin, self.target_user, self.shift, "remove")
+    async def remove_time_button(self, interaction, button):
+        modal = TimeModifyModal(self.cog, self.admin, self.target_user, self.shift, "remove", view=self)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Set Time", emoji="<:Set:1434959334273712219>", style=discord.ButtonStyle.primary)
-    async def set_time_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = TimeModifyModal(self.cog, self.admin, self.target_user, self.shift, "set")
+    async def set_time_button(self, interaction, button):
+        modal = TimeModifyModal(self.cog, self.admin, self.target_user, self.shift, "set", view=self)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Reset Time", emoji="<:Reset:1434959478796714074>", style=discord.ButtonStyle.secondary)
-    async def reset_time_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = ResetTimeConfirmModal(self.cog, self.admin, self.target_user, self.shift)
+    async def reset_time_button(self, interaction, button):
+        modal = ResetTimeConfirmModal(self.cog, self.admin, self.target_user, self.shift, view=self)
         await interaction.response.send_modal(modal)
 
 class TimeModifyModal(discord.ui.Modal):
@@ -4680,6 +4766,7 @@ class TimeModifyModal(discord.ui.Modal):
         self.target_user = target_user
         self.shift = shift
         self.action = action
+        self.view = view
 
         if action == "set":
             self.add_item(discord.ui.TextInput(
@@ -4752,31 +4839,34 @@ class TimeModifyModal(discord.ui.Modal):
                 # After logging the modification, update the embed to show new duration
                 updated_shift = await self.cog.get_active_shift(self.target_user.id) or self.shift
 
-                # Recalculate duration
-                async with db.pool.acquire() as conn:
-                    fresh_shift = await conn.fetchrow('SELECT * FROM shifts WHERE id = $1', self.shift['id'])
+                if self.action == "set" and self.view and self.view.message:
+                    # Get fresh shift data
+                    async with db.pool.acquire() as conn:
+                        fresh_shift = await conn.fetchrow('SELECT * FROM shifts WHERE id = $1', self.shift['id'])
 
-                if fresh_shift:
-                    fresh_shift = dict(fresh_shift)
-                    duration = fresh_shift['end_time'] - fresh_shift['start_time']
-                    active_duration = duration - timedelta(seconds=fresh_shift.get('pause_duration', 0))
+                    if fresh_shift:
+                        fresh_shift = dict(fresh_shift)
+                        duration = fresh_shift['end_time'] - fresh_shift['start_time']
+                        active_duration = duration - timedelta(seconds=fresh_shift.get('pause_duration', 0))
 
-                    # Update the embed
-                    embed = discord.Embed(
-                        title="Modify Shift",
-                        description=f"**Status:** <:Offline:1434951694319620197> Ended\n**Duration:** {self.cog.format_duration(active_duration)}",
-                        color=discord.Color(0x000000)
-                    )
+                        # Create updated embed
+                        embed = discord.Embed(
+                            title="Modify Shift",
+                            description=f"**Status:** <:Offline:1434951694319620197> Ended\n**Duration:** {self.cog.format_duration(active_duration)}",
+                            color=discord.Color(0x000000)
+                        )
+                        embed.set_author(
+                            name=f"Shift Management: @{self.target_user.display_name}",
+                            icon_url=self.target_user.display_avatar.url
+                        )
+                        embed.set_footer(text=f"Shift ID: {fresh_shift['id']} • Shift Type: {fresh_shift['type']}")
 
-                    embed.set_author(
-                        name=f"Shift Management: @{self.target_user.display_name}",
-                        icon_url=self.target_user.display_avatar.url
-                    )
+                        # Create new view with updated shift data
+                        new_view = ModifyShiftActionsView(self.cog, self.admin, self.target_user, fresh_shift)
+                        new_view.message = self.view.message
 
-                    embed.set_footer(text=f"Shift ID: {fresh_shift['id']} • Shift Type: {fresh_shift['type']}")
-
-                    # Keep the same view
-                    view = ModifyShiftActionsView(self.cog, self.admin, self.target_user, fresh_shift)
+                        # Edit the original message
+                        await self.view.message.edit(embed=embed, view=new_view)
 
                     # Edit the message that has the buttons
                     try:

@@ -157,6 +157,46 @@ UPPER_LEAD = {
 
 OWNER_ID = 678475709257089057
 
+# Rank hierarchy numbers for priority calculation
+FENZ_RANK_PRIORITY = {
+    "RFF": 1,
+    "QFF": 2,
+    "SFF": 3,
+    # Supervisor tier
+    "SO": 8,
+    "SSO": 9,
+    "DCO": 10,
+    "CO": 11,
+    # Leadership tier
+    "AAC": 12,
+    "AC": 13,
+    "ANC": 14,
+    "DNC": 15,
+    "NC": 16
+}
+
+HHSTJ_RANK_PRIORITY = {
+    "FR": 1,
+    "EMT": 2,
+    "GPARA": 3,
+    "PARA": 4,
+    "ECP": 5,
+    "CCP": 6,
+    "DR": 7,
+    # Supervisor tier
+    "WOM-MIKE30": 8,
+    "AOM-OSCAR32": 9,
+    "DOSM-OSCAR31": 10,
+    "DOM-OSCAR30": 11,
+    # Leadership tier
+    "ANOM-OSCAR3": 14,
+    "DNOM-OSCAR2": 15,
+    "NOM-OSCAR1": 16
+}
+
+# Tier boundaries
+SUPERVISOR_THRESHOLD = 8
+LEADERSHIP_THRESHOLD = 12
 
 class ProgressTracker:
     """Helper for tracking and displaying progress with rate limiting"""
@@ -375,233 +415,185 @@ def validate_nickname(nickname: str) -> bool:
     return True
 
 
-def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_username: str,
-                    has_fenz_high_command: bool = False, has_hhstj_high_command: bool = False) -> str:
+def calculate_rank_priority(fenz_prefix: str, hhstj_prefix: str) -> tuple[str, int, str]:
     """
-    Format nickname in standard format with strong fallback chain
-    Priority: If HHStJ high command WITHOUT FENZ high command, format as:
-    {HHStJ prefix} | {FENZ}-{callsign} | {Roblox username}
+    Calculate which rank should display first based on priority rules.
 
-    Otherwise: {FENZ prefix}-{callsign} | {HHStJ prefix} | {Roblox username}
+    Returns: (first_prefix, first_priority, second_prefix)
 
-    GUARANTEED to return a valid nickname under 32 characters
+    Priority Rules:
+    1. Leadership (12+) always trumps everything
+    2. Supervisor (8-11) always trumps regular (1-7)
+    3. Within same tier, higher number wins
+    4. Ties default to FENZ
     """
 
-    # Helper function to build and validate
-    def try_format(parts: list) -> str:
-        """Try to format parts, return None if invalid"""
-        if not parts:
-            return None
-        result = " | ".join(parts)
-        if validate_nickname(result) and len(result) <= 32:
-            return result
-        return None
+    fenz_priority = FENZ_RANK_PRIORITY.get(fenz_prefix, 0)
+    hhstj_priority = HHSTJ_RANK_PRIORITY.get(hhstj_prefix, 0)
 
+    # Determine tiers
+    fenz_is_leadership = fenz_priority >= LEADERSHIP_THRESHOLD
+    fenz_is_supervisor = SUPERVISOR_THRESHOLD <= fenz_priority < LEADERSHIP_THRESHOLD
+    fenz_is_regular = 0 < fenz_priority < SUPERVISOR_THRESHOLD
+
+    hhstj_is_leadership = hhstj_priority >= LEADERSHIP_THRESHOLD
+    hhstj_is_supervisor = SUPERVISOR_THRESHOLD <= hhstj_priority < LEADERSHIP_THRESHOLD
+    hhstj_is_regular = 0 < hhstj_priority < SUPERVISOR_THRESHOLD
+
+    # Rule 1: Leadership always wins
+    if fenz_is_leadership and not hhstj_is_leadership:
+        return (fenz_prefix, fenz_priority, hhstj_prefix)
+    elif hhstj_is_leadership and not fenz_is_leadership:
+        return (hhstj_prefix, hhstj_priority, fenz_prefix)
+    elif fenz_is_leadership and hhstj_is_leadership:
+        # Both leadership - higher number wins, FENZ on tie
+        if fenz_priority >= hhstj_priority:
+            return (fenz_prefix, fenz_priority, hhstj_prefix)
+        else:
+            return (hhstj_prefix, hhstj_priority, fenz_prefix)
+
+    # Rule 2: Supervisor trumps regular
+    if fenz_is_supervisor and hhstj_is_regular:
+        return (fenz_prefix, fenz_priority, hhstj_prefix)
+    elif hhstj_is_supervisor and fenz_is_regular:
+        return (hhstj_prefix, hhstj_priority, fenz_prefix)
+    elif fenz_is_supervisor and hhstj_is_supervisor:
+        # Both supervisor - higher number wins, FENZ on tie
+        if fenz_priority >= hhstj_priority:
+            return (fenz_prefix, fenz_priority, hhstj_prefix)
+        else:
+            return (hhstj_prefix, hhstj_priority, fenz_prefix)
+
+    # Rule 3: Both regular - higher number wins, FENZ on tie
+    if fenz_is_regular and hhstj_is_regular:
+        if fenz_priority >= hhstj_priority:
+            return (fenz_prefix, fenz_priority, hhstj_prefix)
+        else:
+            return (hhstj_prefix, hhstj_priority, fenz_prefix)
+
+    # Fallback: FENZ takes precedence if no ranks or only one has a rank
+    if fenz_prefix and not hhstj_prefix:
+        return (fenz_prefix, fenz_priority, "")
+    elif hhstj_prefix and not fenz_prefix:
+        return (hhstj_prefix, hhstj_priority, "")
+    elif fenz_prefix:
+        return (fenz_prefix, fenz_priority, hhstj_prefix)
+    else:
+        return ("", 0, "")
+
+
+def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_username: str) -> str:
+    """
+    Format nickname with new priority-based system.
+    Automatically determines which prefix should display first.
+    """
+
+    # Calculate priority
+    first_prefix, first_priority, second_prefix = calculate_rank_priority(fenz_prefix, hhstj_prefix)
+
+    # Determine which is FENZ and which is HHStJ
+    if first_prefix == fenz_prefix:
+        first_is_fenz = True
+    else:
+        first_is_fenz = False
+
+    # Build nickname parts in priority order
     nickname_parts = []
 
-    # Determine priority
-    hhstj_priority = has_hhstj_high_command and not has_fenz_high_command
-
+    # Special case: Not Assigned
     if callsign == "Not Assigned":
-        # ALL ranks with "Not Assigned" should just show their prefix
-        if fenz_prefix:
-            # For ANY rank with Not Assigned, just show the prefix
-            nickname_parts = [fenz_prefix]
-
-            # Try to add HHStJ if space allows (only if not a full callsign)
-            if hhstj_prefix and "-" not in hhstj_prefix:
-                test_parts = [fenz_prefix, hhstj_prefix]
-                if roblox_username:
-                    test_parts.append(roblox_username)
-                test_result = try_format(test_parts)
-                if test_result:
-                    return test_result
-
-            # Try to add just roblox username
-            if roblox_username:
-                test_parts = [fenz_prefix, roblox_username]
-                test_result = try_format(test_parts)
-                if test_result:
-                    return test_result
-
-            # Return just the prefix if nothing else fits
-            return fenz_prefix
-        else:
-            # No FENZ prefix at all
-            nickname_parts = ["Not Assigned"]
+        if fenz_prefix == "RFF":
+            nickname_parts = ["RFF"]
             if hhstj_prefix and "-" not in hhstj_prefix:
                 nickname_parts.append(hhstj_prefix)
             if roblox_username:
                 nickname_parts.append(roblox_username)
-
-        # For OTHER ranks: Show "{PREFIX}-Not Assigned"
-        if hhstj_priority and hhstj_prefix:
-            if fenz_prefix:
-                nickname_parts = [hhstj_prefix, f"{fenz_prefix}-Not Assigned", roblox_username]
-            else:
-                nickname_parts = [hhstj_prefix, roblox_username]
         else:
-            if fenz_prefix:
-                nickname_parts = [f"{fenz_prefix}-Not Assigned"]
+            # Use priority order for Not Assigned
+            if first_is_fenz:
+                nickname_parts.append(f"{first_prefix}-Not Assigned")
+                if second_prefix and "-" not in second_prefix:
+                    nickname_parts.append(second_prefix)
             else:
-                nickname_parts = ["Not Assigned"]
+                nickname_parts.append(first_prefix)
+                if second_prefix:
+                    nickname_parts.append(f"{second_prefix}-Not Assigned")
 
-            if hhstj_prefix and "-" not in hhstj_prefix:
-                nickname_parts.append(hhstj_prefix)
             if roblox_username:
                 nickname_parts.append(roblox_username)
 
-    # === SPECIAL HANDLING FOR "BLANK" CALLSIGNS ===
+    # Special case: BLANK
     elif callsign == "BLANK":
-        if hhstj_priority and hhstj_prefix:
-            if fenz_prefix:
-                nickname_parts = [hhstj_prefix, fenz_prefix, roblox_username]
-            else:
-                nickname_parts = [hhstj_prefix, roblox_username]
-        else:
-            if fenz_prefix:
-                nickname_parts = [fenz_prefix]
-            else:
-                nickname_parts = []
+        if first_prefix:
+            nickname_parts.append(first_prefix)
+        if second_prefix and "-" not in second_prefix:
+            nickname_parts.append(second_prefix)
+        if roblox_username:
+            nickname_parts.append(roblox_username)
 
-            if hhstj_prefix and "-" not in hhstj_prefix:
-                nickname_parts.append(hhstj_prefix)
-            if roblox_username:
-                nickname_parts.append(roblox_username)
-
-    # === NORMAL CALLSIGNS ===
+    # Normal callsign
     else:
-        if hhstj_priority and hhstj_prefix:
-            nickname_parts = [hhstj_prefix]
-            if fenz_prefix:
-                nickname_parts.append(f"{fenz_prefix}-{callsign}")
-            else:
-                nickname_parts.append(callsign)
-            if roblox_username:
-                nickname_parts.append(roblox_username)
+        if first_is_fenz:
+            # FENZ first: {FENZ-callsign} | {HHStJ} | {roblox}
+            nickname_parts.append(f"{first_prefix}-{callsign}")
+            if second_prefix and "-" not in second_prefix:
+                nickname_parts.append(second_prefix)
         else:
-            if fenz_prefix:
-                nickname_parts.append(f"{fenz_prefix}-{callsign}")
-            else:
-                nickname_parts.append(callsign)
+            # HHStJ first: {HHStJ} | {FENZ-callsign} | {roblox}
+            nickname_parts.append(first_prefix)
+            if second_prefix:
+                nickname_parts.append(f"{second_prefix}-{callsign}")
 
-            if hhstj_prefix:
-                # Only skip if it's a full callsign with hyphen (like "WOM-MIKE30")
-                if "-" not in hhstj_prefix:
-                    nickname_parts.append(hhstj_prefix)
-                # If has_fenz_high_command AND has HHStJ supervisory (no hyphen), include it
-                elif has_fenz_high_command and has_hhstj_high_command:
-                    nickname_parts.append(hhstj_prefix)
+        if roblox_username:
+            nickname_parts.append(roblox_username)
 
-            if roblox_username:
-                nickname_parts.append(roblox_username)
-
-    # === ATTEMPT 1: Full nickname with all components ===
+    # Attempt 1: Full nickname
     result = try_format(nickname_parts)
     if result:
         return result
 
-    # === ATTEMPT 2: Try to restore missing components if previously truncated ===
-    # This handles cases where a nickname was truncated before but might fit now
-    if len(nickname_parts) < 3 and roblox_username:
-        # Try adding back missing pieces
-        if fenz_prefix and callsign not in ["BLANK", "Not Assigned"]:
-            # Try: FENZ-Callsign | HHStJ | Roblox
-            if hhstj_prefix and "-" not in hhstj_prefix:
-                restored_parts = [f"{fenz_prefix}-{callsign}", hhstj_prefix, roblox_username]
-                result = try_format(restored_parts)
-                if result:
-                    return result
+    # Attempt 2: Smart truncation - remove LOWER priority prefix
+    if len(nickname_parts) >= 3:
+        # Remove the second prefix (lower priority)
+        truncated_parts = [nickname_parts[0], nickname_parts[-1]]  # Keep first prefix and roblox
+        result = try_format(truncated_parts)
+        if result:
+            return result
 
-            # Try: FENZ-Callsign | Roblox
-            restored_parts = [f"{fenz_prefix}-{callsign}", roblox_username]
-            result = try_format(restored_parts)
+    # Attempt 3: Just highest priority prefix
+    if first_prefix:
+        if callsign not in ["Not Assigned", "BLANK"] and first_is_fenz:
+            result = try_format([f"{first_prefix}-{callsign}"])
+            if result:
+                return result
+        else:
+            result = try_format([first_prefix])
             if result:
                 return result
 
-    # === ATTEMPT 3: Remove middle component (usually HHStJ or less important prefix) ===
-    if len(nickname_parts) >= 3:
-        fallback_parts = [nickname_parts[0], nickname_parts[-1]]
-        result = try_format(fallback_parts)
-        if result:
-            return result
-
-    # === ATTEMPT 4: Primary identifier only ===
-    if hhstj_priority and hhstj_prefix:
-        result = try_format([hhstj_prefix])
-        if result:
-            return result
-
-    if fenz_prefix and callsign and callsign not in ["Not Assigned", "BLANK"]:
-        result = try_format([f"{fenz_prefix}-{callsign}"])
-        if result:
-            return result
-
-    # <:Accepted:1426930333789585509> SPECIAL: RFF with Not Assigned fallback
-    if fenz_prefix == "RFF" and callsign == "Not Assigned":
-        return "RFF"
-
-    if fenz_prefix and callsign == "Not Assigned":
-        result = try_format([f"{fenz_prefix}-Not Assigned"])
-        if result:
-            return result
-
-    if callsign and callsign not in ["BLANK"]:
-        result = try_format([callsign])
-        if result:
-            return result
-
-    # === ATTEMPT 5: Just roblox username ===
+    # Attempt 4: Just roblox username
     if roblox_username:
-        result = try_format([roblox_username])
+        result = try_format([roblox_username[:32]])
         if result:
             return result
 
-    # === ATTEMPT 6: Truncate roblox username if too long ===
-    if roblox_username and len(roblox_username) > 32:
-        truncated = roblox_username[:32]
-        if validate_nickname(truncated):
-            return truncated
-        # Try removing trailing characters until valid
-        for i in range(31, 0, -1):
-            truncated = roblox_username[:i]
-            if validate_nickname(truncated):
-                return truncated
+    # Ultimate fallback
+    return "User"
 
-    # === ABSOLUTE LAST RESORT ===
-    # This should theoretically never happen, but prevents crashes
-    fallback_options = [
-        fenz_prefix if fenz_prefix else None,
-        hhstj_prefix if hhstj_prefix else None,
-        callsign if callsign and callsign != "BLANK" else None,
-        "User"  # Ultimate fallback
-    ]
 
-    for option in fallback_options:
-        if option and validate_nickname(option) and len(option) <= 32:
-            return option
-
-    # If literally everything fails (should be impossible)
-    result = "User"
-
-    result = result.strip()
-
-    while result and result[-1] in ['-', '|', ' ']:
-        result = result[:-1]
-
-    while result and result[0] in ['-', '|', ' ']:
-        result = result[1:]
-
-    if not validate_nickname(result):
-        return "User"
-
-    return result
-
+def try_format(parts: list) -> str:
+    """Try to format parts, return None if invalid or too long"""
+    if not parts:
+        return None
+    result = " | ".join(filter(None, parts))
+    if validate_nickname(result) and len(result) <= 32:
+        return result
+    return None
 
 # <:Accepted:1426930333789585509> UPDATED: Smart nickname update logic for sync operations
 async def smart_update_nickname(member, expected_nickname: str, current_fenz_prefix: str,
                                 current_callsign: str, current_hhstj_prefix: str,
-                                roblox_username: str, is_fenz_hc: bool, is_hhstj_hc: bool) -> bool:
+                                roblox_username: str) -> bool:
     """
     Smart nickname update that tries to restore missing components if space allows
     Returns True if update was successful, False otherwise
@@ -621,7 +613,11 @@ async def smart_update_nickname(member, expected_nickname: str, current_fenz_pre
 
     # <:Accepted:1426930333789585509> SPECIAL: RFF-Not Assigned should be just "RFF"
     if current_fenz_prefix == "RFF" and current_callsign == "Not Assigned":
-        if current_nick_stripped != "RFF":
+        expected_with_full_format = format_nickname(
+            "RFF", "Not Assigned", current_hhstj_prefix,
+            roblox_username, False
+        )
+        if current_nick_stripped != expected_with_full_format:
             try:
                 success, final_nick = await safe_edit_nickname(member, "RFF")
                 if not success:
@@ -803,7 +799,6 @@ def test_hhstj_versions_fit(fenz_prefix: str, callsign: str, hhstj_versions: lis
         # Build the full nickname with this version
         test_nickname = format_nickname(
             fenz_prefix, callsign, version, roblox_username,
-            is_fenz_hc, is_hhstj_hc
         )
 
         fits = len(test_nickname) <= 32 and validate_nickname(test_nickname)
@@ -1751,12 +1746,12 @@ class CallsignCog(commands.Cog):
                     elif current_callsign == "BLANK":
                         expected_nickname = format_nickname(
                             correct_fenz_prefix, "BLANK", correct_hhstj_prefix,
-                            record['roblox_username'], is_fenz_hc, is_hhstj_hc
+                            record['roblox_username']
                         )
                     else:
                         expected_nickname = format_nickname(
                             correct_fenz_prefix, current_callsign, correct_hhstj_prefix,
-                            record['roblox_username'], is_fenz_hc, is_hhstj_hc
+                            record['roblox_username']
                         )
 
                     # Get current nickname (strip shift prefixes)
@@ -2836,9 +2831,7 @@ class CallsignCog(commands.Cog):
                                 current_fenz_prefix,
                                 record['callsign'],
                                 current_hhstj_prefix,
-                                record['roblox_username'],
-                                is_fenz_hc,
-                                is_hhstj_hc
+                                record['roblox_username']
                             )
 
                         current_nick = member.nick or member.name
@@ -3141,6 +3134,41 @@ class CallsignCog(commands.Cog):
                     await interaction.followup.send(error_message, ephemeral=True)
                     return
 
+            # Check if user is high command
+            is_high_command = any(role.id in HIGH_COMMAND_RANKS for role in user.roles)
+            is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in user.roles)
+
+            # Check if HHStJ high command needs version selection
+            if is_hhstj_high_command and hhstj_prefix and '-' in hhstj_prefix:
+                # Get all shortened versions
+                hhstj_versions = get_hhstj_shortened_versions(hhstj_prefix)
+
+                # Test which versions fit
+                is_fenz_hc = any(role.id in HIGH_COMMAND_RANKS for role in user.roles)
+                version_tests = test_hhstj_versions_fit(
+                    fenz_prefix, callsign, hhstj_versions,
+                    roblox_username, is_fenz_hc, is_hhstj_high_command
+                )
+
+                # Filter to only valid versions
+                valid_versions = [v['version'] for v in version_tests if v['fits']]
+
+                if len(valid_versions) > 1:
+                    # Show modal to the ADMIN to choose the version
+                    modal = HHStJVersionModal(
+                        self, interaction, user, callsign,  # 'user' is the person being assigned
+                        fenz_prefix, valid_versions, roblox_id, roblox_username,
+                        is_self_request=False  # Admin is choosing
+                    )
+                    await interaction.response.send_modal(modal)
+                    return  # Exit here - modal handles the rest
+                elif len(valid_versions) == 1:
+                    # Only one version fits, use it automatically
+                    hhstj_prefix = valid_versions[0]
+                else:
+                    # No versions fit (shouldn't happen, but fallback)
+                    hhstj_prefix = hhstj_versions[-1]  # Use shortest version
+
             FENZ_LEADERHIP_ROLE_ID = 1285474077556998196
 
             # Determine what to assign based on prefix parameter and rank
@@ -3163,22 +3191,16 @@ class CallsignCog(commands.Cog):
                 final_callsign = callsign
 
             # Add to database
-            is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in user.roles)
-            is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in user.roles)
-
             await add_callsign_to_database(
                 final_callsign, user.id, str(user), roblox_id, roblox_username,
                 final_fenz_prefix, hhstj_prefix or "",
                 interaction.user.id,
                 interaction.user.display_name,
-                is_fenz_high_command,
-                is_hhstj_high_command
+                is_high_command,
+                 is_hhstj_high_command
             )
 
             # Format nickname
-            is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in user.roles)
-            is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in user.roles)
-
             if callsign == "BLANK":
                 # Special formatting for BLANK callsigns
                 nickname_parts = []
@@ -3190,16 +3212,12 @@ class CallsignCog(commands.Cog):
                     nickname_parts.append(roblox_username)
                 new_nickname = " | ".join(nickname_parts)
             else:
-
                 new_nickname = format_nickname(
                     final_fenz_prefix,
                     final_callsign,
                     hhstj_prefix or "",
-                    roblox_username,
-                    is_fenz_high_command,
-                    is_hhstj_high_command
-                )
-
+                    roblox_username
+                 )
             # Update nickname
             try:
                 await user.edit(nick=new_nickname)
@@ -3225,7 +3243,6 @@ class CallsignCog(commands.Cog):
                 f"<:Accepted:1426930333789585509> Assigned callsign {callsign_display} to {user.mention}\n"
                 f"Nickname updated to: `{new_nickname}`\n",
                 ephemeral=True,
-                
             )
 
             # Log to designated channel
@@ -3243,7 +3260,6 @@ class CallsignCog(commands.Cog):
                 log_embed.set_footer(text=f"User ID: {user.id}")
 
                 await log_channel.send(embed=log_embed)
-
 
         except Exception as e:
             await interaction.followup.send(f"<:Denied:1426930694633816248> Error assigning callsign: {str(e)}")
@@ -3589,6 +3605,7 @@ class CallsignCog(commands.Cog):
 
             is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in interaction.user.roles)
 
+            # Check if HHStJ high command with multiple version options
             if is_hhstj_high_command and hhstj_prefix and '-' in hhstj_prefix:
                 # Get all shortened versions
                 hhstj_versions = get_hhstj_shortened_versions(hhstj_prefix)
@@ -3604,31 +3621,14 @@ class CallsignCog(commands.Cog):
                 valid_versions = [v['version'] for v in version_tests if v['fits']]
 
                 if len(valid_versions) > 1:
-                    # Show choice to user
-                    embed = discord.Embed(
-                        title="HHStJ Callsign Version Choice",
-                        description=f"Your callsign **{fenz_prefix}-{callsign}** is approved!\n\n"
-                                    f"Choose your preferred HHStJ callsign version:",
-                        color=discord.Color.blue()
-                    )
-
-                    for v in version_tests:
-                        if v['fits']:
-                            embed.add_field(
-                                name=f"<:Accepted:1426930333789585509> {v['version']}",
-                                value=f"Nickname: `{v['nickname']}`",
-                                inline=False
-                            )
-
-                    embed.set_footer(text="You have 5 minutes to choose")
-
-                    view = HHStJCallsignChoiceView(
+                    # Show modal to the REQUESTER to choose their version
+                    modal = HHStJVersionModal(
                         self, interaction, interaction.user, callsign,
-                        fenz_prefix, valid_versions, roblox_id, roblox_username
+                        fenz_prefix, valid_versions, roblox_id, roblox_username,
+                        is_self_request=True
                     )
-
-                    await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-                    return
+                    await interaction.response.send_modal(modal)
+                    return  # Exit here - modal handles the rest
                 elif len(valid_versions) == 1:
                     # Only one version fits, use it automatically
                     hhstj_prefix = valid_versions[0]
@@ -3712,9 +3712,7 @@ class CallsignCog(commands.Cog):
 
             # Update nickname
             new_nickname = format_nickname(
-                fenz_prefix, callsign, hhstj_prefix, roblox_username,
-                is_fenz_high_command, is_hhstj_high_command
-            )
+                fenz_prefix, callsign, hhstj_prefix, roblox_username)
 
             success, final_nick = await safe_edit_nickname(interaction.user, new_nickname)
             if not success:
@@ -4772,116 +4770,139 @@ class CallsignCog(commands.Cog):
             traceback.print_exc()
 
 
-class HHStJCallsignChoiceView(discord.ui.View):
-    """View for HHStJ high command to choose their callsign version"""
+class HHStJVersionModal(discord.ui.Modal):
+    """Modal for selecting HHStJ callsign version"""
 
     def __init__(self, cog, interaction, user, callsign, fenz_prefix,
-                 hhstj_versions, roblox_id, roblox_username):
-        super().__init__(timeout=300)
+                 hhstj_versions, roblox_id, roblox_username, is_self_request=True):
+        super().__init__(title="Select HHStJ Callsign Version")
         self.cog = cog
-        self.interaction = interaction
-        self.user = user
+        self.original_interaction = interaction
+        self.user = user  # The person GETTING the callsign
         self.callsign = callsign
         self.fenz_prefix = fenz_prefix
-        self.hhstj_versions = hhstj_versions  # List of valid versions
+        self.hhstj_versions = hhstj_versions
         self.roblox_id = roblox_id
         self.roblox_username = roblox_username
-        self.choice_made = False
+        self.is_self_request = is_self_request  # True for /request, False for /assign
 
-        # Add a button for each valid version
-        for version in hhstj_versions:
-            button = discord.ui.Button(
-                label=version,
-                style=discord.ButtonStyle.primary,
-                custom_id=f"hhstj_{version}"
-            )
-            button.callback = self.make_callback(version)
-            self.add_item(button)
+        # Add text input showing the versions
+        version_list = "\n".join([f"• {v}" for v in hhstj_versions])
+        self.version_input = discord.ui.TextInput(
+            label="Enter your preferred version",
+            placeholder=f"Choose one: {', '.join(hhstj_versions)}",
+            style=discord.TextStyle.short,
+            required=True,
+            max_length=20
+        )
+        self.add_item(self.version_input)
 
-    def make_callback(self, chosen_version: str):
-        """Create a callback for a specific version"""
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.send_message(
+            content=f"<a:Load:1430912797469970444> Processing callsign assignment...",
+            ephemeral=True
+        )
 
-        async def callback(interaction: discord.Interaction):
-            if interaction.user.id != self.user.id:
-                await interaction.response.send_message(
-                    "<:Denied:1426930694633816248> Only the person being assigned can choose!",
+        try:
+            # Get chosen version and validate
+            chosen_version = self.version_input.value.strip()
+
+            if chosen_version not in self.hhstj_versions:
+                await interaction.followup.send(
+                    f"<:Denied:1426930694633816248> Invalid version! Please choose one of: {', '.join(self.hhstj_versions)}",
                     ephemeral=True
                 )
                 return
 
-            await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Selecting Prefix", ephemeral=True)
-
-            # Save to database with chosen version
+            # Add to database
             is_fenz_hc = any(role.id in HIGH_COMMAND_RANKS for role in self.user.roles)
             is_hhstj_hc = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in self.user.roles)
 
             await add_callsign_to_database(
-                self.callsign, self.user.id, str(self.user),
-                self.roblox_id, self.roblox_username,
-                self.fenz_prefix, chosen_version,
-                self.user.id, self.user.display_name,
-                is_fenz_hc, is_hhstj_hc
+                self.callsign,
+                self.user.id,
+                str(self.user),
+                self.roblox_id,
+                self.roblox_username,
+                self.fenz_prefix,
+                chosen_version,
+                interaction.user.id,
+                interaction.user.display_name,
+                is_fenz_hc,
+                is_hhstj_hc
+            )
+
+            # Format nickname
+            new_nickname = format_nickname(
+                self.fenz_prefix,
+                self.callsign,
+                chosen_version,
+                self.roblox_username
             )
 
             # Update nickname
-            new_nickname = format_nickname(
-                self.fenz_prefix, self.callsign, chosen_version,
-                self.roblox_username, is_fenz_hc, is_hhstj_hc
-            )
-
             try:
                 success, final_nick = await safe_edit_nickname(self.user, new_nickname)
                 if not success:
-                    print(f"⚠️ Failed to set nickname for {member.id}")
+                    print(f"⚠️ Failed to set nickname for {self.user.id}")
             except discord.Forbidden:
                 pass
 
-            await interaction.delete_original_response()
-
-            # Disable all buttons
-            for item in self.children:
-                item.disabled = True
-            await interaction.message.edit(view=self)
-
-            # Send confirmation to user (ephemeral)
-            await interaction.followup.send(
-                f"<:Accepted:1426930333789585509> You chose: **{chosen_version}**\n"
-                f"Nickname set to: `{new_nickname}`",
-                ephemeral=True,
-                
+            # Update Google Sheets
+            await sheets_manager.add_callsign_to_sheets(
+                self.user, self.callsign, self.fenz_prefix,
+                self.roblox_username, self.user.id
             )
 
-            # Log to logging channel
+            # Log to channel
             await self.cog.send_callsign_request_log(
                 self.cog.bot, self.user, self.callsign, self.fenz_prefix,
                 chosen_version, self.roblox_username, approved=True
             )
 
-            # Notify the command executor (if different from user)
-            if self.interaction.user.id != self.user.id:
-                await self.interaction.followup.send(
-                    f"<:Accepted:1426930333789585509> {self.user.mention} chose HHStJ version: **{chosen_version}**",
-                    ephemeral=True,
-                    
+            # Send success message
+            if self.is_self_request:
+                # For /callsign request - notify the requester
+                success_embed = discord.Embed(
+                    title="<:Accepted:1426930333789585509> Callsign Approved!",
+                    description=f"Your callsign request has been automatically approved!",
+                    color=discord.Color.green()
+                )
+                success_embed.add_field(
+                    name="Your Callsign",
+                    value=f"**{self.fenz_prefix}-{self.callsign}**",
+                    inline=True
+                )
+                success_embed.add_field(
+                    name="HHStJ Version",
+                    value=f"**{chosen_version}**",
+                    inline=True
+                )
+                success_embed.add_field(
+                    name="Nickname",
+                    value=f"`{new_nickname}`",
+                    inline=True
+                )
+                success_embed.set_footer(text=f"Approved automatically • {self.user.display_name}")
+                success_embed.timestamp = datetime.utcnow()
+
+                await interaction.followup.send(embed=success_embed, ephemeral=True)
+            else:
+                # For /callsign assign - notify the admin
+                await interaction.followup.send(
+                    f"<:Accepted:1426930333789585509> Assigned **{self.fenz_prefix}-{self.callsign}** to {self.user.mention}\n"
+                    f"HHStJ Version: **{chosen_version}**\n"
+                    f"Nickname updated to: `{new_nickname}`",
+                    ephemeral=True
                 )
 
-            self.choice_made = True
-            self.stop()
-
-        return callback
-
-    async def on_timeout(self):
-        if not self.choice_made:
-            for item in self.children:
-                item.disabled = True
-            try:
-                await self.interaction.edit_original_response(
-                    content="<:Alert:1437790206462922803>️ Choice timed out (5 minutes). Please request the callsign again.",
-                    view=self,
-                    
-                )
-            except:
-                pass
+        except Exception as e:
+            await interaction.followup.send(
+                f"<:Denied:1426930694633816248> Error: {str(e)}",
+                ephemeral=True
+            )
+            import traceback
+            traceback.print_exc()
 
 class HighCommandPrefixChoice(discord.ui.View):
     def __init__(self, interaction_user_id: int, cog, original_interaction, user, callsign,
@@ -4936,9 +4957,7 @@ class HighCommandPrefixChoice(discord.ui.View):
             self.fenz_prefix,
             self.callsign,
             self.hhstj_prefix,
-            self.roblox_username,
-            is_fenz_high_command,
-            is_hhstj_high_command
+            self.roblox_username
         )
 
         try:
@@ -5012,9 +5031,7 @@ class HighCommandPrefixChoice(discord.ui.View):
             "",
             self.callsign,
             self.hhstj_prefix,
-            self.roblox_username,
-            is_fenz_high_command,
-            is_hhstj_high_command
+            self.roblox_username
         )
         try:
             await self.user.edit(nick=new_nickname)
@@ -5496,7 +5513,7 @@ class BulkAssignModal(discord.ui.Modal):
             # Validate callsign format
             if not callsign.isdigit() or len(callsign) > 3:
                 await interaction.followup.send(
-                   "<:Denied:1426930694633816248> Invalid callsign! Must be 1-3 digits.",
+                    "<:Denied:1426930694633816248> Invalid callsign! Must be 1-3 digits.",
                     ephemeral=True
                 )
                 return
@@ -5537,9 +5554,65 @@ class BulkAssignModal(discord.ui.Modal):
                 )
                 return
 
+            # Check if HHStJ high command needs version selection
+            is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
+
+            if is_hhstj_high_command and hhstj_prefix and '-' in hhstj_prefix:
+                # Get all shortened versions
+                hhstj_versions = get_hhstj_shortened_versions(hhstj_prefix)
+
+                # Test which versions fit
+                is_fenz_hc = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
+                version_tests = test_hhstj_versions_fit(
+                    self.user_data['fenz_prefix'], callsign, hhstj_versions,
+                    roblox_username, is_fenz_hc, is_hhstj_high_command
+                )
+
+                # Filter to only valid versions
+                valid_versions = [v['version'] for v in version_tests if v['fits']]
+
+                if len(valid_versions) > 1:
+                    # Show modal to the ADMIN doing bulk assign
+                    modal = HHStJVersionModal(
+                        self.view.cog, interaction, member, callsign,
+                        self.user_data['fenz_prefix'], valid_versions,
+                        roblox_id, roblox_username,
+                        is_self_request=False  # Admin is choosing
+                    )
+
+                    # IMPORTANT: Track this assignment in the view
+                    self.view.assigned_count += 1
+                    self.view.assignment_log.append({
+                        'type': 'assigned',
+                        'member': member,
+                        'callsign': f"{self.user_data['fenz_prefix']}-{callsign}",
+                        'nickname': 'Pending HHStJ version selection'
+                    })
+                    self.view.current_index += 1
+
+                    await interaction.followup.send(
+                        f"⚠️ {member.mention} is HHStJ High Command - showing version selector...",
+                        ephemeral=True
+                    )
+
+                    # Delete the bulk assign message to avoid confusion
+                    await interaction.delete_original_response()
+
+                    # Show the HHStJ version modal (this will handle the rest)
+                    await interaction.response.send_modal(modal)
+
+                    # Show next user in bulk assign
+                    await self.view.show_current_user()
+                    return
+                elif len(valid_versions) == 1:
+                    # Only one version fits, use it automatically
+                    hhstj_prefix = valid_versions[0]
+                else:
+                    # No versions fit (shouldn't happen, but fallback)
+                    hhstj_prefix = hhstj_versions[-1]  # Use shortest version
+
             # Assign callsign to database
             is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
-            is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
 
             await add_callsign_to_database(
                 callsign,
@@ -5563,16 +5636,11 @@ class BulkAssignModal(discord.ui.Modal):
                         break
 
             # Update nickname
-            is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
-            is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
-
             new_nickname = format_nickname(
                 self.user_data['fenz_prefix'],
                 callsign,
                 hhstj_prefix or '',
-                self.user_data['roblox_username'],
-                is_fenz_high_command,
-                is_hhstj_high_command
+                self.user_data['roblox_username']
             )
 
             final_nickname = shift_prefix + new_nickname
