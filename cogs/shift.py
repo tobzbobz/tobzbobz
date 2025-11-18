@@ -1216,7 +1216,7 @@ class ShiftManagementCog(commands.Cog):
                        FROM shifts
                        WHERE discord_user_id = $1
                          AND end_time IS NOT NULL
-                         AND week_identifier = $3''',
+                         AND week_identifier = $2''',
                     user_id, current_week
                 )
 
@@ -2412,8 +2412,6 @@ class ShiftManagementCog(commands.Cog):
                         inline=False
                     )
 
-            
-
             await interaction.edit_original_response(embed=embed)
 
         except Exception as e:
@@ -2565,7 +2563,8 @@ class ShiftManagementCog(commands.Cog):
                       f"**Break Time:** {self.format_duration(timedelta(seconds=pause_duration))}",
                 inline=False
             )
-            embed.set_footer(text=f"Shift Type: {last_shift['type']}")
+
+        embed.set_footer(text=f"Shift Type: {types[0]}")
 
         # Create view with only Start button
         view = ShiftStartView(self, interaction.user, types)
@@ -3898,8 +3897,15 @@ class AdminShiftControlView(discord.ui.View):
         await interaction.response.defer()
 
         try:
-            pause_duration = (datetime.utcnow() - self.shift['pause_start']).total_seconds()
-            total_pause = self.shift.get('pause_duration', 0) + pause_duration
+            if not self.active_shift:
+                await interaction.followup.send(
+                    "<:Denied:1426930694633816248> No active shift found.",
+                    ephemeral=True
+                )
+                return
+
+            pause_duration = (datetime.utcnow() - self.active_shift['pause_start']).total_seconds()
+            total_pause = self.active_shift.get('pause_duration', 0) + pause_duration
 
             async with db.pool.acquire() as conn:
                 # Get current break_sessions
@@ -3956,6 +3962,13 @@ class AdminShiftControlView(discord.ui.View):
         await interaction.response.defer()
 
         try:
+            if not self.active_shift:
+                await interaction.followup.send(
+                    "<:Denied:1426930694633816248> No active shift found.",
+                    ephemeral=True
+                )
+                return
+
             pause_duration = (datetime.utcnow() - self.active_shift['pause_start']).total_seconds()
             total_pause = self.active_shift.get('pause_duration', 0) + pause_duration
 

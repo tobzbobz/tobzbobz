@@ -2183,6 +2183,7 @@ class CallsignCog(commands.Cog):
             # ========== DETAILED CHANGE LOGS ==========
 
             # 1. Nickname Changes - SHOW WHO AND WHAT CHANGED
+            # 1. Nickname Changes - SHOW WHO AND WHAT CHANGED
             if stats.get('nickname_changes'):
                 for i in range(0, len(stats['nickname_changes']), 3):
                     chunk = stats['nickname_changes'][i:i + 3]
@@ -2199,7 +2200,6 @@ class CallsignCog(commands.Cog):
                         embed.add_field(
                             name=f"{change['member'].display_name[:50]}",
                             value=f"{change['member'].mention}\n**Before:** `{old_nick}`\n**After:** `{new_nick}`",
-                            # ✅ Added mention
                             inline=False
                         )
 
@@ -2220,10 +2220,13 @@ class CallsignCog(commands.Cog):
                     )
 
                     for change in chunk:
+                        rank_type = change.get('type', 'Unknown')
+                        old_rank = change.get('old_rank', 'Unknown')
+                        new_rank = change.get('new_rank', 'Unknown')
+
                         embed.add_field(
                             name=f"{change['member'].display_name[:50]}",
-                            value=f"{change['member'].mention}\n**Type:** {change['type']}\n**{change['old_rank']}** → **{change['new_rank']}**",
-                            # ✅ Added mention
+                            value=f"{change['member'].mention}\n**Type:** {rank_type}\n**{old_rank}** → **{new_rank}**",
                             inline=False
                         )
 
