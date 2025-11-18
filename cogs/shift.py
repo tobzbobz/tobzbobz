@@ -102,6 +102,10 @@ ADDITIONAL_SHIFT_ACCESS = {
 
 NZST = pytz.timezone('Pacific/Auckland')
 SHIFT_LOGS_CHANNEL = 1435798856687161467
+SHIFT_LOGS_CHANNELS = [
+    1435798856687161467,  # Primary log channel
+    1411662121531609130   # Secondary log channel - CHANGE THIS
+]
 PING_ROLES = [1285474077556998196, 1389113393511923863, 1389550689113473024]
 
 
@@ -499,13 +503,21 @@ class ShiftManagementCog(commands.Cog):
     async def log_shift_event(self, guild: discord.Guild, event_type: str, member: discord.Member,
                               shift_data: dict, admin: discord.Member = None, details: str = None):
         """
-        Send shift event logs to the logging channel
+        Send shift event logs to multiple logging channels
 
         event_type: 'start', 'end', 'pause', 'resume', 'modify', 'delete', 'clear'
         """
-        channel = self.bot.get_channel(SHIFT_LOGS_CHANNEL)  # ← Remove 'self.'
-        if not channel:
-            print(f"Warning: Shift logs channel {SHIFT_LOGS_CHANNEL} not found")  # ← Remove 'self.'
+        # ✅ CHANGE: Get ALL log channels instead of just one
+        log_channels = []
+        for channel_id in [SHIFT_LOGS_CHANNEL, 1234567890]:  # Add your second channel ID here
+            channel = self.bot.get_channel(channel_id)
+            if channel:
+                log_channels.append(channel)
+            else:
+                print(f"Warning: Log channel {channel_id} not found")
+
+        if not log_channels:
+            print(f"Warning: No valid log channels found")
             return
 
         try:
@@ -530,7 +542,7 @@ class ShiftManagementCog(commands.Cog):
             if event_type == 'start':
                 embed = discord.Embed(
                     title=f"Shift Started • {type.replace('Shift ', '')}",
-                    color=discord.Color(0x57f288)  # Green
+                    color=discord.Color(0x57f288)
                 )
                 embed.add_field(
                     name="Staff Member",
@@ -552,7 +564,7 @@ class ShiftManagementCog(commands.Cog):
 
                 embed = discord.Embed(
                     title=f"Shift Ended • {type.replace('Shift ', '')}",
-                    color=discord.Color(0xed4245)  # Red
+                    color=discord.Color(0xed4245)
                 )
                 embed.add_field(
                     name="Staff Member",
@@ -572,10 +584,8 @@ class ShiftManagementCog(commands.Cog):
                         inline=True
                     )
 
-                # Add blank field for spacing
                 embed.add_field(name='', value='', inline=False)
 
-                # Add individual break sessions if any
                 break_sessions = shift_data.get('break_sessions')
                 if break_sessions:
                     try:
@@ -598,7 +608,7 @@ class ShiftManagementCog(commands.Cog):
                                     inline=False
                                 )
                     except (json.JSONDecodeError, ValueError):
-                        pass  # Skip if break_sessions data is malformed
+                        pass
 
                 embed.add_field(
                     name="Started",
@@ -618,7 +628,7 @@ class ShiftManagementCog(commands.Cog):
             elif event_type == 'pause':
                 embed = discord.Embed(
                     title=f"Shift Paused • {type.replace('Shift ', '')}",
-                    color=discord.Color(0xfee75c)  # Yellow
+                    color=discord.Color(0xfee75c)
                 )
                 embed.add_field(
                     name="Staff Member",
@@ -638,7 +648,7 @@ class ShiftManagementCog(commands.Cog):
 
                 embed = discord.Embed(
                     title=f"Shift Resumed • {type.replace('Shift ', '')}",
-                    color=discord.Color(0x57f288)  # Green
+                    color=discord.Color(0x57f288)
                 )
                 embed.add_field(
                     name="Staff Member",
@@ -657,7 +667,7 @@ class ShiftManagementCog(commands.Cog):
             elif event_type == 'modify':
                 embed = discord.Embed(
                     title=f"Shift Modified • {type.replace('Shift ', '')}",
-                    color=discord.Color(0x5865f2)  # Blurple
+                    color=discord.Color(0x5865f2)
                 )
                 embed.add_field(
                     name="Staff Member",
@@ -678,7 +688,7 @@ class ShiftManagementCog(commands.Cog):
 
                 embed = discord.Embed(
                     title=f"Shift Deleted • {type.replace('Shift ', '')}",
-                    color=discord.Color(0xed4245)  # Red
+                    color=discord.Color(0xed4245)
                 )
                 embed.add_field(
                     name="Staff Member",
@@ -700,7 +710,7 @@ class ShiftManagementCog(commands.Cog):
             elif event_type == 'clear':
                 embed = discord.Embed(
                     title=f"Shifts Cleared • {type.replace('Shift ', '')}",
-                    color=discord.Color(0xed4245)  # Red
+                    color=discord.Color(0xed4245)
                 )
                 embed.add_field(
                     name="Staff Member",
@@ -715,11 +725,15 @@ class ShiftManagementCog(commands.Cog):
                     )
                 embed.set_footer(text=f"Cleared by {admin.display_name if admin else 'System'}")
 
-            # Set thumbnail to user avatar
             embed.set_thumbnail(url=member.display_avatar.url)
             embed.timestamp = datetime.utcnow()
 
-            await channel.send(embed=embed)
+            # ✅ CHANGE: Send to ALL log channels
+            for channel in log_channels:
+                try:
+                    await channel.send(embed=embed)
+                except Exception as e:
+                    print(f"Failed to send log to channel {channel.id}: {e}")
 
         except Exception as e:
             print(f"Error logging shift event: {e}")
@@ -1082,27 +1096,39 @@ class ShiftManagementCog(commands.Cog):
 
         return self._quota_cache.get(cache_key, 0)
 
-    async def get_user_quota(self, member: discord.Member, type: str = None) -> int:
-        """Get the highest quota from all of a user's roles that have quotas set"""
+    # CHANGE get_user_quota to:
+    async def get_user_quota(self, member: discord.Member, type: str = None) -> tuple[int, bool]:
+        """
+        Get the highest quota from all of a user's roles.
+        Returns: (quota_seconds, has_any_quota)
+        """
         max_quota = 0
-        has_zero_quota = False  # Add this flag
+        has_any_quota = False  # Track if user has ANY quota role
 
         for role in member.roles:
             quota = await self.get_quota_for_role(role.id, type)
-            if quota == 0:
-                has_zero_quota = True  # Found a 0-second quota
-            elif quota > max_quota:
-                max_quota = quota
+            if quota is not None and quota > 0:  # Role has a quota set
+                has_any_quota = True
+                if quota > max_quota:
+                    max_quota = quota
 
-        # If user has any 0-second quota role, return 0 (no requirement)
-        if has_zero_quota:
-            return 0
-
-        return max_quota
+        return (max_quota, has_any_quota)
 
     async def get_quota_info(self, member: discord.Member, type: str = None) -> dict:
         """Get quota information for a user including percentage and bypass status"""
-        quota_seconds = await self.get_user_quota(member, type)
+        quota_seconds, has_any_quota = await self.get_user_quota(member, type)
+
+        # If user has no quota roles at all, return no quota
+        if not has_any_quota:
+            return {
+                'has_quota': False,
+                'quota_seconds': 0,
+                'active_seconds': 0,
+                'percentage': 0,
+                'completed': False,
+                'bypass_type': None
+            }
+
         active_seconds = await self.get_total_active_time(member.id, type)
 
         # Check for bypass roles FIRST
@@ -1761,7 +1787,7 @@ class ShiftManagementCog(commands.Cog):
 
                 if is_admin:
                     embed.set_footer(
-                        text="*Use 'Toggle Role Visibility in Reports' to show/hide roles from weekly leaderboards*")
+                        text="Use 'Toggle Role Visibility in Reports' to show/hide roles from weekly leaderboards")
 
                 await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -2039,17 +2065,21 @@ class ShiftManagementCog(commands.Cog):
                 if not member:
                     continue
 
-                quota_info = quota_infos.get(row['discord_user_id'],
-                                             {'has_quota': False, 'bypass_type': None, 'completed': False})
-
                 quota_status = ""
-                if quota_info['has_quota']:
-                    if quota_info['bypass_type']:
-                        quota_status = f" • <:Accepted:1426930333789585509> ({quota_info['bypass_type']})"
-                    elif quota_info['completed']:
-                        quota_status = f" • <:Accepted:1426930333789585509>"
-                    else:
-                        quota_status = f" • <:Denied:1426930694633816248>"
+
+                # ONLY show quota icons for current wave (wave is None)
+                if wave is None:  # Current wave
+                    quota_info = quota_infos.get(row['discord_user_id'],
+                                                 {'has_quota': False, 'bypass_type': None, 'completed': False})
+
+                    if quota_info['has_quota']:
+                        if quota_info['bypass_type']:
+                            quota_status = f" • <:Accepted:1426930333789585509> ({quota_info['bypass_type']})"
+                        elif quota_info['completed']:
+                            quota_status = f" • <:Accepted:1426930333789585509>"
+                        else:
+                            quota_status = f" • <:Denied:1426930694633816248>"
+                # For historical waves, don't show quota status at all
 
                 time_str = self.format_duration(timedelta(seconds=int(row['total_seconds'])))
                 leaderboard_lines.append(f"`{idx}.` {member.mention} • {time_str}{quota_status}")
@@ -2749,11 +2779,17 @@ class ShiftManagementCog(commands.Cog):
                 color=discord.Color(0x000000)
             )
         else:
-            # If active shift, just show a simple status embed
-            embed = discord.Embed(
-                title="Shift Management",
-                color=discord.Color(0x000000)
-            )
+            is_on_break = active_shift.get('pause_start') is not None
+            if is_on_break:
+                embed = discord.Embed(
+                    title="Shift Management",
+                    color=discord.Color.gold()  # Yellow/gold for break
+                )
+            else:
+                embed = discord.Embed(
+                    title="Shift Management",
+                    color=discord.Color.green()  # Green for active
+                )
 
         embed.set_author(
             name=f"Shift Management: {user.display_name}",
@@ -3903,7 +3939,32 @@ class AdminShiftControlView(discord.ui.View):
                 )
                 return
 
-            pause_duration = (datetime.utcnow() - self.active_shift['pause_start']).total_seconds()
+            async with db.pool.acquire() as conn:
+                # Get current break_sessions
+                current_sessions = await conn.fetchval(
+                    'SELECT break_sessions FROM shifts WHERE id = $1',
+                    self.active_shift['id']
+                )
+
+                # Parse existing sessions
+                sessions = json.loads(current_sessions) if current_sessions else []
+
+                # Add new break session
+                sessions.append({
+                    'start': datetime.utcnow().isoformat(),
+                    'end': None,
+                    'duration': None
+                })
+
+                await conn.execute(
+                    '''UPDATE shifts
+                       SET pause_start    = $1,
+                           break_sessions = $2
+                       WHERE id = $3''',
+                    datetime.utcnow(),
+                    json.dumps(sessions),
+                    self.active_shift['id']
+                )
             total_pause = self.active_shift.get('pause_duration', 0) + pause_duration
 
             async with db.pool.acquire() as conn:
@@ -4151,8 +4212,6 @@ class AdminActionsSelect(discord.ui.Select):
     async def show_modify_shift(self, interaction: discord.Interaction):
         """Show modify shift interface"""
 
-        await interaction.response.defer(ephemeral=True)
-
         # Create embed for selection panel
         embed = discord.Embed(
             title="**Modify Shift**",
@@ -4173,17 +4232,15 @@ class AdminActionsSelect(discord.ui.Select):
         view = ModifyShiftSelectView(self.cog, self.admin, self.target_user, self.shift_type)
         await view.populate_shift_dropdown()
 
-        # Send as followup instead of edit
-        await interaction.followup.send(
+        message = await interaction.followup.send(
             embed=embed,
             view=view,
             ephemeral=True
         )
+        view.message = message
 
     async def show_delete_shift(self, interaction: discord.Interaction):
         """Show delete shift interface"""
-
-        await interaction.response.defer(ephemeral=True)
 
         # Create embed for selection panel
         embed = discord.Embed(
@@ -4207,11 +4264,12 @@ class AdminActionsSelect(discord.ui.Select):
         view = DeleteShiftSelectView(self.cog, self.admin, self.target_user, self.shift_type)
         await view.populate_shift_dropdown()
 
-        await interaction.followup.send(
+        message = await interaction.followup.send(
             embed=embed,
             view=view,
             ephemeral=True
         )
+        view.message = message
 
     async def show_clear_shifts(self, interaction: discord.Interaction):
         """Show clear shifts interface with scope selection"""
@@ -4434,47 +4492,28 @@ class ShiftListView(discord.ui.View):
                 description="No completed shifts found.",
                 color=discord.Color(0xffffff)
             )
-            await interaction.followup.send(embed=embed)
+
+            # ✅ ALWAYS use followup for deferred interactions
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return
 
-        self.current_page = max(0, min(page, self.total_pages - 1))
-
-        start_idx = self.current_page * self.ITEMS_PER_PAGE
-        end_idx = start_idx + self.ITEMS_PER_PAGE
-        page_shifts = self.shifts[start_idx:end_idx]
-
-        embed = discord.Embed(
-            title=f"**<:List:1434953240155525201> Shift List**",
-            color=discord.Color(0xffffff)
-        )
-
-        for shift in page_shifts:
-            shift_id = str(shift['id'])
-            shift_time = shift['end_time'].strftime('%a, %d %b %Y %H:%M:%S GMT UTC')
-            shift_name = f"`{shift_id}` | {shift_time}"
-            duration = shift['end_time'] - shift['start_time']
-            break_duration = timedelta(seconds=shift.get('pause_duration', 0))
-
-            value = f"- **Duration:** {self.cog.format_duration(duration)}\n"
-            value += f"- **Started:** <t:{int(shift['start_time'].timestamp())}:f>\n"
-            value += f"- **Ended:** <t:{int(shift['end_time'].timestamp())}:f>\n"
-            value += f"- **Break:** {self.cog.format_duration(break_duration)}\n"
-
-            embed.add_field(
-                name=f"`{shift_id}`",
-                value=value,
-                inline=False
-            )
-
-        embed.set_footer(text=f"Shift Type: {self.type} • Page {self.current_page + 1}/{self.total_pages}")
+        # ... rest of embed building ...
 
         # CREATE NAVIGATION BUTTONS DYNAMICALLY
         self._create_navigation_buttons()
 
-        if interaction.response.is_done():
-            await interaction.followup.send(embed=embed, view=self, ephemeral=True)
+        # ✅ FIXED: Handle both first-time and subsequent calls properly
+        if self.message:
+            # Edit existing message
+            await self.message.edit(embed=embed, view=self)
         else:
-            await interaction.response.send_message(embed=embed, view=self, ephemeral=True)
+            # First time - always use followup since interaction is deferred
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
+
+            self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.admin.id:
@@ -5224,10 +5263,9 @@ class DeleteShiftConfirmView(discord.ui.View):
         view = ModifyShiftSelectView(self.cog, self.admin, self.target_user, self.shift['type'])
         await view.populate_shift_dropdown()
 
-        await interaction.followup.send(
+        await interaction.edit_original_response(
             embed=embed,
-            view=view,
-            ephemeral=True
+            view=view
         )
 
         self.stop()
@@ -5478,15 +5516,12 @@ class ClearShiftsConfirmView(discord.ui.View):
     @discord.ui.button(label="Clear User Shifts", style=discord.ButtonStyle.secondary, disabled=True,
                        custom_id="clear_shifts")
     async def clear_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
 
         if not self.armed:
             await interaction.followup.send("<:Denied:1426930694633816248> Please ARM first!", ephemeral=True)
             return
 
-        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Clearing User Shifts",
-                                                ephemeral=True)
-
+        await interaction.response.defer(ephemeral=True)
 
         try:
             current_week = WeeklyShiftManager.get_current_week_monday()

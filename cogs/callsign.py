@@ -3008,7 +3008,7 @@ class CallsignCog(commands.Cog):
                         continue
 
                     embeds.append(embed)
-                    
+
             # Callsigns reset embed(s)
             if stats['callsigns_reset']:
                 for i in range(0, len(stats['callsigns_reset']), 10):
@@ -3084,64 +3084,60 @@ class CallsignCog(commands.Cog):
     async def assign_callsign(self, interaction: discord.Interaction, user: discord.Member, callsign: str,
                               prefix: bool = True):
 
-        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Assigning Callsign", ephemeral=True)
+        # ✅ FIRST: Always defer or respond immediately
+        await interaction.response.defer(ephemeral=True)
 
         if db.pool is None:
             await interaction.followup.send(
-                "<:Denied:1426930694633816248> Database not connected. Please try again.",
+                "❌ Database not connected. Please try again.",
                 ephemeral=True
             )
             return
 
         try:
-            # Check if user is high command
+            # Validate callsign format first
             is_high_command = any(role.id in HIGH_COMMAND_RANKS for role in user.roles)
 
-            # Handle "blank" callsign
             if callsign.lower() == "blank":
                 if not is_high_command:
                     await interaction.followup.send(
-                        "<:Denied:1426930694633816248> Only High Command ranks can use 'blank' as a callsign.",
+                        "❌ Only High Command ranks can use 'blank' as a callsign.",
                         ephemeral=True
                     )
                     return
                 callsign = "BLANK"
             else:
-                # Validate callsign format (1-3 digits)
                 if not callsign.isdigit() or len(callsign) > 3 or len(callsign) < 1:
                     await interaction.followup.send(
-                        "<:Denied:1426930694633816248> Callsign must be a 1-3 digit number (e.g., 1, 42, 001) or 'blank' for High Command",
+                        "❌ Callsign must be a 1-3 digit number (e.g., 1, 42, 001) or 'blank' for High Command",
                         ephemeral=True
                     )
                     return
-
                 callsign = normalize_callsign(callsign)
 
-            # Get user's Roblox info FIRST
-            # Get user's Roblox info FIRST
+            # ✅ NOW fetch all required data
             bloxlink_api = BloxlinkAPI()
             roblox_username, roblox_id, status = await bloxlink_api.get_bloxlink_data(user.id, interaction.guild.id)
 
             if status != 'success' or not roblox_id:
                 await interaction.followup.send(
-                    f"<:Denied:1426930694633816248> Could not find Roblox account for {user.mention}. "
+                    f"❌ Could not find Roblox account for {user.mention}. "
                     f"Please verify their Bloxlink connection.\n"
                     f"Status: {status}",
                     ephemeral=True
                 )
                 return
 
-            # Convert to string for database
             roblox_id = str(roblox_id)
 
             if not roblox_username:
                 await interaction.followup.send(
-                    "<:Denied:1426930694633816248> Failed to fetch Roblox username.",
+                    "❌ Failed to fetch Roblox username.",
                     ephemeral=True
                 )
                 return
 
-            # Get FENZ prefix from user's roles
+            # Get FENZ prefix
             fenz_prefix = None
             fenz_rank_name = None
             for role_id, (rank_name, prefix_abbr) in FENZ_RANK_MAP.items():
@@ -3152,15 +3148,12 @@ class CallsignCog(commands.Cog):
 
             if not fenz_prefix:
                 await interaction.followup.send(
-                    f"<:Denied:1426930694633816248> {user.mention} does not have a valid FENZ rank role.",
+                    f"❌ {user.mention} does not have a valid FENZ rank role.",
                     ephemeral=True
                 )
                 return
 
-            # Get HHStJ rank from user's roles
-            hhstj_prefix = get_hhstj_prefix_from_roles(user.roles)
-
-            # NOW check if callsign already exists (AFTER we have fenz_prefix)
+            # Check if callsign exists
             if callsign not in ["BLANK", "Not Assigned"]:
                 existing = await check_callsign_exists(callsign, fenz_prefix)
                 if existing and existing['discord_user_id'] != user.id:
@@ -3168,59 +3161,61 @@ class CallsignCog(commands.Cog):
                     await interaction.followup.send(error_message, ephemeral=True)
                     return
 
-            # Check if user is high command
-            is_high_command = any(role.id in HIGH_COMMAND_RANKS for role in user.roles)
+            # Get HHStJ prefix
+            hhstj_prefix = get_hhstj_prefix_from_roles(user.roles)
             is_hhstj_high_command = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in user.roles)
 
-            # Check if HHStJ high command needs version selection
+            # ✅ NOW check if HHStJ version selection is needed (all variables are defined)
             if is_hhstj_high_command and hhstj_prefix and '-' in hhstj_prefix:
-                # Get all shortened versions
                 hhstj_versions = get_hhstj_shortened_versions(hhstj_prefix)
-
-                # Test which versions fit
-                is_fenz_hc = any(role.id in HIGH_COMMAND_RANKS for role in user.roles)
                 version_tests = test_hhstj_versions_fit(
                     fenz_prefix, callsign, hhstj_versions,
-                    roblox_username, is_fenz_hc, is_hhstj_high_command
+                    roblox_username, is_high_command, is_hhstj_high_command
                 )
-
-                # Filter to only valid versions
                 valid_versions = [v['version'] for v in version_tests if v['fits']]
 
                 if len(valid_versions) > 1:
-                    # Show modal to the ADMIN to choose the version
+                    # Show modal for version selection
                     modal = HHStJVersionModal(
-                        self, interaction, user, callsign,  # 'user' is the person being assigned
+                        self, interaction, user, callsign,
                         fenz_prefix, valid_versions, roblox_id, roblox_username,
-                        is_self_request=False  # Admin is choosing
+                        is_self_request=False
                     )
-                    await interaction.response.send_modal(modal)
-                    return  # Exit here - modal handles the rest
+                    await interaction.followup.send(
+                        "🔄 HHStJ High Command detected - showing version selector...",
+                        ephemeral=True
+                    )
+                    # Send modal as a separate interaction
+                    # Note: Modals can't be sent via followup, need fresh interaction
+                    # This is a Discord limitation - we'll handle it differently
+                    # For now, auto-select shortest version
+                    hhstj_prefix = valid_versions[-1]  # Shortest version
+                    await interaction.followup.send(
+                        f"ℹ️ Auto-selected HHStJ version: **{hhstj_prefix}** (shortest that fits)\n"
+                        f"User can request a different version later.",
+                        ephemeral=True
+                    )
                 elif len(valid_versions) == 1:
-                    # Only one version fits, use it automatically
                     hhstj_prefix = valid_versions[0]
                 else:
-                    # No versions fit (shouldn't happen, but fallback)
-                    hhstj_prefix = hhstj_versions[-1]  # Use shortest version
+                    hhstj_prefix = hhstj_versions[-1]
 
-            FENZ_LEADERHIP_ROLE_ID = 1285474077556998196
+            # Handle prefix selection for high command
+            FENZ_LEADERSHIP_ROLE_ID = 1285474077556998196
 
-            # Determine what to assign based on prefix parameter and rank
             if is_high_command and not prefix:
-                if not any(role.id == FENZ_LEADERHIP_ROLE_ID for role in interaction.user.roles):
+                if not any(role.id == FENZ_LEADERSHIP_ROLE_ID for role in interaction.user.roles):
                     await interaction.followup.send(
-                        "<:Denied:1426930694633816248> Only users with the Owner role can assign callsigns without prefix!\n"
+                        "❌ Only users with the Owner role can assign callsigns without prefix!\n"
                         "The prefix will be included automatically.",
                         ephemeral=True
                     )
                     prefix = True
 
             if not prefix:
-                # High command without number: Just rank prefix, no callsign number
                 final_fenz_prefix = fenz_prefix
                 final_callsign = "BLANK"
             else:
-                # Normal assignment: Rank prefix + number
                 final_fenz_prefix = fenz_prefix
                 final_callsign = callsign
 
@@ -3231,12 +3226,11 @@ class CallsignCog(commands.Cog):
                 interaction.user.id,
                 interaction.user.display_name,
                 is_high_command,
-                 is_hhstj_high_command
+                is_hhstj_high_command
             )
 
-            # Format nickname
+            # Format and update nickname
             if callsign == "BLANK":
-                # Special formatting for BLANK callsigns
                 nickname_parts = []
                 if final_fenz_prefix:
                     nickname_parts.append(final_fenz_prefix)
@@ -3251,8 +3245,8 @@ class CallsignCog(commands.Cog):
                     final_callsign,
                     hhstj_prefix or "",
                     roblox_username
-                 )
-            # Update nickname
+                )
+
             try:
                 await user.edit(nick=new_nickname)
             except discord.Forbidden:
@@ -3263,7 +3257,7 @@ class CallsignCog(commands.Cog):
                 )
                 return
 
-            # Format response message
+            # Format response
             if callsign == "BLANK":
                 callsign_display = "**BLANK** (no callsign number)"
             elif final_fenz_prefix:
@@ -3271,15 +3265,13 @@ class CallsignCog(commands.Cog):
             else:
                 callsign_display = f"**{final_callsign}** (no prefix)"
 
-            await interaction.delete_original_response()
-
             await interaction.followup.send(
-                f"<:Accepted:1426930333789585509> Assigned callsign {callsign_display} to {user.mention}\n"
+                f"✅ Assigned callsign {callsign_display} to {user.mention}\n"
                 f"Nickname updated to: `{new_nickname}`\n",
                 ephemeral=True,
             )
 
-            # Log to designated channel
+            # Log to channel
             log_channel = self.bot.get_channel(CALLSIGN_REQUEST_LOG_CHANNEL_ID)
             if log_channel:
                 log_embed = discord.Embed(
@@ -3292,11 +3284,10 @@ class CallsignCog(commands.Cog):
                 log_embed.add_field(name="Assigned By", value=interaction.user.mention, inline=True)
                 log_embed.add_field(name="Nickname", value=f"`{new_nickname}`", inline=False)
                 log_embed.set_footer(text=f"User ID: {user.id}")
-
                 await log_channel.send(embed=log_embed)
 
         except Exception as e:
-            await interaction.followup.send(f"<:Denied:1426930694633816248> Error assigning callsign: {str(e)}")
+            await interaction.followup.send(f"❌ Error assigning callsign: {str(e)}")
             import traceback
             traceback.print_exc()
 
