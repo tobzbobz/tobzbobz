@@ -2967,17 +2967,18 @@ class CallsignCog(commands.Cog):
                     )
 
                     for change in chunk:
+                        old_nick = change['old'][:100] if len(change['old']) > 100 else change['old']
+                        new_nick = change['new'][:100] if len(change['new']) > 100 else change['new']
+
                         embed.add_field(
-                            name=f"{change['member'].display_name[:50]}",  # ✅ Limit name length
-                            value=f"**Type:** {change['type']}\n**{change['old_rank']}** → **{change['new_rank']}**",
+                            name=f"{change['member'].display_name[:50]}",
+                            value=f"{change['member'].mention}\n**Before:** `{old_nick}`\n**After:** `{new_nick}`",
                             inline=False
                         )
 
                     if get_embed_size(embed) > 5500:
                         print(f"⚠️ Embed too large, skipping")
                         continue
-
-                    await channel.send(embed=embed)
 
                     embeds.append(embed)
 
@@ -2992,9 +2993,13 @@ class CallsignCog(commands.Cog):
                     )
 
                     for change in chunk:
+                        rank_type = change.get('type', 'Unknown')  # ✅ This is correct
+                        old_rank = change.get('old_rank', 'Unknown')
+                        new_rank = change.get('new_rank', 'Unknown')
+
                         embed.add_field(
-                            name=f"{change['member'].display_name[:50]}",  # ✅ Limit name length
-                            value=f"**Type:** {change['type']}\n**{change['old_rank']}** → **{change['new_rank']}**",
+                            name=f"{change['member'].display_name[:50]}",
+                            value=f"**Type:** {rank_type}\n**{old_rank}** → **{new_rank}**",
                             inline=False
                         )
 
@@ -3003,30 +3008,37 @@ class CallsignCog(commands.Cog):
                         continue
 
                     embeds.append(embed)
-
+                    
             # Callsigns reset embed(s)
             if stats['callsigns_reset']:
                 for i in range(0, len(stats['callsigns_reset']), 10):
                     chunk = stats['callsigns_reset'][i:i + 10]
 
                     embed = discord.Embed(
-                        title=f"Callsigns Reset ({i + 1}-{min(i +35, len(stats['callsigns_reset']))} of {len(stats['callsigns_reset'])})",
+                        title=f"Callsigns Reset ({i + 1}-{min(i + 10, len(stats['callsigns_reset']))} of {len(stats['callsigns_reset'])})",
                         description="Reset to Not Assigned due to rank changes",
                         color=discord.Color.orange()
                     )
 
                     for change in chunk:
+                        # ✅ Correct: callsigns_reset has different structure
+                        value_parts = []
+                        if change.get('old_callsign'):
+                            value_parts.append(f"**Old Callsign:** {change['old_callsign']}")
+                        if change.get('new_prefix'):
+                            value_parts.append(f"**New Prefix:** {change['new_prefix']}")
+                        if change.get('reason'):
+                            value_parts.append(f"**Reason:** {change['reason']}")
+
                         embed.add_field(
-                            name=f"{change['member'].display_name[:50]}",  # ✅ Limit name length
-                            value=f"**Type:** {change['type']}\n**{change['old_rank']}** → **{change['new_rank']}**",
+                            name=f"{change['member'].display_name[:50]}",
+                            value="\n".join(value_parts) if value_parts else "Rank changed",
                             inline=False
                         )
 
                     if get_embed_size(embed) > 5500:
                         print(f"⚠️ Embed too large, skipping")
                         continue
-
-                    await channel.send(embed=embed)
 
                     embeds.append(embed)
 
