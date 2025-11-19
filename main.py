@@ -1,4 +1,4 @@
-import discord
+`import discord
 from discord.ext import commands, tasks
 from discord import app_commands
 import logging
@@ -221,6 +221,7 @@ class Client(commands.Bot):
             print('⚠️ WARNING: Database connection failed! Bot may not work correctly.')
 
         # Start database health monitoring
+        await start_web_server()
         monitor_database_health.start()
 
         # Load all cogs automatically
@@ -425,4 +426,4 @@ try:
     client.run(token, log_handler=handler, log_level=logging.DEBUG)
 except Exception as e:
     print(f'Fatal error: {e}')
-    traceback.print_exc()
+    traceback.print_exc()`
