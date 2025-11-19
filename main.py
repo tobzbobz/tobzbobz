@@ -19,6 +19,14 @@ token = os.getenv('DISCORD_TOKEN')
 
 from database import db, ensure_database_connected
 
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s:%(levelname)s:%(name)s: %(message)s',
+    handlers=[
+        logging.FileHandler('discord.log', encoding='utf-8', mode='w'),  # Log to file
+        logging.StreamHandler()  # Optional: also log to console
+    ]
+)
 
 # Define both guild IDs
 GUILD_IDS = [1282916959062851634, 1425867713183744023, 1430002479239532747, 1420770769562243083]
@@ -121,7 +129,7 @@ async def monitor_database_health():
 
 @monitor_database_health.before_loop
 async def before_monitor():
-    await bot.wait_until_ready()
+    await client.wait_until_ready()
 
 
 class Client(commands.Bot):
@@ -220,31 +228,19 @@ class Client(commands.Bot):
         if not connected:
             print('⚠️ WARNING: Database connection failed! Bot may not work correctly.')
 
-        # Start database health monitoring
+        # Start web server only once
         await start_web_server()
-        monitor_database_health.start()
 
         # Load all cogs automatically
         await self.load_all_cogs()
 
-        asyncio.create_task(start_web_server())
-
         # Build guild-specific command mapping
         guild_commands = {}
-
-        asyncio.create_task(start_web_server())
-
-        for guild_id, cog_list in GUILD_COGS.items():
-            if cog_list:
-                valid_cogs = [cog for cog in cog_list if cog is not None]
-                if valid_cogs:
-                    guild_commands[guild_id] = valid_cogs
 
         # Sync commands to guilds
         try:
             if AGGRESSIVE_SYNC:
                 print('⚠️ AGGRESSIVE SYNC MODE ENABLED - Clearing and resyncing commands')
-
                 self.tree.clear_commands(guild=None)
                 await self.tree.sync()
                 print('<:Accepted:1426930333789585509> Cleared global commands')
@@ -268,38 +264,27 @@ class Client(commands.Bot):
                     else:
                         print(f'⏭️ Skipped guild {guild_id} (no cogs configured)')
 
-                sync_results = []
                 for guild_id in GUILD_IDS:
                     guild = discord.Object(id=guild_id)
                     synced = await self.tree.sync(guild=guild)
-
                     cog_info = ""
                     if guild_id in guild_commands:
                         cog_info = f" [{', '.join(guild_commands[guild_id])}]"
-
-                    sync_results.append(f"{guild_id} ({len(synced)} commands){cog_info}")
-
-                print(f'<:Accepted:1426930333789585509> Synced commands to guilds: {", ".join(sync_results)}')
+                    print(f"{guild_id} ({len(synced)} commands){cog_info}")
 
             else:
-                sync_results = []
                 for guild_id in GUILD_IDS:
                     guild = discord.Object(id=guild_id)
-
                     if guild_id in guild_commands:
                         self.tree.copy_global_to(guild=guild)
-
                     synced = await self.tree.sync(guild=guild)
-
                     cog_info = ""
                     if guild_id in guild_commands:
                         cog_info = f" [{', '.join(guild_commands[guild_id])}]"
                     else:
                         cog_info = " [no cogs]"
+                    print(f"{guild_id} ({len(synced)} commands){cog_info}")
 
-                    sync_results.append(f"{guild_id} ({len(synced)} commands){cog_info}")
-
-                print(f'<:Accepted:1426930333789585509> Synced commands to guilds: {", ".join(sync_results)}')
         except Exception as e:
             print(f'<:Denied:1426930694633816248> Error syncing commands: {e}')
             traceback.print_exc()
@@ -423,7 +408,7 @@ async def list_cogs(ctx):
 # Run the bot
 # ========================================
 try:
-    client.run(token, log_handler=handler, log_level=logging.DEBUG)
+    client.run(token)
 except Exception as e:
     print(f'Fatal error: {e}')
     traceback.print_exc()
