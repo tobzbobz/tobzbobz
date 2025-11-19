@@ -11,6 +11,8 @@ from aiohttp import web
 import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from discord.ext import tasks
+
 
 load_dotenv()
 token = os.getenv('DISCORD_TOKEN')
@@ -81,6 +83,37 @@ async def log_view(request):
     page_lines = lines[start:end]
     content = ''.join(page_lines)
     return web.Response(text=content, content_type='text/plain')
+
+
+@tasks.loop(minutes=5)
+async def monitor_database_health():
+    """Monitor database connection health"""
+    try:
+        if db.pool:
+            # Get pool stats
+            size = db.pool.get_size()
+            idle = db.pool.get_idle_size()
+            max_size = db.pool.get_max_size()
+
+            print(f"📊 DB Pool: {size}/{max_size} connections ({idle} idle)")
+
+            # Health check
+            if not await db.ensure_connected():
+                print("❌ Database health check failed!")
+        else:
+            print("⚠️ No database pool exists!")
+            await db.connect()
+    except Exception as e:
+        print(f"❌ Database monitoring error: {e}")
+
+
+@monitor_database_health.before_loop
+async def before_monitor():
+    await bot.wait_until_ready()
+
+
+# Start the task
+monitor_database_health.start()
 
 class Client(commands.Bot):
     def __init__(self, *args, **kwargs):

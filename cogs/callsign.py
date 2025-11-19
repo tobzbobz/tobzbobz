@@ -521,16 +521,15 @@ def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_u
     # Build nickname parts in priority order
     nickname_parts = []
 
-    # âœ… SPECIAL CASE: Not Assigned - Just show prefix(es), no callsign number
     # ✅ SPECIAL CASE: Not Assigned - Just show prefix(es), no callsign number
     if callsign == "Not Assigned":
-        # Special sub-case: RFF should show RFF | HHStJ | Roblox
+        # Special sub-case: RFF should show RFF | HHStJ (NON-COMMAND ONLY) | Roblox
         if fenz_prefix == "RFF":
             nickname_parts = ["RFF"]
-            # Add HHStJ if exists (ALLOW ALL HHStJ, including command callsigns)
-            if hhstj_prefix:
+            # ✅ FIX: Only add HHStJ if it's NON-COMMAND (no hyphen)
+            if hhstj_prefix and '-' not in hhstj_prefix:
                 nickname_parts.append(hhstj_prefix)
-            # ✅ CRITICAL: Add Roblox username for RFF users!
+            # Add Roblox username for RFF users
             if roblox_username:
                 nickname_parts.append(roblox_username)
         else:
@@ -539,7 +538,7 @@ def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_u
                 # FENZ has priority
                 if first_prefix:
                     nickname_parts.append(first_prefix)
-                if second_prefix:  # ✅ REMOVED the "-" check
+                if second_prefix:
                     nickname_parts.append(second_prefix)
             else:
                 # HHStJ has priority
@@ -552,21 +551,22 @@ def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_u
         if roblox_username:
             nickname_parts.append(roblox_username)
 
-    # âœ… SPECIAL CASE: BLANK - Just show prefix(es), no callsign
+    # ✅ SPECIAL CASE: BLANK - Just show prefix(es), no callsign
     elif callsign == "BLANK":
         if first_prefix:
             nickname_parts.append(first_prefix)
-        if second_prefix:  # ✅ REMOVED the "-" check
+        if second_prefix:
             nickname_parts.append(second_prefix)
         if roblox_username:
             nickname_parts.append(roblox_username)
 
-    # âœ… NORMAL CASE: Has a real callsign number
+    # ✅ NORMAL CASE: Has a real callsign number
     else:
         if first_is_fenz:
             # FENZ first: {FENZ-callsign} | {HHStJ} | {roblox}
             nickname_parts.append(f"{first_prefix}-{callsign}")
-            if second_prefix:  # ✅ ALLOW ALL HHStJ prefixes
+            # ✅ FIX: Allow all HHStJ prefixes (command and non-command)
+            if second_prefix:
                 nickname_parts.append(second_prefix)
         else:
             # HHStJ first: {HHStJ} | {FENZ-callsign} | {roblox}
@@ -1456,17 +1456,111 @@ class CallsignCog(commands.Cog):
         self.bloxlink_sync_interval = 86400  # 1 hour in seconds
         self.auto_sync_loop.start()
         self.cleanup_cache_loop.start()
+        self.db_ready = False
 
+    async def cog_load(self):
+        """
+        Called when the cog is loaded. Handles initialization tasks.
+        This is the modern replacement for the old on_cog_add pattern.
+        """
+        print("🔄 CallsignCog loading...")
+
+        # Wait for bot to be ready first
+        if not self.bot.is_ready():
+            print("⏳ Waiting for bot to be ready...")
+            await self.bot.wait_until_ready()
+
+        print("✅ Bot is ready")
+
+        # Wait for database with timeout
+        max_wait_time = 60  # 60 seconds
+        start_time = asyncio.get_event_loop().time()
+
+        while True:
+            # Check if database pool exists and is ready
+            if db.pool is not None:
+                try:
+                    # Test the connection with a simple query
+                    async with db.pool.acquire() as conn:
+                        await conn.fetchval('SELECT 1')
+
+                    print("✅ Database connection verified")
+                    self.db_ready = True
+                    break
+
+                except Exception as e:
+                    print(f"⚠️ Database connection test failed: {e}")
+
+            # Check timeout
+            elapsed = asyncio.get_event_loop().time() - start_time
+            if elapsed > max_wait_time:
+                print("❌ Database failed to connect within 60 seconds")
+                print("⚠️ COG LOADED WITHOUT DATABASE - Some features may not work!")
+                print("   - Auto-sync will not run")
+                print("   - Commands requiring database will fail")
+                print("   - Bot will continue to function for other features")
+                self.db_ready = False
+                break
+
+            print(f"⏳ Waiting for database connection... ({int(elapsed)}s/{max_wait_time}s)")
+            await asyncio.sleep(5)
+
+        # Start background tasks only if database is ready
+        if self.db_ready:
+            print("🚀 Starting background tasks...")
+
+            # Start auto-sync loop
+            if not self.auto_sync_loop.is_running():
+                self.auto_sync_loop.start()
+                print("   ✅ Auto-sync loop started")
+
+            # Start cache cleanup loop
+            if not self.cleanup_cache_loop.is_running():
+                self.cleanup_cache_loop.start()
+                print("   ✅ Cache cleanup loop started")
+
+            # Load initial data
+            try:
+                await self.reload_data()
+                print("   ✅ Initial data loaded")
+            except Exception as e:
+                print(f"   ⚠️ Error loading initial data: {e}")
+        else:
+            print("⚠️ Background tasks NOT started - database unavailable")
+
+        print("✅ CallsignCog loaded successfully")
+
+    def cog_unload(self):
+        """Stop all background tasks when cog is unloaded"""
+        print("🛑 Unloading CallsignCog...")
+
+        if self.auto_sync_loop.is_running():
+            self.auto_sync_loop.cancel()
+            print("   ✅ Auto-sync loop stopped")
+
+        if self.cleanup_cache_loop.is_running():
+            self.cleanup_cache_loop.cancel()
+            print("   ✅ Cache cleanup loop stopped")
+
+        print("✅ CallsignCog unloaded")
 
     def cog_unload(self):
         """Stop the auto-sync loop when cog is unloaded"""
         self.auto_sync_loop.cancel()
 
     async def reload_data(self):
-        async with db.pool.acquire() as conn:
-            self.active_watches = await conn.fetch("SELECT * FROM callsigns;")
-        print("<:Accepted:1426930333789585509> Reloaded callsigns cache")
+        """Reload data from database"""
+        if not self.db_ready:
+            print("⚠️ Cannot reload data - database not ready")
+            return
 
+        try:
+            async with db.pool.acquire() as conn:
+                self.active_watches = await conn.fetch("SELECT * FROM callsigns;")
+            print(f"✅ Reloaded {len(self.active_watches)} callsigns from database")
+        except Exception as e:
+            print(f"❌ Error reloading data: {e}")
+            raise
 
     @staticmethod
     def strip_shift_prefixes(nickname: str) -> str:
@@ -1771,8 +1865,10 @@ class CallsignCog(commands.Cog):
                                 current_fenz_prefix = prefix
                                 break
 
+                        # ✅ Get HHStJ prefix WITH preservation of stored shorthand
                         stored_hhstj_prefix = record['hhstj_prefix']
                         current_hhstj_prefix = get_hhstj_prefix_from_roles(member.roles, stored_hhstj_prefix)
+
 
                         # ✅ STEP 2: Detect and handle FENZ rank changes
                         db_fenz_prefix = record['fenz_prefix']
@@ -1881,9 +1977,9 @@ class CallsignCog(commands.Cog):
 
                         # ✅ STEP 3: NOW calculate nickname using UPDATED database values
                         expected_nickname = format_nickname(
-                            db_fenz_prefix,  # ✅ Use updated value
-                            db_callsign,  # ✅ Use updated value
-                            db_hhstj_prefix,  # ✅ Use updated value
+                            current_fenz_prefix,  # From roles
+                            record['callsign'],  # From database
+                            current_hhstj_prefix,  # From roles
                             record['roblox_username']
                         )
 
@@ -2158,10 +2254,13 @@ class CallsignCog(commands.Cog):
 
     @cleanup_cache_loop.before_loop
     async def before_cleanup_cache(self):
-        """Wait for bot to be ready before cleanup"""
-        await self.bot.wait_until_ready()
-        print("✅ Cache cleanup loop ready")
+        """Wait for bot and database to be ready before cleanup"""
+        if not self.db_ready:
+            print("⚠️ Cache cleanup skipped - database not ready")
+            self.cleanup_cache_loop.cancel()
+            return
 
+        await asyncio.sleep(1)
 
     async def _refresh_bloxlink_cache(self, guild: discord.Guild):
         """
@@ -2673,16 +2772,17 @@ class CallsignCog(commands.Cog):
 
     @auto_sync_loop.before_loop
     async def before_auto_sync(self):
-        """Wait for bot AND database to be ready before starting auto-sync"""
-        await self.bot.wait_until_ready()
+        """
+        This still runs before each loop iteration, but we've already
+        verified the database in cog_load(), so just do a simple check.
+        """
+        if not self.db_ready:
+            print("⚠️ Auto-sync skipped - database not ready")
+            self.auto_sync_loop.cancel()
+            return
 
-        # Wait for database connection to be established
-        import asyncio
-        while db.pool is None:
-            print("⏳ Auto-sync waiting for database connection...")
-            await asyncio.sleep(1)
-
-        print("<:Accepted:1426930333789585509> Auto-sync ready - database connected")
+        # Optional: Add a small delay to ensure everything is truly ready
+        await asyncio.sleep(1)
 
     async def search_callsign_database(self, query: str, search_type: str) -> list:
         async with db.pool.acquire() as conn:

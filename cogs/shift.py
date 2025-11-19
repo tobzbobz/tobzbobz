@@ -411,9 +411,27 @@ class ShiftManagementCog(commands.Cog):
 
     async def on_cog_load(self):
         """Run initialization tasks when cog loads"""
-        # Wait for bot to be ready
         await self.bot.wait_until_ready()
-        await ensure_database_connected()
+
+        # Wait for database with better error handling
+        max_wait_time = 60
+        start_time = asyncio.get_event_loop().time()
+
+        while True:
+            if await ensure_database_connected():
+                print("✅ Database ready")
+                break
+
+            elapsed = asyncio.get_event_loop().time() - start_time
+            if elapsed > max_wait_time:
+                print("❌ Database failed to connect within timeout")
+                # Don't raise - let bot continue but log warning
+                print("⚠️ COG LOADED WITHOUT DATABASE - Some features may not work!")
+                break
+
+            print(f"⏳ Waiting for database... ({int(elapsed)}s)")
+            await asyncio.sleep(5)
+
 
         # Start weekly reset task
         if not self.weekly_reset_task.is_running():

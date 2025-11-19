@@ -6,32 +6,120 @@ from typing import Optional, Dict, List, Any
 import json
 from datetime import datetime, timezone
 
+
 class Database:
     def __init__(self):
         self.pool: Optional[asyncpg.Pool] = None
         self.database_url = os.getenv('DATABASE_URL')
+        self._connection_lock = asyncio.Lock()
+        self._reconnect_attempts = 0
+        self._max_reconnect_attempts = 5
 
         if not self.database_url:
             print('<:Warn:1437771973970104471>  DATABASE_URL not set! Bot will not be able to save data.')
 
-    async def connect(self):
-        """Connect to the database"""
+    async def connect(self, max_retries: int = 5, retry_delay: float = 2.0):
+        """Connect to the database with retry logic"""
         if not self.database_url:
             print('<:Denied:1426930694633816248> Cannot connect: DATABASE_URL not set')
             return False
 
-        try:
-            self.pool = await asyncpg.create_pool(
-                self.database_url,
-                min_size=1,
-                max_size=10,
-                command_timeout=60
-            )
-            print('<:Accepted:1426930333789585509> Connected to Supabase database')
-            return True
-        except Exception as e:
-            print(f'<:Denied:1426930694633816248> Failed to connect to database: {e}')
+        async with self._connection_lock:
+            for attempt in range(1, max_retries + 1):
+                try:
+                    print(f"🔄 Database connection attempt {attempt}/{max_retries}...")
+
+                    self.pool = await asyncpg.create_pool(
+                        self.database_url,
+                        min_size=2,  # Keep 2 connections alive
+                        max_size=10,  # Max 10 connections
+                        max_queries=50000,  # Recycle connections
+                        max_inactive_connection_lifetime=300,  # 5 min idle timeout
+                        command_timeout=60,  # 60s query timeout
+                        timeout=30,  # 30s connection timeout
+                        # Connection health checks
+                        setup=self._setup_connection,
+                        init=self._init_connection
+                    )
+
+                    # Test the connection
+                    async with self.pool.acquire() as conn:
+                        await conn.fetchval('SELECT 1')
+
+                    print('<:Accepted:1426930333789585509> Connected to Supabase database')
+                    self._reconnect_attempts = 0
+                    return True
+
+                except asyncpg.exceptions.PostgresError as e:
+                    print(f'⚠️ PostgreSQL error on attempt {attempt}/{max_retries}: {e}')
+                    if attempt < max_retries:
+                        wait_time = retry_delay * attempt
+                        print(f'⏳ Retrying in {wait_time}s...')
+                        await asyncio.sleep(wait_time)
+                    else:
+                        print(f'<:Denied:1426930694633816248> Failed to connect after {max_retries} attempts')
+                        return False
+
+                except Exception as e:
+                    print(f'<:Denied:1426930694633816248> Unexpected error on attempt {attempt}/{max_retries}: {e}')
+                    if attempt < max_retries:
+                        wait_time = retry_delay * attempt
+                        print(f'⏳ Retrying in {wait_time}s...')
+                        await asyncio.sleep(wait_time)
+                    else:
+                        return False
+
             return False
+
+    async def _setup_connection(self, connection):
+        """Setup function called for each new connection"""
+        # Set connection parameters
+        await connection.execute('SET timezone TO "UTC"')
+
+    async def _init_connection(self, connection):
+        """Init function called for each new connection"""
+        # You can add custom type codecs here if needed
+        pass
+
+    async def ensure_connected(self, max_retries: int = 3) -> bool:
+        """Ensure database connection is alive, reconnect if needed"""
+        if not self.pool:
+            print("⚠️ No database pool, attempting to connect...")
+            return await self.connect()
+
+        try:
+            # Quick health check
+            async with asyncio.timeout(5):
+                async with self.pool.acquire() as conn:
+                    await conn.fetchval('SELECT 1')
+            return True
+        except asyncio.TimeoutError:
+            print("⚠️ Database health check timed out")
+            return await self._reconnect(max_retries)
+        except Exception as e:
+            print(f"⚠️ Database health check failed: {e}")
+            return await self._reconnect(max_retries)
+
+    async def _reconnect(self, max_retries: int = 3) -> bool:
+        """Attempt to reconnect to database"""
+        self._reconnect_attempts += 1
+
+        if self._reconnect_attempts > self._max_reconnect_attempts:
+            print("🚫 Max reconnection attempts exceeded, giving up")
+            return False
+
+        print(f"🔄 Attempting to reconnect (attempt {self._reconnect_attempts})...")
+
+        # Close existing pool
+        if self.pool:
+            try:
+                await self.pool.close()
+            except:
+                pass
+            self.pool = None
+
+        # Try to reconnect
+        return await self.connect(max_retries=max_retries, retry_delay=1.5)
 
     async def close(self):
         """Close database connection"""
@@ -39,21 +127,57 @@ class Database:
             await self.pool.close()
             print('📊 Database connection closed')
 
+    # === SAFE DATABASE OPERATION WRAPPER ===
+    async def _safe_execute(self, operation, *args, max_retries: int = 3):
+        """Execute database operation with automatic retry on connection failure"""
+        for attempt in range(1, max_retries + 1):
+            try:
+                # Ensure we're connected
+                if not await self.ensure_connected():
+                    raise Exception("Database connection unavailable")
+
+                return await operation(*args)
+
+            except asyncpg.exceptions.ConnectionDoesNotExistError:
+                print(f"⚠️ Connection lost during operation (attempt {attempt}/{max_retries})")
+                if attempt < max_retries:
+                    await asyncio.sleep(1 * attempt)
+                    continue
+                raise
+
+            except asyncpg.exceptions.InterfaceError as e:
+                print(f"⚠️ Interface error (attempt {attempt}/{max_retries}): {e}")
+                if attempt < max_retries:
+                    await self._reconnect()
+                    await asyncio.sleep(1 * attempt)
+                    continue
+                raise
+
+            except Exception as e:
+                # Don't retry on other errors (e.g., constraint violations)
+                raise
+
     # === RAW SQL HELPERS ===
     async def execute(self, query: str, *params):
-        """Execute a raw SQL query"""
-        async with self.pool.acquire() as conn:
-            return await conn.execute(query, *params)
+        """Execute a raw SQL query with retry logic"""
+        async def _execute():
+            async with self.pool.acquire() as conn:
+                return await conn.execute(query, *params)
+        return await self._safe_execute(_execute)
 
     async def fetch(self, query: str, *params):
-        """Fetch multiple rows"""
-        async with self.pool.acquire() as conn:
-            return await conn.fetch(query, *params)
+        """Fetch multiple rows with retry logic"""
+        async def _fetch():
+            async with self.pool.acquire() as conn:
+                return await conn.fetch(query, *params)
+        return await self._safe_execute(_fetch)
 
     async def fetchrow(self, query: str, *params):
-        """Fetch a single row"""
-        async with self.pool.acquire() as conn:
-            return await conn.fetchrow(query, *params)
+        """Fetch a single row with retry logic"""
+        async def _fetchrow():
+            async with self.pool.acquire() as conn:
+                return await conn.fetchrow(query, *params)
+        return await self._safe_execute(_fetchrow)
 
     # === CALLSIGNS ===
     async def set_callsign(self, guild_id: int, user_id: int, callsign: str, set_by: int):
@@ -858,8 +982,23 @@ async def save_completed_watches(watches: dict):
     pass
 
 
-async def ensure_database_connected():
+async def ensure_database_connected(max_retries: int = 5):
     """Ensure database is connected (call this on bot startup)"""
     if not db.pool:
-        await db.connect()
-    return db.pool is not None
+        print("🔄 Database not connected, attempting initial connection...")
+        success = await db.connect(max_retries=max_retries)
+        if not success:
+            print("❌ CRITICAL: Could not establish database connection!")
+            return False
+
+    # Verify connection is actually working
+    try:
+        async with asyncio.timeout(10):
+            async with db.pool.acquire() as conn:
+                await conn.fetchval('SELECT 1')
+        print("✅ Database connection verified")
+        return True
+    except Exception as e:
+        print(f"⚠️ Database verification failed: {e}")
+        print("🔄 Attempting reconnection...")
+        return await db.connect(max_retries=max_retries)
