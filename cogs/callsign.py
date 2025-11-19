@@ -1758,65 +1758,147 @@ class CallsignCog(commands.Cog):
                 # Process each callsign for nickname updates
                 # Process each callsign for nickname updates
                 for record in callsigns:
-                    member = guild.get_member(record['discord_user_id'])
-                    if not member:
-                        continue
+                    try:
+                        record = dict(record)
+                        member = guild.get_member(record['discord_user_id'])
+                        if not member:
+                            continue
 
-                    # Get current rank information from ROLES (not database)
-                    current_fenz_prefix = None
-                    for role_id, (rank_name, prefix) in FENZ_RANK_MAP.items():
-                        if any(role.id == role_id for role in member.roles):
-                            current_fenz_prefix = prefix
-                            break
+                        # ✅ STEP 1: Get current ranks from ROLES
+                        current_fenz_prefix = None
+                        for role_id, (rank_name, prefix) in FENZ_RANK_MAP.items():
+                            if any(role.id == role_id for role in member.roles):
+                                current_fenz_prefix = prefix
+                                break
 
-                    # ✅ CRITICAL: Pass stored shorthand to preserve user's choice
-                    stored_hhstj_prefix = record['hhstj_prefix']
-                    current_hhstj_prefix = get_hhstj_prefix_from_roles(member.roles, stored_hhstj_prefix)
+                        stored_hhstj_prefix = record['hhstj_prefix']
+                        current_hhstj_prefix = get_hhstj_prefix_from_roles(member.roles, stored_hhstj_prefix)
 
-                    current_callsign = record['callsign']
-                    roblox_username = record['roblox_username']
+                        # ✅ STEP 2: Detect and handle FENZ rank changes
+                        db_fenz_prefix = record['fenz_prefix']
+                        db_callsign = record['callsign']
+                        db_hhstj_prefix = record['hhstj_prefix']
 
-                    # ✅ Calculate expected nickname using priority system
-                    expected_nickname = format_nickname(
-                        current_fenz_prefix or record['fenz_prefix'],
-                        current_callsign,
-                        current_hhstj_prefix,  # Already has shorthand preserved
-                        roblox_username
-                    )
+                        rank_changed = False
 
-                    # Get current nickname (strip shift prefixes)
-                    current_nick = strip_shift_prefixes(member.nick) if member.nick else member.name
+                        # FENZ rank change detection
+                        if current_fenz_prefix and current_fenz_prefix != db_fenz_prefix:
+                            # Rank changed!
+                            if db_callsign not in ["Not Assigned", "BLANK"]:
+                                # Check for callsign conflict
+                                existing = await check_callsign_exists(db_callsign, current_fenz_prefix)
+                                if existing and existing['discord_user_id'] != member.id:
+                                    # Conflict - reset to Not Assigned
+                                    async with db.pool.acquire() as conn:
+                                        await conn.execute(
+                                            'UPDATE callsigns SET callsign = $1, fenz_prefix = $2 WHERE discord_user_id = $3',
+                                            "Not Assigned", current_fenz_prefix, member.id
+                                        )
 
-                    # Update if different
-                    if current_nick != expected_nickname:
-                        try:
-                            # Preserve shift prefix if exists
-                            shift_prefix = ""
-                            if member.nick:
-                                for prefix in ["DUTY | ", "BRK | ", "LOA | "]:
-                                    if member.nick.startswith(prefix):
-                                        shift_prefix = prefix
-                                        break
+                                    stats['callsigns_reset'].append({
+                                        'member': member,
+                                        'old_callsign': f"{db_fenz_prefix}-{db_callsign}" if db_fenz_prefix else db_callsign,
+                                        'new_prefix': current_fenz_prefix,
+                                        'reason': f'Rank changed but callsign conflicts'
+                                    })
 
-                            final_nickname = shift_prefix + expected_nickname
+                                    db_callsign = "Not Assigned"
+                                    db_fenz_prefix = current_fenz_prefix
+                                    rank_changed = True
+                                    stats['rank_updates'] += 1
+                                else:
+                                    # No conflict - just update prefix
+                                    async with db.pool.acquire() as conn:
+                                        await conn.execute(
+                                            'UPDATE callsigns SET fenz_prefix = $1 WHERE discord_user_id = $2',
+                                            current_fenz_prefix, member.id
+                                        )
 
-                            success, final_nick = await safe_edit_nickname(member, final_nickname)
+                                    db_fenz_prefix = current_fenz_prefix
+                                    rank_changed = True
+                                    stats['rank_updates'] += 1
+                            else:
+                                # Not Assigned or BLANK - just update prefix
+                                async with db.pool.acquire() as conn:
+                                    await conn.execute(
+                                        'UPDATE callsigns SET fenz_prefix = $1 WHERE discord_user_id = $2',
+                                        current_fenz_prefix, member.id
+                                    )
 
-                            if success:
-                                stats['nickname_changes'].append({
+                                db_fenz_prefix = current_fenz_prefix
+                                rank_changed = True
+                                stats['rank_updates'] += 1
+
+                        # HHStJ rank change detection
+                        if current_hhstj_prefix != db_hhstj_prefix:
+                            # Check if this is just shorthand preference vs actual rank change
+                            needs_update = True
+
+                            if current_hhstj_prefix and '-' in current_hhstj_prefix:
+                                valid_versions = get_hhstj_shortened_versions(current_hhstj_prefix)
+                                if db_hhstj_prefix in valid_versions:
+                                    needs_update = False
+                                    current_hhstj_prefix = db_hhstj_prefix  # Keep stored shorthand
+
+                            if needs_update:
+                                async with db.pool.acquire() as conn:
+                                    await conn.execute(
+                                        'UPDATE callsigns SET hhstj_prefix = $1 WHERE discord_user_id = $2',
+                                        current_hhstj_prefix or '', member.id
+                                    )
+
+                                db_hhstj_prefix = current_hhstj_prefix
+                                rank_changed = True
+                                stats['rank_updates'] += 1
+
+                        # ✅ STEP 3: NOW calculate nickname using UPDATED database values
+                        expected_nickname = format_nickname(
+                            db_fenz_prefix,  # ✅ Use updated value
+                            db_callsign,  # ✅ Use updated value
+                            db_hhstj_prefix,  # ✅ Use updated value
+                            record['roblox_username']
+                        )
+
+                        # ✅ STEP 4: Update nickname if different
+                        current_nick = strip_shift_prefixes(member.nick) if member.nick else member.name
+
+                        if current_nick != expected_nickname:
+                            try:
+                                # Preserve shift prefix if exists
+                                shift_prefix = ""
+                                if member.nick:
+                                    for prefix in ["DUTY | ", "BRK | ", "LOA | "]:
+                                        if member.nick.startswith(prefix):
+                                            shift_prefix = prefix
+                                            break
+
+                                final_nickname = shift_prefix + expected_nickname
+
+                                success, final_nick = await safe_edit_nickname(member, final_nickname)
+
+                                if success:
+                                    stats['nickname_changes'].append({
+                                        'member': member,
+                                        'old': current_nick,
+                                        'new': expected_nickname
+                                    })
+                                    stats['nickname_updates'] += 1
+                            except discord.Forbidden:
+                                stats['permission_errors'].append(member)
+                            except Exception as e:
+                                stats['errors'].append({
                                     'member': member,
-                                    'old': current_nick,
-                                    'new': expected_nickname
+                                    'username': str(member),
+                                    'error': str(e)
                                 })
-                                stats['nickname_updates'] += 1
-                        except discord.Forbidden:
-                            stats['permission_errors'].append(member)
-                        except Exception as e:
-                            stats['errors'].append({
-                                'member': member,
-                                'username': str(member),
-                                'error': str(e)
-                            })
+
+                    except Exception as e:
+                        print(f"Error processing {record.get('discord_username', 'Unknown')}: {e}")
+                        stats['errors'].append({
+                            'member': member if 'member' in locals() else None,
+                            'username': record.get('discord_username', 'Unknown'),
+                            'error': str(e)
+                        })
 
                 # Check each callsign in database (KEEP ALL EXISTING CODE)
                 # ✅ Process all callsigns using shared batch logic (error recovery path)
