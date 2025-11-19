@@ -426,4 +426,4 @@ try:
     client.run(token, log_handler=handler, log_level=logging.DEBUG)
 except Exception as e:
     print(f'Fatal error: {e}')
-    traceback.print_exc()`
+    traceback.print_exc()
