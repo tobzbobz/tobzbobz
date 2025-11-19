@@ -112,9 +112,6 @@ async def before_monitor():
     await bot.wait_until_ready()
 
 
-# Start the task
-monitor_database_health.start()
-
 class Client(commands.Bot):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -210,6 +207,9 @@ class Client(commands.Bot):
         connected = await ensure_database_connected()
         if not connected:
             print('⚠️ WARNING: Database connection failed! Bot may not work correctly.')
+
+        # Start database health monitoring
+        monitor_database_health.start()  # ← ADD IT HERE
 
         # Load all cogs automatically
         await self.load_all_cogs()
