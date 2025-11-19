@@ -1802,6 +1802,13 @@ class CallsignCog(commands.Cog):
                                         'reason': f'Rank changed but callsign conflicts'
                                     })
 
+                                    stats['rank_changes'].append({
+                                        'member': member,
+                                        'type': 'FENZ',
+                                        'old_rank': db_fenz_prefix,
+                                        'new_rank': current_fenz_prefix
+                                    })
+
                                     db_callsign = "Not Assigned"
                                     db_fenz_prefix = current_fenz_prefix
                                     rank_changed = True
@@ -1814,6 +1821,13 @@ class CallsignCog(commands.Cog):
                                             current_fenz_prefix, member.id
                                         )
 
+                                    stats['rank_changes'].append({
+                                        'member': member,
+                                        'type': 'FENZ',
+                                        'old_rank': db_fenz_prefix,
+                                        'new_rank': current_fenz_prefix
+                                    })
+
                                     db_fenz_prefix = current_fenz_prefix
                                     rank_changed = True
                                     stats['rank_updates'] += 1
@@ -1824,6 +1838,13 @@ class CallsignCog(commands.Cog):
                                         'UPDATE callsigns SET fenz_prefix = $1 WHERE discord_user_id = $2',
                                         current_fenz_prefix, member.id
                                     )
+
+                                stats['rank_changes'].append({
+                                    'member': member,
+                                    'type': 'FENZ',
+                                    'old_rank': db_fenz_prefix,
+                                    'new_rank': current_fenz_prefix
+                                })
 
                                 db_fenz_prefix = current_fenz_prefix
                                 rank_changed = True
@@ -1846,6 +1867,13 @@ class CallsignCog(commands.Cog):
                                         'UPDATE callsigns SET hhstj_prefix = $1 WHERE discord_user_id = $2',
                                         current_hhstj_prefix or '', member.id
                                     )
+
+                                stats['rank_changes'].append({
+                                    'member': member,
+                                    'type': 'HHStJ',
+                                    'old_rank': db_hhstj_prefix,
+                                    'new_rank': current_hhstj_prefix
+                                })
 
                                 db_hhstj_prefix = current_hhstj_prefix
                                 rank_changed = True
