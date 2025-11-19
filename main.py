@@ -27,13 +27,52 @@ logging.basicConfig(
 )
 
 # Reduce noise from libraries
-logging.getLogger('discord').setLevel(logging.WARNING)
-logging.getLogger('discord.http').setLevel(logging.WARNING)
-logging.getLogger('discord.gateway').setLevel(logging.WARNING)
+logging.getLogger('discord').setLevel(logging.ERROR)
+logging.getLogger('discord.http').setLevel(logging.ERROR)
+logging.getLogger('discord.gateway').setLevel(logging.INFO)
 logging.getLogger('urllib3').setLevel(logging.WARNING)
 logging.getLogger('asyncio').setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
+
+
+# ========================================
+# UTILITY FUNCTIONS
+# ========================================
+async def safe_bulk_delete(channel, messages, delay=0.5):
+    """Safely delete messages with rate limit handling"""
+    import asyncio
+    deleted = 0
+    failed = 0
+
+    for message in messages:
+        try:
+            await message.delete()
+            deleted += 1
+            if delay > 0:
+                await asyncio.sleep(delay)
+        except discord.NotFound:
+            # Message already deleted
+            pass
+        except discord.Forbidden:
+            logger.warning(f"Missing permissions to delete message {message.id}")
+            failed += 1
+        except discord.HTTPException as e:
+            if e.status == 429:
+                # Rate limited - wait and retry
+                retry_after = e.retry_after if hasattr(e, 'retry_after') else 1.0
+                logger.warning(f"Rate limited, waiting {retry_after}s")
+                await asyncio.sleep(retry_after)
+                try:
+                    await message.delete()
+                    deleted += 1
+                except:
+                    failed += 1
+            else:
+                failed += 1
+
+    return deleted, failed
+
 
 # ========================================
 # CONFIGURATION
@@ -366,9 +405,9 @@ async def force_sync(ctx):
             sync_results.append(f"{guild_id}: {len(synced)} commands")
 
         result_text = "\n".join(sync_results)
-        await ctx.send(f"✅ Synced commands:\n```{result_text}```")
+        await ctx.send(f"<:Accepted:1426930333789585509> Synced commands:\n```{result_text}```")
     except Exception as e:
-        await ctx.send(f"❌ Sync failed: {e}")
+        await ctx.send(f"<:Denied:1426930694633816248> Sync failed: {e}")
         traceback.print_exc()
 
 
@@ -380,8 +419,8 @@ async def list_cogs(ctx):
     failed = "\n".join([f"• {cog}" for cog in client.failed_cogs]) or "None"
 
     embed = discord.Embed(title="Loaded Cogs", color=discord.Color.blue())
-    embed.add_field(name="✅ Loaded", value=loaded, inline=False)
-    embed.add_field(name="❌ Failed", value=failed, inline=False)
+    embed.add_field(name="<:Accepted:1426930333789585509> Loaded", value=loaded, inline=False)
+    embed.add_field(name="<:Denied:1426930694633816248> Failed", value=failed, inline=False)
     await ctx.send(embed=embed)
 
 

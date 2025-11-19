@@ -9,6 +9,8 @@ import asyncio
 import datetime
 from datetime import timezone
 import json
+import logging
+logger = logging.getLogger(__name__)
 
 # Import database
 from database import db, load_watches, load_scheduled_votes, load_completed_watches
@@ -117,6 +119,113 @@ def get_watch_info(station: str, colour: str):
 
 # Initialize as empty dict - will be loaded in cog __init__
 active_watches = {}
+
+
+async def safe_delete_messages(channel: discord.TextChannel, limit: int = 100,
+                               skip_stats_embed: bool = True, delay: float = 0.3):
+    """
+    Safely delete messages with rate limit handling
+
+    Args:
+        channel: The channel to delete messages from
+        limit: Maximum number of messages to check (None = all)
+        skip_stats_embed: Whether to preserve the watch statistics embed
+        delay: Delay between deletions in seconds
+
+    Returns:
+        Tuple of (deleted_count, skipped_count, failed_count)
+    """
+    deleted = 0
+    skipped = 0
+    failed = 0
+
+    try:
+        async for message in channel.history(limit=limit):
+            try:
+                # Skip stats embed if requested
+                if skip_stats_embed and message.author.bot and message.embeds:
+                    if any(embed.title and ("Watch Statistics" in embed.title or "FENZ Watches" in embed.title)
+                           for embed in message.embeds):
+                        skipped += 1
+                        continue
+
+                await message.delete()
+                deleted += 1
+
+                # Add delay to avoid rate limits
+                if delay > 0:
+                    await asyncio.sleep(delay)
+
+            except discord.NotFound:
+                # Message already deleted
+                skipped += 1
+            except discord.Forbidden:
+                logger.warning(f"Missing permissions to delete message {message.id}")
+                failed += 1
+            except discord.HTTPException as e:
+                if e.status == 429:
+                    # Rate limited - wait and retry once
+                    retry_after = getattr(e, 'retry_after', 1.0)
+                    logger.warning(f"Rate limited, waiting {retry_after}s")
+                    await asyncio.sleep(retry_after)
+                    try:
+                        await message.delete()
+                        deleted += 1
+                    except:
+                        failed += 1
+                else:
+                    logger.error(f"HTTP error deleting message {message.id}: {e}")
+                    failed += 1
+
+    except Exception as e:
+        logger.error(f"Error in safe_delete_messages: {e}")
+
+    logger.info(f"Channel cleanup: {deleted} deleted, {skipped} skipped, {failed} failed")
+    return deleted, skipped, failed
+
+
+async def safe_delete_related_messages(channel: discord.TextChannel, message_ids: list):
+    """
+    Safely delete a list of specific message IDs
+
+    Args:
+        channel: The channel containing the messages
+        message_ids: List of message IDs to delete
+
+    Returns:
+        Tuple of (deleted_count, failed_count)
+    """
+    deleted = 0
+    failed = 0
+
+    for msg_id in message_ids:
+        try:
+            message = await channel.fetch_message(msg_id)
+            await message.delete()
+            deleted += 1
+            await asyncio.sleep(0.3)  # Rate limit protection
+        except discord.NotFound:
+            # Already deleted
+            pass
+        except discord.HTTPException as e:
+            if e.status == 429:
+                retry_after = getattr(e, 'retry_after', 1.0)
+                logger.warning(f"Rate limited, waiting {retry_after}s")
+                await asyncio.sleep(retry_after)
+                try:
+                    message = await channel.fetch_message(msg_id)
+                    await message.delete()
+                    deleted += 1
+                except:
+                    failed += 1
+            else:
+                failed += 1
+        except Exception as e:
+            logger.error(f"Error deleting message {msg_id}: {e}")
+            failed += 1
+
+    return deleted, failed
+
 
 
 # Vote button and view
@@ -926,23 +1035,12 @@ class WatchCog(commands.Cog):
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
                 return
 
-            try:
-                deleted_count = 0
-                async for message in watch_channel.history(limit=100):
-                    try:
-                        # Skip ONLY the persistent stats embed
-                        if message.author == self.bot.user and message.embeds:
-                            if any(embed.title and ("Watch Statistics" in embed.title or "FENZ Watches" in embed.title)
-                                   for embed in message.embeds):
-                                continue
-                        await message.delete()
-                        deleted_count += 1
-                        await asyncio.sleep(0.1)  # Small delay to avoid rate limits
-                    except (discord.Forbidden, discord.NotFound):
-                        pass
-                print(f'Cleaned {deleted_count} messages before watch start')
-            except Exception as e:
-                print(f'Error cleaning channel: {e}')
+            deleted, skipped, failed = await safe_delete_messages(
+                watch_channel,
+                limit=100,
+                skip_stats_embed=True,
+                delay=0.3
+            )
 
             # Delete only previous watches for the SAME station
             try:
@@ -1260,24 +1358,12 @@ class WatchCog(commands.Cog):
                 return
 
             # DELETE ALL MESSAGES (except stats embed) - Fixed logic
-            try:
-                deleted_count = 0
-                async for message in channel.history(limit=None):  # Changed from limit=100 to limit=None
-                    try:
-                        # Skip ONLY the persistent stats embed
-                        if message.author.bot and message.embeds:
-                            if any(embed.title and ("Watch Statistics" in embed.title or "FENZ Watches" in embed.title)
-                                   for embed in message.embeds):
-                                continue
-
-                        await message.delete()
-                        deleted_count += 1
-                        await asyncio.sleep(0.2)  # Small delay to avoid rate limits
-                    except (discord.Forbidden, discord.NotFound):
-                        pass
-                print(f'Deleted {deleted_count} messages from watch channel')
-            except Exception as e:
-                print(f'Error deleting messages: {e}')
+            deleted, skipped, failed = await safe_delete_messages(
+                channel,
+                limit=None,  # Delete all messages
+                skip_stats_embed=True,
+                delay=0.3
+            )
 
             # CREATE NEW ENDED EMBED
             colour_map = {
@@ -1765,22 +1851,12 @@ class WatchCog(commands.Cog):
                 print(f"Channel {vote_data['channel_id']} not found")
                 return
 
-            # CLEAN UP CHANNEL BEFORE SENDING VOTE
-            try:
-                deleted_count = 0
-                async for message in watch_channel.history(limit=100):
-                    try:
-                        # Skip the persistent stats embed
-                        if message.author.bot and message.embeds:
-                            if any(embed.title and ("Watch Statistics" in embed.title or "FENZ Watches" in embed.title) for embed in message.embeds):
-                                continue
-                        await message.delete()
-                        deleted_count += 1
-                    except (discord.Forbidden, discord.NotFound):
-                        pass
-                print(f'Cleaned {deleted_count} messages before vote')
-            except Exception as e:
-                print(f'Error cleaning channel: {e}')
+            deleted, skipped, failed = await safe_delete_messages(
+                watch_channel,
+                limit=100,
+                skip_stats_embed=True,
+                delay=0.3
+            )
 
             colour_map = {
                 'Yellow': discord.Colour.gold(),
@@ -2329,16 +2405,11 @@ class WatchCog(commands.Cog):
                     print(f'Error deleting original watch message: {e}')
 
                 related_messages = watch_data.get('related_messages', [])
-                for msg_id in related_messages:
-                    if msg_id != int(watch):  # Don't try to delete the main message again
-                        try:
-                            boost_msg = await channel.fetch_message(msg_id)
-                            await boost_msg.delete()
-                            print(f'Deleted boost message {msg_id}')
-                        except (discord.NotFound, discord.Forbidden):
-                            pass
-                        except Exception as e:
-                            print(f'Error deleting boost message {msg_id}: {e}')
+                msg_ids_to_delete = [mid for mid in related_messages if mid != int(watch)]
+                if msg_ids_to_delete:
+                    deleted, failed = await safe_delete_related_messages(channel, msg_ids_to_delete)
+                    logger.info(f"Deleted {deleted} related messages, {failed} failed")
+
 
                 embed = discord.Embed(title=f'{final_colour} Watch Ongoing', colour=embed_colour)
                 embed.add_field(name='Station', value=f'`{final_station}`', inline=True)
