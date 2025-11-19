@@ -717,6 +717,6 @@ class TheoryResultModal(discord.ui.Modal, title="Theory Test Notes"):
 
 
 async def setup(bot):
-    await bot.add_cog(StationOfficerCog(bot))
+    cog = StationOfficerCog(bot)
     await cog.cog_load()
     await bot.add_cog(cog)
