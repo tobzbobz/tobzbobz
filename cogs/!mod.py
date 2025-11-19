@@ -1117,26 +1117,41 @@ def has_mod_role():
 class ModCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.db_ready = False
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Verify database connection when bot is ready"""
+        if self.db_ready:
+            return
+
+        # Wait for database with short timeout
+        max_wait = 30
+        start_time = asyncio.get_event_loop().time()
+
+        while True:
+            if db.pool is not None:
+                try:
+                    async with db.pool.acquire() as conn:
+                        await conn.fetchval('SELECT 1')
+                    print("✅ ModCog: Database connection verified")
+                    self.db_ready = True
+                    break
+                except Exception as e:
+                    print(f"⚠️ ModCog: Database test failed: {e}")
+
+            elapsed = asyncio.get_event_loop().time() - start_time
+            if elapsed > max_wait:
+                print("⚠️ ModCog: Database not ready after 30s")
+                break
+
+            await asyncio.sleep(2)
 
     async def reset_user_infractions(self, guild_id: int, user_id: int):
         """Reset all warning/kick counters for a user when they get banned"""
-        # Mark all previous infractions as archived
-        logs = await db.get_recent_logs(
-            guild_id=guild_id,
-            user_id=user_id,
-            limit=1000  # Get all logs
-        )
-
-        for log in logs:
-            if log.get('action') in ['kick', 'educational_note']:
-                # Update the log to mark as archived
-                await db.execute(
-                    '''UPDATE audit_logs
-                       SET details = details ||
-                                     '{"archived": true, "archived_reason": "User was banned - infractions reset"}'::jsonb
-                       WHERE id = $1''',
-                    log['id']
-                )
+        if not self.db_ready:
+            print("⚠️ Database not ready - cannot reset infractions")
+            return
 
     @commands.command(name="mod")
     @has_mod_role()
