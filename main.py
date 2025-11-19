@@ -54,20 +54,32 @@ async def health_check(request):
     """Health check endpoint"""
     # Check database connection
     db_status = "connected" if db.pool else "disconnected"
-    return web.Response(text=f"Bot is alive! Database: {db_status}")
+
+    # Get bot status
+    bot_status = "online" if client.is_ready() else "starting"
+
+    return web.Response(
+        text=f"Bot Status: {bot_status}\nDatabase: {db_status}\nTimestamp: {datetime.utcnow().isoformat()}",
+        content_type="text/plain"
+    )
 
 
 async def start_web_server():
     """Start web server for health checks"""
     app = web.Application()
     app.router.add_get('/', health_check)
+    app.router.add_get('/health', health_check)
     app.router.add_get('/logs', log_view)
 
     runner = web.AppRunner(app)
     await runner.setup()
+
+    # Bind to 0.0.0.0 to accept connections from outside
     site = web.TCPSite(runner, '0.0.0.0', 8080)
     await site.start()
     print('🌐 Health server started on port 8080')
+    print('   Access at: http://0.0.0.0:8080/health')
+
 
 async def log_view(request):
     page = int(request.query.get('page', 1))
@@ -209,10 +221,12 @@ class Client(commands.Bot):
             print('⚠️ WARNING: Database connection failed! Bot may not work correctly.')
 
         # Start database health monitoring
-        monitor_database_health.start()  # ← ADD IT HERE
+        monitor_database_health.start()
 
         # Load all cogs automatically
         await self.load_all_cogs()
+
+        asyncio.create_task(start_web_server())
 
         # Build guild-specific command mapping
         guild_commands = {}
