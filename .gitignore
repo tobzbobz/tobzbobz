@@ -35,6 +35,7 @@ Thumbs.db
 
 # x-help Cog
 x-help.py
+health.txt
 
 # Bot-specific
 *.db

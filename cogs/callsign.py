@@ -1452,78 +1452,6 @@ class CallsignCog(commands.Cog):
         self.cleanup_cache_loop.start()
         self.db_ready = False
 
-    async def cog_load(self):
-        """
-        Called when the cog is loaded. Handles initialization tasks.
-        This is the modern replacement for the old on_cog_add pattern.
-        """
-        print("🔄 CallsignCog loading...")
-
-        # Wait for bot to be ready first
-        if not self.bot.is_ready():
-            print("⏳ Waiting for bot to be ready...")
-            await self.bot.wait_until_ready()
-
-        print("✅ Bot is ready")
-
-        # Wait for database with timeout
-        max_wait_time = 60  # 60 seconds
-        start_time = asyncio.get_event_loop().time()
-
-        while True:
-            # Check if database pool exists and is ready
-            if db.pool is not None:
-                try:
-                    # Test the connection with a simple query
-                    async with db.pool.acquire() as conn:
-                        await conn.fetchval('SELECT 1')
-
-                    print("✅ Database connection verified")
-                    self.db_ready = True
-                    break
-
-                except Exception as e:
-                    print(f"⚠️ Database connection test failed: {e}")
-
-            # Check timeout
-            elapsed = asyncio.get_event_loop().time() - start_time
-            if elapsed > max_wait_time:
-                print("❌ Database failed to connect within 60 seconds")
-                print("⚠️ COG LOADED WITHOUT DATABASE - Some features may not work!")
-                print("   - Auto-sync will not run")
-                print("   - Commands requiring database will fail")
-                print("   - Bot will continue to function for other features")
-                self.db_ready = False
-                break
-
-            print(f"⏳ Waiting for database connection... ({int(elapsed)}s/{max_wait_time}s)")
-            await asyncio.sleep(5)
-
-        # Start background tasks only if database is ready
-        if self.db_ready:
-            print("🚀 Starting background tasks...")
-
-            # Start auto-sync loop
-            if not self.auto_sync_loop.is_running():
-                self.auto_sync_loop.start()
-                print("   ✅ Auto-sync loop started")
-
-            # Start cache cleanup loop
-            if not self.cleanup_cache_loop.is_running():
-                self.cleanup_cache_loop.start()
-                print("   ✅ Cache cleanup loop started")
-
-            # Load initial data
-            try:
-                await self.reload_data()
-                print("   ✅ Initial data loaded")
-            except Exception as e:
-                print(f"   ⚠️ Error loading initial data: {e}")
-        else:
-            print("⚠️ Background tasks NOT started - database unavailable")
-
-        print("✅ CallsignCog loaded successfully")
-
     def cog_unload(self):
         """Stop all background tasks when cog is unloaded"""
         print("🛑 Unloading CallsignCog...")
@@ -1538,9 +1466,61 @@ class CallsignCog(commands.Cog):
 
         print("✅ CallsignCog unloaded")
 
-    def cog_unload(self):
-        """Stop the auto-sync loop when cog is unloaded"""
-        self.auto_sync_loop.cancel()
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Called when the bot is ready - initialize database-dependent features"""
+        if self.db_ready:
+            return  # Already initialized
+
+        print("🔄 CallsignCog initializing...")
+
+        # Wait for database with timeout
+        max_wait_time = 60
+        start_time = asyncio.get_event_loop().time()
+
+        while True:
+            if db.pool is not None:
+                try:
+                    async with db.pool.acquire() as conn:
+                        await conn.fetchval('SELECT 1')
+
+                    print("✅ Database connection verified")
+                    self.db_ready = True
+                    break
+                except Exception as e:
+                    print(f"⚠️ Database connection test failed: {e}")
+
+            elapsed = asyncio.get_event_loop().time() - start_time
+            if elapsed > max_wait_time:
+                print("❌ Database failed to connect within 60 seconds")
+                print("⚠️ COG LOADED WITHOUT DATABASE - Some features may not work!")
+                self.db_ready = False
+                return
+
+            print(f"⏳ Waiting for database connection... ({int(elapsed)}s/{max_wait_time}s)")
+            await asyncio.sleep(5)
+
+        # Start background tasks only if database is ready
+        if self.db_ready:
+            print("🚀 Starting background tasks...")
+
+            if not self.auto_sync_loop.is_running():
+                self.auto_sync_loop.start()
+                print("   ✅ Auto-sync loop started")
+
+            if not self.cleanup_cache_loop.is_running():
+                self.cleanup_cache_loop.start()
+                print("   ✅ Cache cleanup loop started")
+
+            try:
+                await self.reload_data()
+                print("   ✅ Initial data loaded")
+            except Exception as e:
+                print(f"   ⚠️ Error loading initial data: {e}")
+        else:
+            print("⚠️ Background tasks NOT started - database unavailable")
+
+        print("✅ CallsignCog ready")
 
     async def reload_data(self):
         """Reload data from database"""

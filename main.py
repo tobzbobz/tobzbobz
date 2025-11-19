@@ -355,7 +355,7 @@ class Client(commands.Bot):
 # Create bot instance
 # ========================================
 handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
-intents = discord.Intents.default()
+intents = discord.Intents.all()
 intents.message_content = True
 intents.members = True
 intents.guilds = True
@@ -408,6 +408,7 @@ async def list_cogs(ctx):
 # Run the bot
 # ========================================
 try:
+    print("Starting bot...")
     client.run(token)
 except Exception as e:
     print(f'Fatal error: {e}')
