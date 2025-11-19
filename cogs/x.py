@@ -11,8 +11,11 @@ import time
 import psutil
 import sys
 import gc
+import logging  # Add this line
 from database import db
 from datetime import datetime, timedelta
+from typing import Any, Dict, List
+
 
 OWNER_ID = 678475709257089057
 
@@ -674,6 +677,174 @@ class JishakuCog(commands.Cog):
             await interaction.delete_original_response()
             await interaction.followup.send(embed=embed, ephemeral=True)
 
+    async def get_all_caches(self) -> Dict[str, Any]:
+        """Collect all caches from the bot and cogs"""
+        caches = {}
+
+        # Bot-level caches
+        if hasattr(self.bot, 'cached_messages'):
+            caches['bot.cached_messages'] = self.bot.cached_messages
+
+        # Iterate through all cogs and find cache attributes
+        for cog_name, cog in self.bot.cogs.items():
+            for attr_name in dir(cog):
+                # Skip private/magic attributes and methods
+                if attr_name.startswith('_'):
+                    continue
+
+                attr = getattr(cog, attr_name, None)
+
+                # Check if it's a cache-like attribute
+                if attr_name.endswith('_cache') or attr_name.endswith('_caches'):
+                    cache_key = f"{cog_name}.{attr_name}"
+                    caches[cache_key] = attr
+                elif isinstance(attr, dict) and 'cache' in attr_name.lower():
+                    cache_key = f"{cog_name}.{attr_name}"
+                    caches[cache_key] = attr
+
+        return caches
+
+    async def clear_cache(self, cache_name: str) -> tuple[bool, str]:
+        """Clear a specific cache"""
+        try:
+            parts = cache_name.split('.', 1)
+
+            if len(parts) == 1:
+                # Bot-level cache
+                if hasattr(self.bot, cache_name):
+                    cache = getattr(self.bot, cache_name)
+                    if isinstance(cache, dict):
+                        cache.clear()
+                    elif isinstance(cache, list):
+                        cache.clear()
+                    elif isinstance(cache, set):
+                        cache.clear()
+                    return True, f"Cleared bot cache: `{cache_name}`"
+                return False, f"Cache not found: `{cache_name}`"
+
+            elif len(parts) == 2:
+                # Cog cache
+                cog_name, attr_name = parts
+
+                if cog_name not in self.bot.cogs:
+                    return False, f"Cog not found: `{cog_name}`"
+
+                cog = self.bot.cogs[cog_name]
+
+                if not hasattr(cog, attr_name):
+                    return False, f"Cache not found: `{cache_name}`"
+
+                cache = getattr(cog, attr_name)
+
+                if isinstance(cache, dict):
+                    cache.clear()
+                elif isinstance(cache, list):
+                    cache.clear()
+                elif isinstance(cache, set):
+                    cache.clear()
+                else:
+                    return False, f"Cache type `{type(cache).__name__}` cannot be cleared"
+
+                return True, f"Cleared cache: `{cache_name}`"
+
+        except Exception as e:
+            return False, f"Error clearing cache: `{e.__class__.__name__}: {e}`"
+
+        return False, "Unknown error occurred"
+
+    @py_group.command(name="cache", description="View and manage bot caches")
+    @app_commands.describe(
+        cache="Select a cache to view"
+    )
+    async def py_cache(self, interaction: discord.Interaction, cache: str):
+        """View and manage bot caches"""
+        if interaction.user.id != OWNER_ID:
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> This command is restricted to the bot owner only!",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            content=f"<a:Load:1430912797469970444> Loading Cache",
+            ephemeral=True
+        )
+
+        try:
+            # Get all caches
+            all_caches = await self.get_all_caches()
+
+            if cache not in all_caches:
+                embed = discord.Embed(
+                    title="<:Denied:1426930694633816248> Cache Not Found",
+                    description=f"Cache `{cache}` does not exist.\n\n"
+                                f"Available caches:\n" + "\n".join([f"• `{c}`" for c in list(all_caches.keys())[:10]]),
+                    color=discord.Color.red()
+                )
+                await interaction.edit_original_response(content=None, embed=embed)
+                return
+
+            cache_data = all_caches[cache]
+            view = CacheManagementView(self, cache, cache_data, interaction.user.id)
+            embed = view.create_embed()
+
+            await interaction.edit_original_response(content=None, embed=embed, view=view)
+
+        except Exception as e:
+            embed = discord.Embed(
+                title="<:Denied:1426930694633816248> Error Loading Cache",
+                description=f"```py\n{e.__class__.__name__}: {e}\n```",
+                color=discord.Color.red()
+            )
+            await interaction.edit_original_response(content=None, embed=embed)
+
+    @py_cache.autocomplete('cache')
+    async def cache_autocomplete(
+            self,
+            interaction: discord.Interaction,
+            current: str,
+    ) -> list[app_commands.Choice[str]]:
+        """Autocomplete for cache names"""
+        try:
+            all_caches = await self.get_all_caches()
+
+            # Create choices with size info
+            choices = []
+            for cache_name, cache_data in all_caches.items():
+                # Get size
+                if isinstance(cache_data, (dict, list, set, tuple)):
+                    size = len(cache_data)
+                else:
+                    size = 1
+
+                # Get type
+                cache_type = type(cache_data).__name__
+
+                display_name = f"{cache_name} ({cache_type}, {size} items)"
+
+                choices.append(
+                    app_commands.Choice(
+                        name=display_name[:100],  # Discord limit
+                        value=cache_name
+                    )
+                )
+
+            # Filter by current input
+            if current:
+                choices = [
+                    choice for choice in choices
+                    if current.lower() in choice.value.lower()
+                ]
+
+            # Sort by name
+            choices.sort(key=lambda c: c.value)
+
+            return choices[:25]  # Discord limit
+
+        except Exception as e:
+            print(f"Cache autocomplete error: {e}")
+            return []
+
 
 class PageInput(discord.ui.Modal, title="Go to Page"):
     page = discord.ui.TextInput(
@@ -781,6 +952,224 @@ class LogsView(discord.ui.View):
     async def last_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.current_page = self.total_pages
         await self.update_message(interaction)
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
+
+class CacheViewModal(discord.ui.Modal, title="View Cache Contents"):
+    def __init__(self, cache_name: str, cache_data: Any):
+        super().__init__()
+        self.cache_name = cache_name
+        self.cache_data = cache_data
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+
+
+class CacheManagementView(discord.ui.View):
+    def __init__(self, cog, cache_name: str, cache_data: Any, user_id: int):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.cache_name = cache_name
+        self.cache_data = cache_data
+        self.user_id = user_id
+        self.current_page = 0
+        self.items_per_page = 10
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> You cannot control this cache menu.",
+                ephemeral=True
+            )
+            return False
+        return True
+
+    def get_cache_items(self) -> List[tuple]:
+        """Convert cache data to list of items"""
+        if isinstance(self.cache_data, dict):
+            return list(self.cache_data.items())
+        elif isinstance(self.cache_data, (list, set, tuple)):
+            return list(enumerate(self.cache_data))
+        else:
+            return [("value", self.cache_data)]
+
+    def get_total_pages(self) -> int:
+        items = self.get_cache_items()
+        return max(1, (len(items) + self.items_per_page - 1) // self.items_per_page)
+
+    def format_value(self, value: Any, max_length: int = 100) -> str:
+        """Format a value for display"""
+        if isinstance(value, (dict, list, set, tuple)):
+            formatted = repr(value)
+            if len(formatted) > max_length:
+                return formatted[:max_length] + "..."
+            return formatted
+        elif isinstance(value, (datetime, timedelta)):
+            return str(value)
+        else:
+            formatted = str(value)
+            if len(formatted) > max_length:
+                return formatted[:max_length] + "..."
+            return formatted
+
+    def create_embed(self) -> discord.Embed:
+        """Create the cache display embed"""
+        items = self.get_cache_items()
+        total_pages = self.get_total_pages()
+
+        start_idx = self.current_page * self.items_per_page
+        end_idx = min(start_idx + self.items_per_page, len(items))
+        page_items = items[start_idx:end_idx]
+
+        embed = discord.Embed(
+            title=f"Cache: {self.cache_name}",
+            color=discord.Color.blue(),
+            timestamp=datetime.utcnow()
+        )
+
+        # Cache overview
+        cache_type = type(self.cache_data).__name__
+        cache_size = len(items)
+
+        embed.description = f"**Type:** `{cache_type}`\n**Total Items:** `{cache_size}`"
+
+        # Display items
+        if page_items:
+            items_text = []
+            for key, value in page_items:
+                key_str = self.format_value(key, 50)
+                value_str = self.format_value(value, 80)
+                items_text.append(f"**{key_str}**\n└─ `{value_str}`")
+
+            embed.add_field(
+                name=f"Items ({start_idx + 1}-{end_idx} of {cache_size})",
+                value="\n\n".join(items_text)[:1024],
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="Items",
+                value="*Cache is empty*",
+                inline=False
+            )
+
+        embed.set_footer(text=f"Page {self.current_page + 1}/{total_pages}")
+
+        return embed
+
+    async def update_display(self, interaction: discord.Interaction):
+        """Update the message with current page"""
+        embed = self.create_embed()
+
+        # Update button states
+        total_pages = self.get_total_pages()
+        for item in self.children:
+            if isinstance(item, discord.ui.Button):
+                if item.custom_id == "first" or item.custom_id == "prev":
+                    item.disabled = self.current_page == 0
+                elif item.custom_id == "next" or item.custom_id == "last":
+                    item.disabled = self.current_page >= total_pages - 1
+
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(emoji="<:LeftSkip:1434962162064822343>", style=discord.ButtonStyle.primary, custom_id="first")
+    async def first_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page = 0
+        await self.update_display(interaction)
+
+    @discord.ui.button(emoji="<:LeftArrow:1434962165215002777>", style=discord.ButtonStyle.primary, custom_id="prev")
+    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page = max(0, self.current_page - 1)
+        await self.update_display(interaction)
+
+    @discord.ui.button(label="Clear Cache", emoji="<:Wipe:1434954284851658762>", style=discord.ButtonStyle.danger, custom_id="clear")
+    async def clear_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Show confirmation
+        confirm_view = CacheClearConfirmView(self.cog, self.cache_name, self.user_id)
+
+        embed = discord.Embed(
+            title="<:Warn:1437771973970104471>️ Confirm Cache Clear",
+            description=f"Are you sure you want to clear the **{self.cache_name}** cache?\n\n"
+                        f"This will remove all {len(self.get_cache_items())} items.",
+            color=discord.Color.red()
+        )
+
+        await interaction.response.send_message(embed=embed, view=confirm_view, ephemeral=True)
+
+    @discord.ui.button(emoji="<:RightArrow:1434962170147246120>", style=discord.ButtonStyle.primary, custom_id="next")
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        total_pages = self.get_total_pages()
+        self.current_page = min(total_pages - 1, self.current_page + 1)
+        await self.update_display(interaction)
+
+    @discord.ui.button(emoji="<:RightSkip:1434962167660281926>", style=discord.ButtonStyle.primary, custom_id="last")
+    async def last_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page = self.get_total_pages() - 1
+        await self.update_display(interaction)
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
+
+class CacheClearConfirmView(discord.ui.View):
+    def __init__(self, cog, cache_name: str, user_id: int):
+        super().__init__(timeout=60)
+        self.cog = cog
+        self.cache_name = cache_name
+        self.user_id = user_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> This is not your confirmation!",
+                ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Confirm Clear", style=discord.ButtonStyle.danger, emoji="<:Accepted:1426930333789585509>")
+    async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+
+        success, message = await self.cog.clear_cache(self.cache_name)
+
+        if success:
+            embed = discord.Embed(
+                title="<:Accepted:1426930333789585509> Cache Cleared",
+                description=message,
+                color=discord.Color.green()
+            )
+        else:
+            embed = discord.Embed(
+                title="<:Denied:1426930694633816248> Clear Failed",
+                description=message,
+                color=discord.Color.red()
+            )
+
+        # Disable buttons
+        for item in self.children:
+            item.disabled = True
+
+        await interaction.edit_original_response(embed=embed, view=self)
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="<:Denied:1426930694633816248>")
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(
+            title="Cancelled",
+            description="Cache clear operation cancelled.",
+            color=discord.Color.orange()
+        )
+
+        for item in self.children:
+            item.disabled = True
+
+        await interaction.response.edit_message(embed=embed, view=self)
+        self.stop()
 
     async def on_timeout(self):
         for item in self.children:
