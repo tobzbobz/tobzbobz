@@ -5591,7 +5591,7 @@ class ClearShiftsConfirmView(discord.ui.View):
 
             await interaction.edit_original_response(view=self)
 
-    @discord.ui.button(label=f"Clear {self.count} User Shifts", style=discord.ButtonStyle.secondary, disabled=True,
+    @discord.ui.button(label=f"Clear User Shifts", style=discord.ButtonStyle.secondary, disabled=True,
                        custom_id="clear_shifts")
     async def clear_button(self, interaction: discord.Interaction, button: discord.ui.Button):
 

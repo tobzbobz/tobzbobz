@@ -964,7 +964,7 @@ class BloxlinkAPI:
             )
 
             if result:
-                print(f"📦 Cache HIT for {discord_user_id} (expires: {result['expires_at']})")
+                # Only log on failure or first few hits for debugging
                 return (
                     result['roblox_username'],
                     int(result['roblox_user_id']) if result['roblox_user_id'] and result[
@@ -1018,7 +1018,9 @@ class BloxlinkAPI:
                 status
             )
 
-        print(f"💾 Cached data for {discord_user_id} (expires in 24h)")
+        # Only log cache failures
+        if is_error:
+            print(f"❌ Failed to cache data for {discord_user_id}: {status}")
 
     async def get_bloxlink_data(
             self,
@@ -1268,8 +1270,10 @@ class BloxlinkAPI:
             else:
                 uncached_ids.append(discord_id)
 
-        print(f"📦 Found {len(cached_ids)} cached results from database")
-        print(f"🌐 Need to fetch {len(uncached_ids)} from API...")
+        if cached_ids:
+            print(f"📦 Retrieved {len(cached_ids)} entries from cache")
+        if uncached_ids:
+            print(f"🌐 Need to fetch {len(uncached_ids)} from API...")
 
         # ✅ BATCH 2: Fetch only uncached users
         for i, discord_id in enumerate(uncached_ids, 1):
@@ -1331,13 +1335,15 @@ class BloxlinkAPI:
                       f"❌ Not Linked: {status_counts['not_linked']}")
 
         print(f"\n✅ Bulk check complete!")
-        print(f"   📦 Cached: {status_counts['cached']} (0 API calls)")
-        print(f"   🌐 Fetched: {len(uncached_ids)} ({len(uncached_ids)} API calls)")
+        if cached_ids:
+            print(f"   📦 Used cache: {len(cached_ids)} entries (0 API calls)")
+        if uncached_ids:
+            print(f"   🌐 Fetched fresh: {len(uncached_ids)} entries ({len(uncached_ids)} API calls)")
         print(f"   ✅ Total Success: {status_counts['success']}")
-        print(f"   💾 Cache Efficiency: {(status_counts['cached'] / total) * 100:.1f}%")
+        if status_counts['cached'] > 0:
+            print(f"   💾 Cache Efficiency: {(status_counts['cached'] / total) * 100:.1f}%")
 
         return results
-
     async def cleanup_expired_cache(self):
         """
         Remove expired cache entries from database

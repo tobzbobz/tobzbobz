@@ -607,5 +607,185 @@ class JishakuCog(commands.Cog):
         # Return up to 25 choices (Discord limit)
         return filtered[:25]
 
+    @py_group.command(name="logs", description="View bot logs with pagination")
+    async def py_logs(self, interaction: discord.Interaction):
+        """Display bot logs with navigation controls"""
+        if interaction.user.id != OWNER_ID:
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> This command is restricted to the bot owner only!",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            content=f"<a:Load:1430912797469970444> Loading Logs",
+            ephemeral=True
+        )
+
+        try:
+            # Get logs from the logging handler
+            # Assuming you have a log file or memory handler
+            logs = []
+
+            # Option 1: Read from log file
+            try:
+                with open('bot.log', 'r', encoding='utf-8') as f:
+                    logs = f.readlines()
+                    # Get last 100 logs
+                    logs = logs[-100:]
+            except FileNotFoundError:
+                # Option 2: Get from root logger handlers
+                for handler in logging.getLogger().handlers:
+                    if isinstance(handler, logging.FileHandler):
+                        try:
+                            with open(handler.baseFilename, 'r', encoding='utf-8') as f:
+                                logs = f.readlines()
+                                logs = logs[-100:]
+                            break
+                        except Exception:
+                            pass
+
+            if not logs:
+                # No logs found, create sample message
+                logs = ["No logs available. Configure logging to view logs here."]
+
+            # Clean up logs (remove trailing newlines)
+            logs = [log.rstrip() for log in logs if log.strip()]
+
+            view = LogsView(logs, interaction.user.id)
+
+            embed = discord.Embed(
+                title="Bot Logs",
+                description=f"```\n{view.get_page_logs()}\n```",
+                color=discord.Color.blue(),
+                timestamp=datetime.utcnow()
+            )
+            embed.set_footer(text=f"Page 1/{view.total_pages} • {len(logs)} total log entries")
+
+            await interaction.delete_original_response()
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+        except Exception as e:
+            embed = discord.Embed(
+                title="<:Denied:1426930694633816248> Error Loading Logs",
+                description=f"```py\n{e.__class__.__name__}: {e}\n```",
+                color=discord.Color.red()
+            )
+            await interaction.delete_original_response()
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+class PageInput(discord.ui.Modal, title="Go to Page"):
+    page = discord.ui.TextInput(
+        label="Page Number",
+        style=discord.TextStyle.short,
+        placeholder="Enter page number...",
+        required=True,
+        max_length=10
+    )
+
+    def __init__(self, view):
+        super().__init__()
+        self.view = view
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            page_num = int(str(self.page))
+            if 1 <= page_num <= self.view.total_pages:
+                self.view.current_page = page_num
+                await self.view.update_message(interaction)
+            else:
+                await interaction.response.send_message(
+                    f"<:Denied:1426930694633816248> Invalid page number. Please enter a number between 1 and {self.view.total_pages}",
+                    ephemeral=True
+                )
+        except ValueError:
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> Please enter a valid number",
+                ephemeral=True
+            )
+
+
+class LogsView(discord.ui.View):
+    def __init__(self, logs: list[str], user_id: int):
+        super().__init__(timeout=300)
+        self.logs = logs
+        self.user_id = user_id
+        self.logs_per_page = 10
+        self.total_pages = max(1, (len(logs) + self.logs_per_page - 1) // self.logs_per_page)
+        self.current_page = 1
+        self.update_buttons()
+
+    def update_buttons(self):
+        # Update button states
+        self.first_button.disabled = self.current_page == 1
+        self.prev_button.disabled = self.current_page == 1
+        self.next_button.disabled = self.current_page == self.total_pages
+        self.last_button.disabled = self.current_page == self.total_pages
+
+        # Update page button label
+        self.page_button.label = f"{self.current_page}/{self.total_pages}"
+
+    def get_page_logs(self) -> str:
+        start_idx = (self.current_page - 1) * self.logs_per_page
+        end_idx = start_idx + self.logs_per_page
+        page_logs = self.logs[start_idx:end_idx]
+
+        if not page_logs:
+            return "No logs available."
+
+        return "\n".join(page_logs)
+
+    async def update_message(self, interaction: discord.Interaction):
+        self.update_buttons()
+        embed = discord.Embed(
+            title="Bot Logs",
+            description=f"```\n{self.get_page_logs()}\n```",
+            color=discord.Color.blue(),
+            timestamp=datetime.utcnow()
+        )
+        embed.set_footer(text=f"Page {self.current_page}/{self.total_pages} • {len(self.logs)} total log entries")
+
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> You cannot control this navigation menu.",
+                ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(emoji="<:LeftSkip:1434962162064822343>️", style=discord.ButtonStyle.primary, custom_id="first")
+    async def first_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page = 1
+        await self.update_message(interaction)
+
+    @discord.ui.button(emoji="<:LeftArrow:1434962165215002777>️", style=discord.ButtonStyle.primary, custom_id="prev")
+    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page = max(1, self.current_page - 1)
+        await self.update_message(interaction)
+
+    @discord.ui.button(label="1/1", style=discord.ButtonStyle.secondary, custom_id="page")
+    async def page_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = PageInput(self)
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(emoji="<:RightSkip:1434962167660281926>", style=discord.ButtonStyle.primary, custom_id="next")
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page = min(self.total_pages, self.current_page + 1)
+        await self.update_message(interaction)
+
+    @discord.ui.button(emoji="<:RightArrow:1434962170147246120>️", style=discord.ButtonStyle.primary, custom_id="last")
+    async def last_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page = self.total_pages
+        await self.update_message(interaction)
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
+
 async def setup(bot):
     await bot.add_cog(JishakuCog(bot))
