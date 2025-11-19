@@ -1371,31 +1371,31 @@ class PaginatedEmbedView(discord.ui.View):
         self.next_page.disabled = (self.current_page >= self.max_pages - 1)
         self.last_page.disabled = (self.current_page >= self.max_pages - 1)
 
-    @discord.ui.button(label="<:LeftSkip:1434962162064822343>", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(emoji="<:LeftSkip:1434962162064822343>", style=discord.ButtonStyle.secondary)
     async def first_page(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.current_page = 0
         self.update_buttons()
         await interaction.response.edit_message(embed=self.embeds[self.current_page], view=self)
 
-    @discord.ui.button(label="<:LeftArrow:1434962165215002777>", style=discord.ButtonStyle.primary)
+    @discord.ui.button(emoji="<:LeftArrow:1434962165215002777>", style=discord.ButtonStyle.primary)
     async def prev_page(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.current_page = max(0, self.current_page - 1)
         self.update_buttons()
         await interaction.response.edit_message(embed=self.embeds[self.current_page], view=self)
 
-    @discord.ui.button(label="<:RightArrow:1434962170147246120>", style=discord.ButtonStyle.primary)
+    @discord.ui.button(emoji="<:RightArrow:1434962170147246120>", style=discord.ButtonStyle.primary)
     async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.current_page = min(self.max_pages - 1, self.current_page + 1)
         self.update_buttons()
         await interaction.response.edit_message(embed=self.embeds[self.current_page], view=self)
 
-    @discord.ui.button(label="<:RightSkip:1434962167660281926>", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(emoji="<:RightSkip:1434962167660281926>", style=discord.ButtonStyle.secondary)
     async def last_page(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.current_page = self.max_pages - 1
         self.update_buttons()
         await interaction.response.edit_message(embed=self.embeds[self.current_page], view=self)
 
-    @discord.ui.button(label="<:Wipe:1434954284851658762>", style=discord.ButtonStyle.danger)
+    @discord.ui.button(emoji="<:Wipe:1434954284851658762>", style=discord.ButtonStyle.danger)
     async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         await interaction.delete_original_response()
