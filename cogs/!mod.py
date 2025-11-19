@@ -1212,7 +1212,7 @@ class ModCog(commands.Cog):
         except:
             pass
 
-        loading_msg = await ctx.send(content=f"<a:Load:1430912797469970444> Scanning",
+        loading_msg = await ctx.send(content=f"<a:Load:1430912797469970444> Scanning...",
                                      delete_after=300)
 
         if limit is None:
@@ -1304,7 +1304,12 @@ class ModCog(commands.Cog):
             )
 
         embed.set_footer(text=f"Showing logs {start_index + 1}-{end_index} of {total_logs}{user_filter_text}")
-        await loading_msg.delete()
+
+        try:
+            await loading_msg.delete()
+        except:
+            pass
+
         await ctx.send(embed=embed, delete_after=300)
 
     @commands.command(name="deletelog")

@@ -316,9 +316,11 @@ class ERLC(commands.GroupCog, name="erlc"):
                         'retry_after': retry_after
                     }
 
-                remaining = resp.headers.get('X-RateLimit-Remaining')
-                limit = resp.headers.get('X-RateLimit-Limit')
-                logger.debug(f"Rate limit: {remaining}/{limit} remaining")
+                remaining = resp.headers.get('X-RateLimit-Remaining', '?')
+                limit = resp.headers.get('X-RateLimit-Limit', '?')
+                reset = resp.headers.get('X-RateLimit-Reset', '?')
+                logger.debug(f"Rate limit: {remaining} of {limit} remaining (resets in {reset}s)")
+
 
                 if resp.status == 401:
                     return {'error': 'Unauthorized - Invalid API key'}
