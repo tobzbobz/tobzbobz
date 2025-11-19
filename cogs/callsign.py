@@ -526,12 +526,6 @@ def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_u
         # Special sub-case: RFF should show RFF | HHStJ (NON-COMMAND ONLY) | Roblox
         if fenz_prefix == "RFF":
             nickname_parts = ["RFF"]
-            # ✅ FIX: Only add HHStJ if it's NON-COMMAND (no hyphen)
-            if hhstj_prefix and '-' not in hhstj_prefix:
-                nickname_parts.append(hhstj_prefix)
-            # Add Roblox username for RFF users
-            if roblox_username:
-                nickname_parts.append(roblox_username)
         else:
             # For all other ranks: show prefix(es) in priority order, NO "-Not Assigned"
             if first_is_fenz:
@@ -3069,6 +3063,50 @@ class CallsignCog(commands.Cog):
                     # UPDATE NICKNAME IF REQUESTED
                     if update_nicknames:
                         # Calculate expected nickname
+
+                        expected_nickname = format_nickname(
+                            current_fenz_prefix,
+                            record['callsign'],
+                            current_hhstj_prefix,
+                            record['roblox_username']
+                        )
+
+                        current_nick_stripped = strip_shift_prefixes(member.nick) if member.nick else member.name
+
+                        if current_nick_stripped != expected_nickname:
+                            if dry_run:
+                                # Just preview
+                                stats['nickname_changes'].append({
+                                    'member': member,
+                                    'old': current_nick_stripped,
+                                    'new': expected_nickname
+                                })
+                                stats['nickname_updates'] += 1
+                            else:
+                                # Apply change - PRESERVE SHIFT PREFIX
+                                shift_prefix = ""
+                                if member.nick:
+                                    for prefix in ["DUTY | ", "BRK | ", "LOA | "]:
+                                        if member.nick.startswith(prefix):
+                                            shift_prefix = prefix
+                                            break
+
+                                final_nickname = shift_prefix + expected_nickname
+
+                                try:
+                                    success, final_nick = await safe_edit_nickname(member, final_nickname)
+                                    if success:
+                                        stats['nickname_changes'].append({
+                                            'member': member,
+                                            'old': member.nick or member.name,
+                                            'new': final_nickname
+                                        })
+                                        stats['nickname_updates'] += 1
+                                except discord.Forbidden:
+                                    stats['failed_updates'].append(
+                                        f"{record.get('discord_username', 'Unknown')}: Missing permissions"
+                                    )
+
                         if record['callsign'] == "Not Assigned":
                             if current_fenz_prefix == "RFF":
                                 expected_nickname = "RFF"
