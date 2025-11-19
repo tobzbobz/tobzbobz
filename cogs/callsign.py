@@ -429,7 +429,29 @@ def calculate_rank_priority(fenz_prefix: str, hhstj_prefix: str) -> tuple[str, i
     """
 
     fenz_priority = FENZ_RANK_PRIORITY.get(fenz_prefix, 0)
-    hhstj_priority = HHSTJ_RANK_PRIORITY.get(hhstj_prefix, 0)
+
+    # ✅ FIX: Get full HHStJ prefix for priority lookup
+    hhstj_lookup_prefix = hhstj_prefix
+
+    # If HHStJ prefix is shortened, get the full version for priority lookup
+    if hhstj_prefix and '-' in hhstj_prefix:
+        # Check if this is a shortened version by looking for it in the rank map
+        found_full_prefix = None
+        for role_id, (rank_name, full_prefix) in HHSTJ_RANK_MAP.items():
+            if full_prefix == hhstj_prefix:
+                found_full_prefix = full_prefix
+                break
+            # Check if current prefix is a shortened version of this rank
+            elif full_prefix and '-' in full_prefix:
+                versions = get_hhstj_shortened_versions(full_prefix)
+                if hhstj_prefix in versions:
+                    found_full_prefix = full_prefix
+                    break
+
+        if found_full_prefix:
+            hhstj_lookup_prefix = found_full_prefix
+
+    hhstj_priority = HHSTJ_RANK_PRIORITY.get(hhstj_lookup_prefix, 0)
 
     # Determine tiers
     fenz_is_leadership = fenz_priority >= LEADERSHIP_THRESHOLD
@@ -481,7 +503,6 @@ def calculate_rank_priority(fenz_prefix: str, hhstj_prefix: str) -> tuple[str, i
     else:
         return ("", 0, "")
 
-
 def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_username: str) -> str:
     """
     Format nickname with new priority-based system.
@@ -500,21 +521,25 @@ def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_u
     # Build nickname parts in priority order
     nickname_parts = []
 
+    # âœ… SPECIAL CASE: Not Assigned - Just show prefix(es), no callsign number
     # ✅ SPECIAL CASE: Not Assigned - Just show prefix(es), no callsign number
     if callsign == "Not Assigned":
-        # Special sub-case: RFF should just be "RFF" alone
+        # Special sub-case: RFF should show RFF | HHStJ | Roblox
         if fenz_prefix == "RFF":
             nickname_parts = ["RFF"]
-            # Add HHStJ if exists and is not a command callsign
-            if hhstj_prefix and "-" not in hhstj_prefix:
+            # Add HHStJ if exists (ALLOW ALL HHStJ, including command callsigns)
+            if hhstj_prefix:
                 nickname_parts.append(hhstj_prefix)
+            # ✅ CRITICAL: Add Roblox username for RFF users!
+            if roblox_username:
+                nickname_parts.append(roblox_username)
         else:
             # For all other ranks: show prefix(es) in priority order, NO "-Not Assigned"
             if first_is_fenz:
                 # FENZ has priority
                 if first_prefix:
                     nickname_parts.append(first_prefix)
-                if second_prefix and "-" not in second_prefix:
+                if second_prefix:  # ✅ REMOVED the "-" check
                     nickname_parts.append(second_prefix)
             else:
                 # HHStJ has priority
@@ -527,21 +552,21 @@ def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_u
         if roblox_username:
             nickname_parts.append(roblox_username)
 
-    # ✅ SPECIAL CASE: BLANK - Just show prefix(es), no callsign
+    # âœ… SPECIAL CASE: BLANK - Just show prefix(es), no callsign
     elif callsign == "BLANK":
         if first_prefix:
             nickname_parts.append(first_prefix)
-        if second_prefix and "-" not in second_prefix:
+        if second_prefix:  # ✅ REMOVED the "-" check
             nickname_parts.append(second_prefix)
         if roblox_username:
             nickname_parts.append(roblox_username)
 
-    # ✅ NORMAL CASE: Has a real callsign number
+    # âœ… NORMAL CASE: Has a real callsign number
     else:
         if first_is_fenz:
             # FENZ first: {FENZ-callsign} | {HHStJ} | {roblox}
             nickname_parts.append(f"{first_prefix}-{callsign}")
-            if second_prefix and "-" not in second_prefix:
+            if second_prefix:  # ✅ ALLOW ALL HHStJ prefixes
                 nickname_parts.append(second_prefix)
         else:
             # HHStJ first: {HHStJ} | {FENZ-callsign} | {roblox}
@@ -584,6 +609,7 @@ def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_u
 
     # Ultimate fallback
     return "User"
+
 
 def try_format(parts: list) -> str:
     """Try to format parts, return None if invalid or too long"""
