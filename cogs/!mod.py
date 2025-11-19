@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 from datetime import datetime
+import asyncio
 from database import db  # Import database instance
 
 MODERATOR_ROLES = {
@@ -1211,8 +1212,8 @@ class ModCog(commands.Cog):
         except:
             pass
 
-        loading_msg = await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Scanning ???",
-                                                ephemeral=True)
+        loading_msg = await ctx.send(content=f"<a:Load:1430912797469970444> Scanning",
+                                     delete_after=300)
 
         if limit is None:
             embed = discord.Embed(
