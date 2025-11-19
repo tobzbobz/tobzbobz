@@ -500,29 +500,34 @@ def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_u
     # Build nickname parts in priority order
     nickname_parts = []
 
-    # Special case: Not Assigned
+    # ✅ SPECIAL CASE: Not Assigned - Just show prefix(es), no callsign number
     if callsign == "Not Assigned":
+        # Special sub-case: RFF should just be "RFF" alone
         if fenz_prefix == "RFF":
             nickname_parts = ["RFF"]
+            # Add HHStJ if exists and is not a command callsign
             if hhstj_prefix and "-" not in hhstj_prefix:
                 nickname_parts.append(hhstj_prefix)
-            if roblox_username:
-                nickname_parts.append(roblox_username)
         else:
-            # Use priority order for Not Assigned
+            # For all other ranks: show prefix(es) in priority order, NO "-Not Assigned"
             if first_is_fenz:
-                nickname_parts.append(f"{first_prefix}-Not Assigned")
+                # FENZ has priority
+                if first_prefix:
+                    nickname_parts.append(first_prefix)
                 if second_prefix and "-" not in second_prefix:
                     nickname_parts.append(second_prefix)
             else:
-                nickname_parts.append(first_prefix)
+                # HHStJ has priority
+                if first_prefix:
+                    nickname_parts.append(first_prefix)
                 if second_prefix:
-                    nickname_parts.append(f"{second_prefix}-Not Assigned")
+                    nickname_parts.append(second_prefix)
 
-            if roblox_username:
-                nickname_parts.append(roblox_username)
+        # Always add Roblox username at the end
+        if roblox_username:
+            nickname_parts.append(roblox_username)
 
-    # Special case: BLANK
+    # ✅ SPECIAL CASE: BLANK - Just show prefix(es), no callsign
     elif callsign == "BLANK":
         if first_prefix:
             nickname_parts.append(first_prefix)
@@ -531,7 +536,7 @@ def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_u
         if roblox_username:
             nickname_parts.append(roblox_username)
 
-    # Normal callsign
+    # ✅ NORMAL CASE: Has a real callsign number
     else:
         if first_is_fenz:
             # FENZ first: {FENZ-callsign} | {HHStJ} | {roblox}
@@ -580,7 +585,6 @@ def format_nickname(fenz_prefix: str, callsign: str, hhstj_prefix: str, roblox_u
     # Ultimate fallback
     return "User"
 
-
 def try_format(parts: list) -> str:
     """Try to format parts, return None if invalid or too long"""
     if not parts:
@@ -590,20 +594,16 @@ def try_format(parts: list) -> str:
         return result
     return None
 
-# <:Accepted:1426930333789585509> UPDATED: Smart nickname update logic for sync operations
+
 async def smart_update_nickname(member, expected_nickname: str, current_fenz_prefix: str,
                                 current_callsign: str, current_hhstj_prefix: str,
                                 roblox_username: str) -> bool:
     """
-    Smart nickname update that tries to restore missing components if space allows
-    Returns True if update was successful, False otherwise
-
-    SPECIAL LOGIC:
-    1. If current nickname is truncated but expected fits → update
-    2. If RFF-Not Assigned → set to just "RFF"
-    3. Try to restore missing HHStJ or Roblox username if space allows
+    Smart nickname update that preserves shift prefixes and handles special cases
+    Returns True if update was attempted, False if no update needed
     """
 
+    # Get current nickname (strip shift prefixes for comparison)
     current_nick_stripped = strip_shift_prefixes(member.nick) if member.nick else member.name
     expected_nick_stripped = strip_shift_prefixes(expected_nickname)
 
@@ -611,55 +611,44 @@ async def smart_update_nickname(member, expected_nickname: str, current_fenz_pre
     if current_nick_stripped == expected_nick_stripped:
         return False  # No update needed
 
-    # <:Accepted:1426930333789585509> SPECIAL: RFF-Not Assigned should be just "RFF"
-    if current_fenz_prefix == "RFF" and current_callsign == "Not Assigned":
-        expected_with_full_format = format_nickname(
-            "RFF", "Not Assigned", current_hhstj_prefix,
-            roblox_username, False
-        )
-        if current_nick_stripped != expected_with_full_format:
-            try:
-                success, final_nick = await safe_edit_nickname(member, "RFF")
-                if not success:
-                    print(f"⚠️ Failed to set nickname for {member.id}")
-                    return True
-            except:
-                return False
+    # ✅ SPECIAL: Not Assigned cases
+    if current_callsign == "Not Assigned":
+        if current_fenz_prefix == "RFF":
+            # RFF-Not Assigned should be just "RFF"
+            expected_nickname = "RFF"
+            if current_hhstj_prefix and "-" not in current_hhstj_prefix:
+                expected_nickname = f"RFF | {current_hhstj_prefix}"
+            if roblox_username:
+                expected_nickname = f"{expected_nickname} | {roblox_username}"
+        else:
+            # All other ranks: just prefix(es), NO "-Not Assigned"
+            expected_nickname = format_nickname(
+                current_fenz_prefix, "Not Assigned", current_hhstj_prefix, roblox_username
+            )
 
-    # Check if current nickname is a truncated version
-    # If so, try to restore full version
-    if len(current_nick_stripped) < len(expected_nick_stripped):
-        # Current is shorter - might be truncated, try full version
-        try:
-            success, final_nick = await safe_edit_nickname(member, new_nickname)
-            if not success:
-                print(f"⚠️ Failed to set nickname for {member.id}")
-            if success:
-                print(f"<:Accepted:1426930333789585509> Restored full nickname for {member.display_name}: '{expected_nickname}'")
-                return True
-        except:
-            pass
+    # Preserve shift prefix if it exists
+    shift_prefix = ""
+    if member.nick:
+        for prefix in ["DUTY | ", "BRK | ", "LOA | "]:
+            if member.nick.startswith(prefix):
+                shift_prefix = prefix
+                break
 
-    # Normal update
+    final_nickname = shift_prefix + expected_nickname
+
     try:
-        # Preserve shift prefix if it exists
-        shift_prefix = ""
-        if member.nick:
-            for prefix in ["DUTY | ", "BRK | ", "LOA | "]:
-                if member.nick.startswith(prefix):
-                    shift_prefix = prefix
-                    break
+        success, final_nick = await safe_edit_nickname(member, final_nickname)
 
-        final_nickname = shift_prefix + expected_nickname
+        if success:
+            print(f"✅ Updated nickname: {member.display_name} → '{final_nickname}'")
+            return True
+        else:
+            print(f"⚠️ Failed to update nickname for {member.id}")
+            return False
 
-        success, final_nick = await safe_edit_nickname(member, new_nickname)
-        if not success:
-            print(f"⚠️ Failed to set nickname for {member.id}")
-            return success
     except Exception as e:
-        print(f"<:Denied:1426930694633816248> Error updating nickname for {member.display_name}: {e}")
+        print(f"❌ Error updating nickname for {member.display_name}: {e}")
         return False
-
 
 def strip_shift_prefixes(nickname: str) -> str:
     """
@@ -697,21 +686,43 @@ async def check_callsign_exists(callsign: str, fenz_prefix: str = None) -> dict:
 
         return dict(row) if row else None
 
-def get_hhstj_prefix_from_roles(roles) -> str:
-    """Get HHStJ prefix from roles, prioritizing management over clinical"""
+
+def get_hhstj_prefix_from_roles(roles, stored_hhstj_prefix: str = None) -> str:
+    """
+    Get HHStJ prefix from roles, prioritizing management over clinical.
+    If stored_hhstj_prefix is provided and is a valid shortened version, preserve it.
+    """
+
     # First check for management roles (high command)
+    full_prefix = None
     for role_id, (rank_name, prefix) in HHSTJ_RANK_MAP.items():
         if role_id in HHSTJ_HIGH_COMMAND_RANKS:
             if any(role.id == role_id for role in roles):
-                return prefix
+                full_prefix = prefix
+                break
 
-    # Then check for clinical roles
-    for role_id, (rank_name, prefix) in HHSTJ_RANK_MAP.items():
-        if role_id not in HHSTJ_HIGH_COMMAND_RANKS:
-            if any(role.id == role_id for role in roles):
-                return prefix
+    # Then check for clinical roles if no management role found
+    if not full_prefix:
+        for role_id, (rank_name, prefix) in HHSTJ_RANK_MAP.items():
+            if role_id not in HHSTJ_HIGH_COMMAND_RANKS:
+                if any(role.id == role_id for role in roles):
+                    full_prefix = prefix
+                    break
 
-    return ""
+    # If no HHStJ role found, return empty
+    if not full_prefix:
+        return ""
+
+    # ✅ NEW: If user has a stored shorthand preference, validate and preserve it
+    if stored_hhstj_prefix and '-' in full_prefix:
+        valid_versions = get_hhstj_shortened_versions(full_prefix)
+
+        # If stored prefix is a valid shortened version of current role, keep it
+        if stored_hhstj_prefix in valid_versions:
+            return stored_hhstj_prefix
+
+    # Otherwise return the full prefix from roles
+    return full_prefix
 
 
 async def send_safe_embeds(self, channel, items: list, title_prefix: str, color, formatter_func,
@@ -1719,46 +1730,33 @@ class CallsignCog(commands.Cog):
                 stats['database_mismatches_fixed'] = mismatch_fixes
 
                 # Process each callsign for nickname updates
+                # Process each callsign for nickname updates
                 for record in callsigns:
                     member = guild.get_member(record['discord_user_id'])
                     if not member:
                         continue
 
-                    # Get current rank information
-                    is_fenz_hc = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
-                    is_hhstj_hc = any(role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
-
-                    current_fenz_prefix = record['fenz_prefix']
-                    current_hhstj_prefix = record['hhstj_prefix']
-                    current_callsign = record['callsign']
-
-                    # Get correct FENZ rank from current roles
-                    correct_fenz_prefix = None
+                    # Get current rank information from ROLES (not database)
+                    current_fenz_prefix = None
                     for role_id, (rank_name, prefix) in FENZ_RANK_MAP.items():
                         if any(role.id == role_id for role in member.roles):
-                            correct_fenz_prefix = prefix
+                            current_fenz_prefix = prefix
                             break
 
-                    # Get correct HHStJ rank from current roles
-                    correct_hhstj_prefix = get_hhstj_prefix_from_roles(member.roles)
+                    # ✅ CRITICAL: Pass stored shorthand to preserve user's choice
+                    stored_hhstj_prefix = record['hhstj_prefix']
+                    current_hhstj_prefix = get_hhstj_prefix_from_roles(member.roles, stored_hhstj_prefix)
 
-                    # Calculate expected nickname based on callsign status
-                    if current_callsign == "Not Assigned":
-                        # Special handling for Not Assigned
-                        if correct_fenz_prefix == "RFF":
-                            expected_nickname = "RFF"
-                        else:
-                            expected_nickname = correct_fenz_prefix or "Not Assigned"
-                    elif current_callsign == "BLANK":
-                        expected_nickname = format_nickname(
-                            correct_fenz_prefix, "BLANK", correct_hhstj_prefix,
-                            record['roblox_username']
-                        )
-                    else:
-                        expected_nickname = format_nickname(
-                            correct_fenz_prefix, current_callsign, correct_hhstj_prefix,
-                            record['roblox_username']
-                        )
+                    current_callsign = record['callsign']
+                    roblox_username = record['roblox_username']
+
+                    # ✅ Calculate expected nickname using priority system
+                    expected_nickname = format_nickname(
+                        current_fenz_prefix or record['fenz_prefix'],
+                        current_callsign,
+                        current_hhstj_prefix,  # Already has shorthand preserved
+                        roblox_username
+                    )
 
                     # Get current nickname (strip shift prefixes)
                     current_nick = strip_shift_prefixes(member.nick) if member.nick else member.name
@@ -1871,11 +1869,15 @@ class CallsignCog(commands.Cog):
                             member = guild.get_member(discord_id)
                             if member:
                                 # ✅ Use cog-level cached API
+                                # ✅ Use cog-level cached API
                                 roblox_username, roblox_id, status = await self.bloxlink_api.get_bloxlink_data(
                                     member.id, guild.id)
 
                                 if status == 'success' and roblox_id and roblox_username:
-                                    hhstj_prefix = get_hhstj_prefix_from_roles(member.roles)
+                                    # ✅ Get HHStJ prefix WITH preservation of any existing shorthand from sheets
+                                    stored_hhstj = sheet_data.get('hhstj_prefix', '')
+                                    hhstj_prefix = get_hhstj_prefix_from_roles(member.roles, stored_hhstj)
+
                                     is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
                                     is_hhstj_high_command = any(
                                         role.id in HHSTJ_HIGH_COMMAND_RANKS for role in member.roles)
@@ -2788,38 +2790,25 @@ class CallsignCog(commands.Cog):
                         current_fenz_prefix = correct_fenz_prefix
                         stats['rank_updates'] += 1
 
-                    # <:Accepted:1426930333789585509> UPDATE HHSTJ PREFIX WITH PRESERVATION LOGIC
-                    if correct_hhstj_prefix != current_hhstj_prefix:
-                        # Check if current stored prefix is a valid shortened version
+                    # ✅ UPDATE HHSTJ PREFIX WITH PRESERVATION LOGIC
+                    stored_hhstj_prefix = record['hhstj_prefix']
+                    correct_hhstj_prefix = get_hhstj_prefix_from_roles(member.roles, stored_hhstj_prefix)
+
+                    if correct_hhstj_prefix != stored_hhstj_prefix:
+                        # Check if this is just a shorthand preference vs actual rank change
+                        needs_update = True
+
                         if correct_hhstj_prefix and '-' in correct_hhstj_prefix:
                             valid_versions = get_hhstj_shortened_versions(correct_hhstj_prefix)
 
-                            # If current stored prefix is a valid shortened version, keep it
-                            if current_hhstj_prefix in valid_versions:
-                                # Don't update - user chose this shortened version
-                                correct_hhstj_prefix = current_hhstj_prefix
+                            # If current stored prefix is a valid shortened version, preserve it
+                            if stored_hhstj_prefix in valid_versions:
+                                needs_update = False
                                 stats['hhstj_prefix_preserved'] += 1
-                            else:
-                                # Stored prefix is outdated or invalid, update it
-                                if not dry_run:
-                                    async with db.pool.acquire() as conn:
-                                        await conn.execute(
-                                            'UPDATE callsigns SET hhstj_prefix = $1 WHERE discord_user_id = $2',
-                                            correct_hhstj_prefix or '', member.id
-                                        )
+                                print(f"✅ Preserved HHStJ shorthand '{stored_hhstj_prefix}' for {member.display_name}")
 
-                                stats['rank_changes'].append({
-                                    'member': member,
-                                    'type': 'HHStJ',
-                                    'old_rank': current_hhstj_prefix,
-                                    'new_rank': correct_hhstj_prefix
-                                })
-
-                                record['hhstj_prefix'] = correct_hhstj_prefix
-                                current_hhstj_prefix = correct_hhstj_prefix
-                                stats['rank_updates'] += 1
-                        else:
-                            # No shortened versions, just update normally
+                        if needs_update:
+                            # Actual rank change detected, update database
                             if not dry_run:
                                 async with db.pool.acquire() as conn:
                                     await conn.execute(
@@ -2830,13 +2819,16 @@ class CallsignCog(commands.Cog):
                             stats['rank_changes'].append({
                                 'member': member,
                                 'type': 'HHStJ',
-                                'old_rank': current_hhstj_prefix,
+                                'old_rank': stored_hhstj_prefix,
                                 'new_rank': correct_hhstj_prefix
                             })
 
                             record['hhstj_prefix'] = correct_hhstj_prefix
                             current_hhstj_prefix = correct_hhstj_prefix
                             stats['rank_updates'] += 1
+                        else:
+                            # Keep the stored shorthand
+                            current_hhstj_prefix = stored_hhstj_prefix
 
                     # UPDATE NICKNAME IF REQUESTED
                     if update_nicknames:
@@ -5425,19 +5417,22 @@ class BulkAssignView(discord.ui.View):
         modal = BulkAssignModal(self, user_data)
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="Not Assigned", style=discord.ButtonStyle.primary, emoji="<:No:1437788507111428228>")
+    @discord.ui.button(label="Not Assigned", style=discord.ButtonStyle.primary, emoji="❎")
     async def nil_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Set callsign to Not Assigned (NIL/default)"""
 
-        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Setting Callsign to `Not Assigned`",
-                                                ephemeral=True)
+        await interaction.response.send_message(
+            content=f"<a:Load:1430912797469970444> Setting Callsign to `Not Assigned`",
+            ephemeral=True
+        )
 
         try:
             user_data = self.users_data[self.current_index]
             member = user_data['member']
 
-            # Get HHStJ prefix
-            hhstj_prefix = get_hhstj_prefix_from_roles(member.roles)
+            # Get HHStJ prefix (preserving any stored shorthand)
+            stored_hhstj = user_data.get('hhstj_prefix', '')
+            hhstj_prefix = get_hhstj_prefix_from_roles(member.roles, stored_hhstj)
 
             # Add to database with Not Assigned as callsign
             is_fenz_high_command = any(role.id in HIGH_COMMAND_RANKS for role in member.roles)
@@ -5457,19 +5452,13 @@ class BulkAssignView(discord.ui.View):
                 is_hhstj_high_command
             )
 
-            # Update nickname to PREFIX-Not Assigned
-            nickname_parts = []
-            if user_data['fenz_prefix']:
-                if user_data['fenz_prefix'] == "RFF":
-                    nickname_parts.append("RFF")
-                else:
-                    nickname_parts.append(f"{user_data['fenz_prefix']}-Not Assigned")
-            if hhstj_prefix and "-" not in hhstj_prefix:
-                nickname_parts.append(hhstj_prefix)
-            if user_data['roblox_username']:
-                nickname_parts.append(user_data['roblox_username'])
-
-            new_nickname = " | ".join(nickname_parts) if nickname_parts else user_data['roblox_username']
+            # ✅ Use format_nickname for consistent formatting
+            new_nickname = format_nickname(
+                user_data['fenz_prefix'],
+                "Not Assigned",
+                hhstj_prefix or '',
+                user_data['roblox_username']
+            )
 
             try:
                 success, final_nick = await safe_edit_nickname(member, new_nickname)
@@ -5483,7 +5472,8 @@ class BulkAssignView(discord.ui.View):
             self.current_index += 1
 
             await interaction.followup.send(
-                f"Set {member.mention} to Not Assigned, ({user_data['fenz_prefix']}-Not Assigned)",
+                f"<:Accepted:1426930333789585509> Set {member.mention} to Not Assigned\n"
+                f"Nickname: `{new_nickname}`",
                 ephemeral=True
             )
 

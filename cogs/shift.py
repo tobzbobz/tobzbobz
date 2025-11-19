@@ -2066,8 +2066,6 @@ class ShiftManagementCog(commands.Cog):
                     continue
 
                 quota_status = ""
-                user_ids = [row['discord_user_id'] for row in results]
-                quota_infos = await self.get_bulk_quota_info(user_ids, interaction.guild, type.value)
 
                 # ONLY show quota icons for current wave (wave is None)
                 if wave is None:  # Current wave
@@ -3966,19 +3964,6 @@ class AdminShiftControlView(discord.ui.View):
                     self.active_shift['id']
                 )
 
-            async with db.pool.acquire() as conn:
-                # Get current break_sessions
-                current_sessions = await conn.fetchval(
-                    'SELECT break_sessions FROM shifts WHERE id = $1',
-                    self.active_shift['id']
-                )
-
-                # Parse and update the last session
-                sessions = json.loads(current_sessions) if current_sessions else []
-                if sessions and sessions[-1]['end'] is None:
-                    sessions[-1]['end'] = datetime.utcnow().isoformat()
-                    sessions[-1]['duration'] = pause_duration
-
             await self.cog.update_nickname_for_shift_status(self.target_user, 'break')
             await self.cog.update_duty_roles(self.target_user, self.type, 'break')
 
@@ -4276,8 +4261,6 @@ class AdminActionsSelect(discord.ui.Select):
                 'SELECT MAX(wave_number) FROM shifts WHERE wave_number IS NOT NULL'
             )
 
-            # REMOVE the previous_wave_count query - we don't need it anymore
-
             # All time count
             all_time_count = await conn.fetchval(
                 '''SELECT COUNT(*)
@@ -4305,8 +4288,8 @@ class AdminActionsSelect(discord.ui.Select):
         )
 
         embed.add_field(
-            name=f"Previous Waves",  # Changed text
-            value=f"Waves 1-{max_wave if max_wave else 0}",  # Changed to show range
+            name=f"Previous Waves",
+            value=f"Waves 1-{max_wave if max_wave else 0}",
             inline=True
         )
 
@@ -4328,7 +4311,14 @@ class AdminActionsSelect(discord.ui.Select):
             max_wave
         )
 
-        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        # Try to get the admin actions dropdown parent message
+        # This assumes we can access it through the interaction
+        try:
+            await interaction.edit_original_response(embed=embed, view=view)
+            view.message = interaction.message
+        except:
+            message = await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+            view.message = message
 
 
 class PageJumpModal(discord.ui.Modal):
@@ -4412,12 +4402,8 @@ class ShiftListView(discord.ui.View):
         # Clear existing buttons
         self.clear_items()
 
-        # Only show buttons if more than one page
-        if self.total_pages <= 1:
-            return
-
-        # First page button - only show if not on first page
-        if self.current_page > 0:
+        # First page button - only show if not on first page AND more than one page
+        if self.current_page > 0 and self.total_pages > 1:
             first_btn = discord.ui.Button(
                 emoji="<:LeftSkip:1434962162064822343>",
                 style=discord.ButtonStyle.secondary,
@@ -4426,8 +4412,8 @@ class ShiftListView(discord.ui.View):
             first_btn.callback = self.first_button_callback
             self.add_item(first_btn)
 
-        # Previous button - only show if not on first page
-        if self.current_page > 0:
+        # Previous button - only show if not on first page AND more than one page
+        if self.current_page > 0 and self.total_pages > 1:
             prev_btn = discord.ui.Button(
                 emoji="<:LeftArrow:1434962165215002777>",
                 style=discord.ButtonStyle.secondary,
@@ -4436,17 +4422,18 @@ class ShiftListView(discord.ui.View):
             prev_btn.callback = self.prev_button_callback
             self.add_item(prev_btn)
 
-        # Page indicator (always show if multiple pages)
-        page_btn = discord.ui.Button(
-            label=f"{self.current_page + 1}/{self.total_pages}",
-            style=discord.ButtonStyle.primary,
-            custom_id="page"
-        )
-        page_btn.callback = self.page_jump_callback
-        self.add_item(page_btn)
+        # Page indicator (only show if multiple pages)
+        if self.total_pages > 1:
+            page_btn = discord.ui.Button(
+                label=f"{self.current_page + 1}/{self.total_pages}",
+                style=discord.ButtonStyle.primary,
+                custom_id="page"
+            )
+            page_btn.callback = self.page_jump_callback
+            self.add_item(page_btn)
 
-        # Next button - only show if not on last page
-        if self.current_page < self.total_pages - 1:
+        # Next button - only show if not on last page AND more than one page
+        if self.current_page < self.total_pages - 1 and self.total_pages > 1:
             next_btn = discord.ui.Button(
                 emoji="<:RightArrow:1434962170147246120>",
                 style=discord.ButtonStyle.secondary,
@@ -4455,14 +4442,17 @@ class ShiftListView(discord.ui.View):
             next_btn.callback = self.next_button_callback
             self.add_item(next_btn)
 
-        # Last page button - only show if not on last page
-        if self.current_page < self.total_pages - 1:
+        # Last page button - only show if not on last page AND more than one page
+        if self.current_page < self.total_pages - 1 and self.total_pages > 1:
             last_btn = discord.ui.Button(
                 emoji="<:RightSkip:1434962167660281926>",
                 style=discord.ButtonStyle.secondary,
                 custom_id="last"
             )
+            last_btn.callback = self.last_button_callback
+            self.add_item(last_btn)
 
+        # ALWAYS show return button
         return_btn = discord.ui.Button(
             label="Return",
             emoji="<:Denied:1426930694633816248>",
@@ -4568,8 +4558,17 @@ class ShiftListView(discord.ui.View):
 
     async def return_button_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
+
+        # Delete the shift list
+        if self.message:
+            try:
+                await self.message.delete()
+            except:
+                pass
+
         await self.cog.show_admin_shift_panel(interaction, self.target_user, self.type)
         self.stop()
+
 
 class ResetTimeConfirmModal(discord.ui.Modal):
     """Modal for confirming reset time action"""
@@ -4663,33 +4662,6 @@ class ModifyShiftSelectView(discord.ui.View):
             return False
         return True
 
-    async def most_recent_callback(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-
-        async with db.pool.acquire() as conn:
-            shift = await conn.fetchrow(
-                '''SELECT * FROM shifts 
-                   WHERE discord_user_id = $1 
-                     AND type = $2
-                     AND end_time IS NOT NULL 
-                   ORDER BY end_time DESC LIMIT 1''',
-                self.target_user.id, self.type
-            )
-
-        if not shift:
-            await interaction.followup.send(
-                "<:Denied:1426930694633816248> No completed shifts found.",
-                ephemeral=True
-            )
-            return
-
-        shift_dict = dict(shift)
-        await self.show_modify_panel(interaction, shift_dict)
-
-    async def search_callback(self, interaction: discord.Interaction):
-        modal = ShiftIDModal(self.cog, self.admin, self.target_user, "modify")
-        await interaction.response.send_modal(modal)
-
     async def populate_shift_dropdown(self):
         """Add a dropdown with recent shifts, then add buttons below"""
         # Fetch recent shifts
@@ -4749,6 +4721,43 @@ class ModifyShiftSelectView(discord.ui.View):
         search_btn.callback = self.search_callback
         self.add_item(search_btn)
 
+        # ADD CANCEL BUTTON
+        cancel_btn = discord.ui.Button(
+            label="Cancel",
+            emoji="<:Denied:1426930694633816248>",
+            style=discord.ButtonStyle.secondary,
+            custom_id="cancel"
+        )
+        cancel_btn.callback = self.cancel_callback
+        self.add_item(cancel_btn)
+
+    async def most_recent_callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+
+        async with db.pool.acquire() as conn:
+            shift = await conn.fetchrow(
+                '''SELECT * FROM shifts 
+                   WHERE discord_user_id = $1 
+                     AND type = $2
+                     AND end_time IS NOT NULL 
+                   ORDER BY end_time DESC LIMIT 1''',
+                self.target_user.id, self.type
+            )
+
+        if not shift:
+            await interaction.followup.send(
+                "<:Denied:1426930694633816248> No completed shifts found.",
+                ephemeral=True
+            )
+            return
+
+        shift_dict = dict(shift)
+        await self.show_modify_panel(interaction, shift_dict)
+
+    async def search_callback(self, interaction: discord.Interaction):
+        modal = ShiftIDModal(self.cog, self.admin, self.target_user, "modify", self)
+        await interaction.response.send_modal(modal)
+
     async def shift_select_callback(self, interaction: discord.Interaction):
         """Handle shift selection from dropdown"""
         await interaction.response.defer()
@@ -4774,6 +4783,19 @@ class ModifyShiftSelectView(discord.ui.View):
         shift_dict = dict(shift)
         await self.show_modify_panel(interaction, shift_dict)
 
+    async def cancel_callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+
+        # Delete the selection panel
+        if self.message:
+            try:
+                await self.message.delete()
+            except:
+                pass
+
+        await self.cog.show_admin_shift_panel(interaction, self.target_user, self.type)
+        self.stop()
+
     async def show_modify_panel(self, interaction: discord.Interaction, shift: dict):
         """Show the modify options for a shift"""
         duration = shift['end_time'] - shift['start_time']
@@ -4785,7 +4807,6 @@ class ModifyShiftSelectView(discord.ui.View):
             color=discord.Color(0x000000)
         )
 
-        # Add author as the TARGET USER (whose shift is being modified)
         embed.set_author(
             name=f"Shift Management: @{self.target_user.display_name}",
             icon_url=self.target_user.display_avatar.url
@@ -4794,8 +4815,15 @@ class ModifyShiftSelectView(discord.ui.View):
         embed.set_footer(text=f"Shift ID: {shift['id']} • Shift Type: {self.type}")
 
         view = ModifyShiftActionsView(self.cog, self.admin, self.target_user, shift)
-        message = await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-        view.message = message
+
+        # Edit the original message instead of sending new one
+        if self.message:
+            await self.message.edit(embed=embed, view=view)
+            view.message = self.message
+        else:
+            message = await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+            view.message = message
+            
 
 class ModifyShiftActionsView(discord.ui.View):
     """View for modifying a shift"""
@@ -4850,6 +4878,14 @@ class ModifyShiftActionsView(discord.ui.View):
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="<:Denied:1426930694633816248>")
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
+
+        # Delete the modify panel and return to admin panel
+        if self.message:
+            try:
+                await self.message.delete()
+            except:
+                pass
+
         await self.cog.show_admin_shift_panel(interaction, self.target_user, self.shift['type'])
         self.stop()
 
@@ -4894,15 +4930,14 @@ class TimeModifyModal(discord.ui.Modal):
             ))
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Setting Shift Time",
-                                                ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
 
         try:
             hours = int(self.children[0].value or 0)
             minutes = int(self.children[1].value or 0)
             seconds = int(self.children[2].value or 0) if len(self.children) > 2 else 0
 
-            # NOW validate
+            # Validate
             valid, error_msg = validate_time_input(hours, minutes, seconds)
             if not valid:
                 await interaction.followup.send(
@@ -4924,7 +4959,7 @@ class TimeModifyModal(discord.ui.Modal):
                         new_start_time, self.shift['id']
                     )
 
-                # 🆕 LOG THE MODIFICATION
+                # Log the modification
                 await self.cog.queue_modification_log(
                     interaction.guild,
                     self.admin,
@@ -4933,50 +4968,10 @@ class TimeModifyModal(discord.ui.Modal):
                     f"Set duration to {self.cog.format_duration(time_delta)}"
                 )
 
-                # After logging the modification, update the embed to show new duration
-                updated_shift = await self.cog.get_active_shift(self.target_user.id) or self.shift
-
-                if self.action == "set" and self.view and hasattr(self.view, 'message') and self.view.message:
-                    try:
-                        # Get fresh shift data
-                        async with db.pool.acquire() as conn:
-                            fresh_shift = await conn.fetchrow('SELECT * FROM shifts WHERE id = $1', self.shift['id'])
-
-                        if fresh_shift:
-                            fresh_shift = dict(fresh_shift)
-                            duration = fresh_shift['end_time'] - fresh_shift['start_time']
-                            active_duration = duration - timedelta(seconds=fresh_shift.get('pause_duration', 0))
-
-                            # Create updated embed
-                            embed = discord.Embed(
-                                title="Modify Shift",
-                                description=f"**Status:** <:Offline:1434951694319620197> Ended\n**Duration:** {self.cog.format_duration(active_duration)}",
-                                color=discord.Color(0x000000)
-                            )
-                            embed.set_author(
-                                name=f"Shift Management: @{self.target_user.display_name}",
-                                icon_url=self.target_user.display_avatar.url
-                            )
-                            embed.set_footer(text=f"Shift ID: {fresh_shift['id']} • Shift Type: {fresh_shift['type']}")
-
-                            # Create new view with updated shift data
-                            new_view = ModifyShiftActionsView(self.cog, self.admin, self.target_user, fresh_shift)
-                            new_view.message = self.view.message
-
-                            # Edit the original message
-                            await self.view.message.edit(embed=embed, view=new_view)
-
-                    except discord.NotFound:
-                        # Message was deleted, log but don't crash
-                        pass
-                    except discord.HTTPException as e:
-                        print(f"Failed to edit message: {e}")
-
                 await interaction.followup.send(
                     f"<:Accepted:1426930333789585509> Set shift duration to {self.cog.format_duration(time_delta)} for {self.target_user.mention}",
                     ephemeral=True
                 )
-
 
             elif self.action == "add":
                 # Subtract time from pause_duration (which increases active time)
@@ -4991,13 +4986,12 @@ class TimeModifyModal(discord.ui.Modal):
                         new_pause, self.shift['id']
                     )
 
-                    # 🆕 LOG THE MODIFICATION
                 await self.cog.queue_modification_log(
                     interaction.guild,
                     self.admin,
                     self.target_user,
                     self.shift,
-                    f"Added {self.cog.format_duration(time_delta)} to shift"  # CHANGE THIS
+                    f"Added {self.cog.format_duration(time_delta)} to shift"
                 )
 
                 await interaction.followup.send(
@@ -5018,21 +5012,54 @@ class TimeModifyModal(discord.ui.Modal):
                         new_pause, self.shift['id']
                     )
 
-                # 🆕 LOG THE MODIFICATION
                 await self.cog.queue_modification_log(
                     interaction.guild,
                     self.admin,
                     self.target_user,
                     self.shift,
-                    f"Removed {self.cog.format_duration(time_delta)} from shift"  # CHANGE THIS
+                    f"Removed {self.cog.format_duration(time_delta)} from shift"
                 )
-
-                
 
                 await interaction.followup.send(
                     f"<:Accepted:1426930333789585509> Removed {self.cog.format_duration(time_delta)} from shift for {self.target_user.mention}",
                     ephemeral=True
                 )
+
+            # UPDATE THE MODIFY PANEL EMBED
+            if self.view and hasattr(self.view, 'message') and self.view.message:
+                try:
+                    # Get fresh shift data
+                    async with db.pool.acquire() as conn:
+                        fresh_shift = await conn.fetchrow('SELECT * FROM shifts WHERE id = $1', self.shift['id'])
+
+                    if fresh_shift:
+                        fresh_shift = dict(fresh_shift)
+                        duration = fresh_shift['end_time'] - fresh_shift['start_time']
+                        active_duration = duration - timedelta(seconds=fresh_shift.get('pause_duration', 0))
+
+                        # Create updated embed
+                        embed = discord.Embed(
+                            title="Modify Shift",
+                            description=f"**Status:** <:Offline:1434951694319620197> Ended\n**Duration:** {self.cog.format_duration(active_duration)}",
+                            color=discord.Color(0x000000)
+                        )
+                        embed.set_author(
+                            name=f"Shift Management: @{self.target_user.display_name}",
+                            icon_url=self.target_user.display_avatar.url
+                        )
+                        embed.set_footer(text=f"Shift ID: {fresh_shift['id']} • Shift Type: {fresh_shift['type']}")
+
+                        # Create new view with updated shift data
+                        new_view = ModifyShiftActionsView(self.cog, self.admin, self.target_user, fresh_shift)
+                        new_view.message = self.view.message
+
+                        # Edit the original message
+                        await self.view.message.edit(embed=embed, view=new_view)
+
+                except discord.NotFound:
+                    pass
+                except discord.HTTPException as e:
+                    print(f"Failed to edit message: {e}")
 
         except ValueError:
             await interaction.followup.send(
@@ -5044,7 +5071,6 @@ class TimeModifyModal(discord.ui.Modal):
                 f"<:Denied:1426930694633816248> Error: {str(e)}",
                 ephemeral=True
             )
-
 
 class DeleteShiftSelectView(discord.ui.View):
     """View for selecting which shift to delete"""
@@ -5075,33 +5101,6 @@ class DeleteShiftSelectView(discord.ui.View):
             )
             return False
         return True
-
-    async def most_recent_callback(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-
-        async with db.pool.acquire() as conn:
-            shift = await conn.fetchrow(
-                '''SELECT * FROM shifts 
-                   WHERE discord_user_id = $1 
-                     AND type = $2
-                     AND end_time IS NOT NULL 
-                   ORDER BY end_time DESC LIMIT 1''',
-                self.target_user.id, self.type
-            )
-
-        if not shift:
-            await interaction.followup.send(
-                "<:Denied:1426930694633816248> No completed shifts found.",
-                ephemeral=True
-            )
-            return
-
-        shift_dict = dict(shift)
-        await self.show_delete_confirm(interaction, shift_dict)
-
-    async def search_callback(self, interaction: discord.Interaction):
-        modal = ShiftIDModal(self.cog, self.admin, self.target_user, "delete")
-        await interaction.response.send_modal(modal)
 
     async def populate_shift_dropdown(self):
         """Add a dropdown with recent shifts, then add buttons below"""
@@ -5162,6 +5161,43 @@ class DeleteShiftSelectView(discord.ui.View):
         search_btn.callback = self.search_callback
         self.add_item(search_btn)
 
+        # ADD CANCEL BUTTON
+        cancel_btn = discord.ui.Button(
+            label="Cancel",
+            emoji="<:Denied:1426930694633816248>",
+            style=discord.ButtonStyle.secondary,
+            custom_id="cancel"
+        )
+        cancel_btn.callback = self.cancel_callback
+        self.add_item(cancel_btn)
+
+    async def most_recent_callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+
+        async with db.pool.acquire() as conn:
+            shift = await conn.fetchrow(
+                '''SELECT * FROM shifts 
+                   WHERE discord_user_id = $1 
+                     AND type = $2
+                     AND end_time IS NOT NULL 
+                   ORDER BY end_time DESC LIMIT 1''',
+                self.target_user.id, self.type
+            )
+
+        if not shift:
+            await interaction.followup.send(
+                "<:Denied:1426930694633816248> No completed shifts found.",
+                ephemeral=True
+            )
+            return
+
+        shift_dict = dict(shift)
+        await self.show_delete_confirm(interaction, shift_dict)
+
+    async def search_callback(self, interaction: discord.Interaction):
+        modal = ShiftIDModal(self.cog, self.admin, self.target_user, "delete", self)
+        await interaction.response.send_modal(modal)
+
     async def shift_select_callback(self, interaction: discord.Interaction):
         """Handle shift selection from dropdown"""
         await interaction.response.defer()
@@ -5187,6 +5223,18 @@ class DeleteShiftSelectView(discord.ui.View):
         shift_dict = dict(shift)
         await self.show_delete_confirm(interaction, shift_dict)
 
+    async def cancel_callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+
+        # Delete the selection panel
+        if self.message:
+            try:
+                await self.message.delete()
+            except:
+                pass
+
+        await self.cog.show_admin_shift_panel(interaction, self.target_user, self.type)
+        self.stop()
 
     async def show_delete_confirm(self, interaction: discord.Interaction, shift: dict):
         """Show delete confirmation"""
@@ -5196,7 +5244,7 @@ class DeleteShiftSelectView(discord.ui.View):
         embed = discord.Embed(
             title=f"Delete Shift",
             description=f"Are you sure you want to delete this shift?\n"
-                        f"This cannot be undone.\n\n"  # Changed: removed leading \n
+                        f"This cannot be undone.\n\n"
                         f"**Status:** <:Offline:1434951694319620197> Ended\n"
                         f"**Started:** <t:{int(shift['start_time'].timestamp())}:t>\n"
                         f"**Duration:** {self.cog.format_duration(active_duration)}",
@@ -5206,7 +5254,14 @@ class DeleteShiftSelectView(discord.ui.View):
         embed.set_footer(text=f"{shift['id']} • Shift Type: {shift['type']}")
 
         view = DeleteShiftConfirmView(self.cog, self.admin, self.target_user, shift)
-        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+        # Edit original message
+        if self.message:
+            await self.message.edit(embed=embed, view=view)
+            view.message = self.message
+        else:
+            message = await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+            view.message = message
 
 
 class DeleteShiftConfirmView(discord.ui.View):
@@ -5272,17 +5327,14 @@ class DeleteShiftConfirmView(discord.ui.View):
     @discord.ui.button(label="Delete Shift", style=discord.ButtonStyle.secondary, disabled=True, custom_id="delete",
                        emoji="<:Reset:1434959478796714074>")
     async def delete_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-
         if not self.armed:
-            await interaction.followup.send(
+            await interaction.response.send_message(
                 "<:Denied:1426930694633816248> Please ARM first!",
                 ephemeral=True
             )
             return
 
-        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Deleting Shift",
-                                                ephemeral=True)
-
+        await interaction.response.defer(ephemeral=True)
 
         try:
             # Log before deleting
@@ -5303,6 +5355,14 @@ class DeleteShiftConfirmView(discord.ui.View):
                 ephemeral=True
             )
 
+            # Delete the confirmation message
+            if self.message:
+                try:
+                    await self.message.delete()
+                except:
+                    pass
+
+            # Return to admin panel
             await self.cog.show_admin_shift_panel(interaction, self.target_user, self.shift['type'])
             self.stop()
 
@@ -5312,9 +5372,18 @@ class DeleteShiftConfirmView(discord.ui.View):
                 ephemeral=True
             )
 
+
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="<:Denied:1426930694633816248>")
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
+
+        # Delete confirmation and return to admin panel
+        if self.message:
+            try:
+                await self.message.delete()
+            except:
+                pass
+
         await self.cog.show_admin_shift_panel(interaction, self.target_user, self.shift['type'])
         self.stop()
 
@@ -5370,7 +5439,6 @@ class ClearShiftsScopeView(discord.ui.View):
             )
             return
 
-        # REPLACE show_confirm call with direct embed creation
         embed = discord.Embed(
             title=f"**Clear User Shifts - Current Wave**",
             description=f"Are you sure you want to clear **{self.current_count}** shifts from current wave?\n\nThis cannot be undone.",
@@ -5391,10 +5459,15 @@ class ClearShiftsScopeView(discord.ui.View):
             self.type,
             self.current_count,
             "current",
-            None  # No wave number for current
+            None
         )
 
-        await interaction.edit_original_response(embed=embed, view=view)
+        # Edit original message
+        if self.message:
+            await self.message.edit(embed=embed, view=view)
+            view.message = self.message
+        else:
+            await interaction.edit_original_response(embed=embed, view=view)
 
     @discord.ui.button(label="Previous Waves", style=discord.ButtonStyle.primary, emoji="🔙")
     async def previous_waves_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -5470,11 +5543,23 @@ class ClearShiftsScopeView(discord.ui.View):
             None  # No wave number for all time
         )
 
-        await interaction.edit_original_response(embed=embed, view=view)
+        if self.message:
+            await self.message.edit(embed=embed, view=view)
+            view.message = self.message
+        else:
+            await interaction.edit_original_response(embed=embed, view=view)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="<:Denied:1426930694633816248>")
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
+
+        # Delete the scope selection
+        if self.message:
+            try:
+                await self.message.delete()
+            except:
+                pass
+
         await self.cog.show_admin_shift_panel(interaction, self.target_user, self.type)
         self.stop()
 
@@ -5554,7 +5639,7 @@ class ClearShiftsConfirmView(discord.ui.View):
     async def clear_button(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         if not self.armed:
-            await interaction.followup.send("<:Denied:1426930694633816248> Please ARM first!", ephemeral=True)
+            await interaction.response.send_message("<:Denied:1426930694633816248> Please ARM first!", ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -5565,7 +5650,6 @@ class ClearShiftsConfirmView(discord.ui.View):
             # Build delete query based on scope
             async with db.pool.acquire() as conn:
                 if self.scope == "current":
-                    # Delete current wave only
                     await conn.execute(
                         '''DELETE
                            FROM shifts
@@ -5577,20 +5661,18 @@ class ClearShiftsConfirmView(discord.ui.View):
                     )
                     scope_text = "current wave"
 
-                elif self.scope == "wave":  # NEW: Handle specific wave number
-                    # Delete specific wave
+                elif self.scope == "wave":
                     await conn.execute(
                         '''DELETE
                            FROM shifts
                            WHERE discord_user_id = $1
                              AND type = $2
                              AND wave_number = $3''',
-                        self.target_user.id, self.type, self.max_wave  # max_wave now holds the specific wave number
+                        self.target_user.id, self.type, self.max_wave
                     )
                     scope_text = f"Wave {self.max_wave}"
 
-                elif self.scope == "previous":  # KEEP for backward compatibility but won't be used
-                    # Delete previous wave only
+                elif self.scope == "previous":
                     await conn.execute(
                         '''DELETE
                            FROM shifts
@@ -5602,7 +5684,6 @@ class ClearShiftsConfirmView(discord.ui.View):
                     scope_text = f"previous wave (Wave {self.max_wave})"
 
                 else:  # "all"
-                    # Delete all shifts
                     await conn.execute(
                         '''DELETE
                            FROM shifts
@@ -5627,6 +5708,14 @@ class ClearShiftsConfirmView(discord.ui.View):
                 ephemeral=True
             )
 
+            # Delete the confirmation message
+            if self.message:
+                try:
+                    await self.message.delete()
+                except:
+                    pass
+
+            # Return to admin panel
             await self.cog.show_admin_shift_panel(interaction, self.target_user, self.type)
             self.stop()
 
@@ -5639,18 +5728,28 @@ class ClearShiftsConfirmView(discord.ui.View):
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
+
+        # Delete confirmation and return to admin panel
+        if self.message:
+            try:
+                await self.message.delete()
+            except:
+                pass
+
         await self.cog.show_admin_shift_panel(interaction, self.target_user, self.type)
         self.stop()
+
 
 class ShiftIDModal(discord.ui.Modal):
     """Modal for entering a shift ID"""
 
-    def __init__(self, cog: ShiftManagementCog, admin: discord.Member, target_user: discord.Member, action: str):
+    def __init__(self, cog: ShiftManagementCog, admin: discord.Member, target_user: discord.Member, action: str, parent_view=None):
         super().__init__(title="Enter Shift ID")
         self.cog = cog
         self.admin = admin
         self.target_user = target_user
         self.action = action
+        self.parent_view = parent_view  # Store parent view reference
 
         self.add_item(discord.ui.TextInput(
             label="Shift ID",
@@ -5684,12 +5783,18 @@ class ShiftIDModal(discord.ui.Modal):
             shift_dict = dict(shift)
 
             if self.action == "modify":
-                # Show modify panel
-                view = ModifyShiftSelectView(self.cog, self.admin, self.target_user, shift_dict['type'])
+                # Create or get the view
+                if self.parent_view:
+                    view = self.parent_view
+                else:
+                    view = ModifyShiftSelectView(self.cog, self.admin, self.target_user, shift_dict['type'])
                 await view.show_modify_panel(interaction, shift_dict)
             elif self.action == "delete":
-                # Show delete confirm
-                view = DeleteShiftSelectView(self.cog, self.admin, self.target_user, shift_dict['type'])
+                # Create or get the view
+                if self.parent_view:
+                    view = self.parent_view
+                else:
+                    view = DeleteShiftSelectView(self.cog, self.admin, self.target_user, shift_dict['type'])
                 await view.show_delete_confirm(interaction, shift_dict)
 
         except ValueError:
