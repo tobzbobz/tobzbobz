@@ -10,8 +10,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+DATABASE_URL = os.getenv('DATABASE_URL')
+
 LEADERSHIP = [1389113393511923863, 1285474077556998196, 1389550689113473024]
-HIGHER_LEADERSHIP = [1389550689113473024, 1389157641799991347, 1389111326571499590]  # Add specific higher-up role IDs here
+HIGHER_LEADERSHIP = [1389550689113473024, 1389157641799991347, 1389111326571499590]
 
 # Role ID to Role Name mapping
 ROLE_NAMES = {
@@ -20,7 +22,6 @@ ROLE_NAMES = {
     1389157690760232980: "𝗙𝗘𝗡𝗭 | Assistant National Commander",
     1365959866363150366: "𝗙𝗘𝗡𝗭 | Area Commander",
     1389158062635487312: "𝗙𝗘𝗡𝗭 | Assistant Area Commander"
-    # Add more role IDs and their corresponding names here
 }
 
 
@@ -32,9 +33,21 @@ class StationOfficerCog(commands.Cog):
         self.db_pool = None
 
     async def cog_load(self):
-        self.db_pool = await asyncpg.create_pool(dsn=DATABASE_URL)
+        """Initialize database connection pool"""
+        try:
+            self.db_pool = await asyncpg.create_pool(dsn=DATABASE_URL)
+            print("✓ StationOfficerCog: Database pool created")
+        except Exception as e:
+            print(f"✗ StationOfficerCog: Failed to create database pool: {e}")
+            raise
+
+    async def cog_unload(self):
+        """Cleanup database connection pool"""
+        if self.db_pool:
+            await self.db_pool.close()
 
     async def load_timestamp(self, org: str):
+        """Load timestamp from database"""
         async with self.db_pool.acquire() as conn:
             row = await conn.fetchrow("SELECT timestamp FROM app_timestamps WHERE org=$1", org)
             if row:
@@ -42,9 +55,9 @@ class StationOfficerCog(commands.Cog):
             return None
 
     async def save_timestamp(self, org: str, timestamp_dt: Optional[datetime]):
+        """Save or delete timestamp in database"""
         async with self.db_pool.acquire() as conn:
             if timestamp_dt is None:
-                # Remove the timestamp entry
                 await conn.execute(
                     "DELETE FROM app_timestamps WHERE org=$1",
                     org
@@ -57,11 +70,15 @@ class StationOfficerCog(commands.Cog):
                 )
 
     async def check_and_reset_timestamp(self, org: str):
+        """Check if timestamp has passed and reset if needed"""
         timestamp_str = await self.load_timestamp(org)
         if timestamp_str:
             timestamp_dt = datetime.fromisoformat(timestamp_str)
             if datetime.now(timezone.utc) > timestamp_dt:
                 await self.save_timestamp(org, None)
+                return None
+            return timestamp_str
+        return None
 
     so_group = app_commands.Group(name="so", description="Station Officer application commands")
 
@@ -376,23 +393,24 @@ class StationOfficerCog(commands.Cog):
             return
 
         # Check and reset timestamp if needed
-        self.check_and_reset_timestamp(org.value)
+        timestamp_str = await self.check_and_reset_timestamp(org.value)
 
         # If no timestamp set, show modal to set one
-        if self.timestamps[org.value] is None:
+        if timestamp_str is None:
             modal = TimestampModal(self, org.value, user)
             await interaction.response.send_modal(modal)
             return
 
         # Process normally with existing timestamp
         await interaction.response.defer(ephemeral=True)
-        await self.process_applied(interaction, user, org.value)
+        await self.process_applied(interaction, user, org.value, timestamp_str)
 
     async def process_applied(
             self,
             interaction: discord.Interaction,
             user: discord.Member,
-            org: str
+            org: str,
+            timestamp_str: str
     ):
         """Process the application acknowledgment"""
 
@@ -408,8 +426,8 @@ class StationOfficerCog(commands.Cog):
                 app_type = "Station Officer"
 
             # Get timestamp
-            timestamp = self.timestamps[org]
-            timestamp_unix = int(datetime.fromisoformat(timestamp).timestamp())
+            timestamp_dt = datetime.fromisoformat(timestamp_str)
+            timestamp_unix = int(timestamp_dt.timestamp())
 
             # Send DM notification FIRST
             dm_sent = False
@@ -448,7 +466,7 @@ class StationOfficerCog(commands.Cog):
             message = (
                 f"Thanks for your application {user.mention}!\n"
                 f"If you have any queries about anything else, please make a thread or create a new ticket. "
-                f"Good luck, and I'll be in contact in the days after the application period closes – <t:{timestamp_unix}:R> (removing chat perms now, you will still be able to see the ticket)."
+                f"Good luck, and I'll be in contact in the days after the application period closes — <t:{timestamp_unix}:R> (removing chat perms now, you will still be able to see the ticket)."
             )
 
             await channel.send(message)
@@ -517,16 +535,16 @@ class StationOfficerCog(commands.Cog):
 
             # Get role name from ROLE_NAMES dict
             role_name = None
-            for role in sender.roles:
-                if role.id in ROLE_NAMES:
-                    role_name = ROLE_NAMES[role.id]
+            for sender_role in sender.roles:
+                if sender_role.id in ROLE_NAMES:
+                    role_name = ROLE_NAMES[sender_role.id]
                     break
 
             if role_name is None:
                 role_name = "Leadership Member"
 
             # Build the message
-            message = f"Hello {user.mention}, I'm {interaction.user.mention} the {role_title} from {interaction.guild.name}.\n"
+            message = f"Hello {user.mention}, I'm {sender.mention} the {role_name} from {interaction.guild.name}.\n"
             message += f"I've marked your QFF theory test, "
 
             if passed:
@@ -545,23 +563,27 @@ class StationOfficerCog(commands.Cog):
             # Send the message
             await channel.send(message)
 
-            # Assign the role to the user if the role exists
-            if role:
+            # Assign the role to the user if passed and role exists
+            role_given = False
+            if passed and role:
                 await user.add_roles(role, reason="QFF Theory Passed")
+                role_given = True
 
             # Confirm to moderator
             status = "PASSED" if passed else "FAILED"
-            await interaction.followup.send(
+            response_msg = (
                 f"<:Accepted:1426930333789585509> QFF theory results sent to {user.mention} in {channel.mention}\n"
                 f"**Result:** {status}\n"
-                f"**Grader:** {sender.mention} ({role_name})",
-                f"**Role:** <@&1408256806417072188> given",
-                ephemeral=True
+                f"**Grader:** {sender.mention} ({role_name})"
             )
+            if role_given:
+                response_msg += f"\n**Role:** <@&{role_id}> given"
+
+            await interaction.followup.send(response_msg, ephemeral=True)
 
         except discord.Forbidden:
             await interaction.followup.send(
-                "<:Denied:1426930694633816248> Missing permissions to send messages.",
+                "<:Denied:1426930694633816248> Missing permissions to send messages or assign roles.",
                 ephemeral=True
             )
         except Exception as e:
@@ -608,8 +630,8 @@ class TimestampModal(discord.ui.Modal, title="Set Application Closure Date"):
             # Save the timestamp
             await self.cog.save_timestamp(self.org, timestamp_dt)
 
-            # Process the application
-            await self.cog.process_applied(interaction, self.user, self.org)
+            # Process the application with the new timestamp
+            await self.cog.process_applied(interaction, self.user, self.org, timestamp_dt.isoformat())
 
         except ValueError:
             await interaction.followup.send(
@@ -686,14 +708,12 @@ class StJResultModal(discord.ui.Modal, title="StJ Application Notes"):
 class TheoryResultModal(discord.ui.Modal, title="Theory Test Notes"):
     """Modal for entering theory test notes"""
 
-    def __init__(self, cog: StationOfficerCog, user: discord.Member, roblox_username: str, role_title: str,
-                 passed: bool):
+    def __init__(self, cog: StationOfficerCog, user: discord.Member, passed: bool, sender: discord.Member):
         super().__init__()
         self.cog = cog
         self.user = user
-        self.roblox_username = roblox_username
-        self.role_title = role_title
         self.passed = passed
+        self.sender = sender
 
     notes = discord.ui.TextInput(
         label="Notes",
@@ -709,12 +729,10 @@ class TheoryResultModal(discord.ui.Modal, title="Theory Test Notes"):
         await self.cog.send_theory_result(
             interaction,
             self.user,
-            self.roblox_username,
-            self.role_title,
             self.passed,
-            self.notes.value if self.notes.value else ""
+            self.notes.value if self.notes.value else "",
+            self.sender
         )
-
 
 async def setup(bot):
     cog = StationOfficerCog(bot)

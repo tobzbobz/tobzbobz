@@ -1463,11 +1463,17 @@ class WatchCog(commands.Cog):
     @watch_group.command(name='logs', description='View the history of completed watches')
     @app_commands.describe(
         limit='Number of recent watches to display (default: 50, max: 500)',
-        per_page='Number of logs per page (default: 5, max: 10)'
+        per_page='Number of logs per page (default: 5, max: 10)',
+        filter='Filter logs by colour or station (e.g., "Red", "Station 1")',
+        sort='Sort logs by different criteria'
     )
-    async def watch_logs(self, interaction: discord.Interaction, limit: int = 50, per_page: int = 5):
+    async def watch_logs(self, interaction: discord.Interaction,
+                         limit: int = 25,
+                         per_page: int = 5,
+                         filter: str = None,
+                         sort: str = None):
         try:
-            # <:Accepted:1426930333789585509> Check database first
+            # Check database first
             if not await self.check_database_ready(interaction):
                 return
 
@@ -1486,7 +1492,6 @@ class WatchCog(commands.Cog):
             await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Getting Watch Logs",
                                                     ephemeral=True)
 
-            # <:Accepted:1426930333789585509> Now safe to call database
             completed_watches = await load_completed_watches()
 
             if not completed_watches:
@@ -1497,94 +1502,130 @@ class WatchCog(commands.Cog):
                 await interaction.followup.send(embed=no_logs_embed, ephemeral=True)
                 return
 
-            limit = min(max(1, limit), 500)
-            per_page = min(max(1, per_page), 10)
+            # Parse filter parameter
+            filter_colour = None
+            filter_station = None
 
-            sorted_watches = sorted(
-                completed_watches.items(),
-                key=lambda x: x[1].get('ended_at', 0),
-                reverse=True
-            )[:limit]
+            if filter:
+                filter_lower = filter.lower()
+                # Check for colours
+                colours = ['yellow', 'blue', 'brown', 'red']
+                for colour in colours:
+                    if colour in filter_lower:
+                        filter_colour = colour.capitalize()
+                        break
 
-            if not sorted_watches:
-                no_logs_embed = discord.Embed(
-                    description='<:Denied:1426930694633816248> No watch logs found!',
+                # Check for stations
+                if 'station 1' in filter_lower or 's1' in filter_lower:
+                    filter_station = 'Station 1'
+                elif 'station 2' in filter_lower or 's2' in filter_lower:
+                    filter_station = 'Station 2'
+
+            # Apply filters
+            filtered_watches = []
+            for watch_id, watch_data in completed_watches.items():
+                # Apply colour filter
+                if filter_colour and watch_data.get('colour', '').lower() != filter_colour.lower():
+                    continue
+
+                # Apply station filter
+                if filter_station and watch_data.get('station', '').lower() != filter_station.lower():
+                    continue
+
+                filtered_watches.append((watch_id, watch_data))
+
+            if not filtered_watches:
+                no_results_embed = discord.Embed(
+                    description='<:Denied:1426930694633816248> No watches found matching your filters!',
                     colour=discord.Colour(0xf24d4d)
                 )
-                await interaction.followup.send(embed=no_logs_embed, ephemeral=True)
+                await interaction.followup.send(embed=no_results_embed, ephemeral=True)
                 return
 
+            # Apply sorting
+            if sort:
+                sort_lower = sort.lower()
+
+                if 'leader' in sort_lower or 'alphabetical' in sort_lower:
+                    # Sort by leader name (alphabetical)
+                    filtered_watches.sort(key=lambda x: x[1].get('user_name', 'Unknown').lower())
+
+                elif 'length' in sort_lower:
+                    # Sort by watch duration
+                    if 'desc' in sort_lower or 'longest' in sort_lower:
+                        # Longest first (descending)
+                        filtered_watches.sort(
+                            key=lambda x: x[1].get('ended_at', 0) - x[1].get('started_at', 0),
+                            reverse=True
+                        )
+                    else:
+                        # Shortest first (ascending)
+                        filtered_watches.sort(
+                            key=lambda x: x[1].get('ended_at', 0) - x[1].get('started_at', 0)
+                        )
+
+                elif 'attendee' in sort_lower:
+                    # Sort by attendees
+                    if 'desc' in sort_lower or 'most' in sort_lower:
+                        # Most attendees first (descending)
+                        filtered_watches.sort(
+                            key=lambda x: x[1].get('attendees', 0),
+                            reverse=True
+                        )
+                    else:
+                        # Least attendees first (ascending)
+                        filtered_watches.sort(
+                            key=lambda x: x[1].get('attendees', 0)
+                        )
+            else:
+                # Default: Sort by most recent first
+                filtered_watches.sort(
+                    key=lambda x: x[1].get('ended_at', 0),
+                    reverse=True
+                )
+
+            # Apply limit
+            limit = min(max(1, limit), 100)
+            per_page = min(max(1, per_page), 10)
+            sorted_watches = filtered_watches[:limit]
+
+            # Create pages (5 watches per page for better readability)
             pages = []
+            watches_per_page = 5
             total_watches = len(sorted_watches)
-            total_pages = (total_watches + per_page - 1) // per_page
+            total_pages = (total_watches + watches_per_page - 1) // watches_per_page
 
             for page_num in range(total_pages):
-                start_idx = page_num * per_page
-                end_idx = min(start_idx + per_page, total_watches)
+                start_idx = page_num * watches_per_page
+                end_idx = min(start_idx + watches_per_page, total_watches)
                 page_watches = sorted_watches[start_idx:end_idx]
 
+                # Create page embed
                 page_embed = discord.Embed(
-                    title='📋 Watch History',
-                    description=f'Showing watches {start_idx + 1}-{end_idx} of {total_watches}',
-                    colour=discord.Colour.blue()
+                    title='Watch History',
+                    color=discord.Color.blue()
                 )
+
+                # Add filter info if any filters applied
+                filter_info = []
+                if filter_colour:
+                    filter_info.append(f"Colour: {filter_colour}")
+                if filter_station:
+                    filter_info.append(f"Station: {filter_station}")
+                if sort:
+                    # Display friendly sort name
+                    sort_name = sort.replace('_', ' ').title()
+                    filter_info.append(f"Sort: {sort_name}")
+
+                if filter_info:
+                    page_embed.description = f"**Active Filters:** {' • '.join(filter_info)}\n"
+
+                page_embed.description = (
+                                                     page_embed.description or "") + f"Showing watches {start_idx + 1}-{end_idx} of {total_watches}"
                 page_embed.set_footer(text=f'Page {page_num + 1}/{total_pages}')
 
+                # Add each watch as a field
                 for watch_id, watch_data in page_watches:
-                    started_by = interaction.guild.get_member(watch_data.get('user_id'))
-                    ended_by = interaction.guild.get_member(watch_data.get('ended_by'))
-
-                    started_by_name = started_by.display_name if started_by else watch_data.get('user_name', 'Unknown')
-                    ended_by_name = ended_by.display_name if ended_by else 'Unknown'
-
-                    started_at = watch_data.get('started_at', 0)
-                    ended_at = watch_data.get('ended_at', 0)
-
-                    duration_seconds = ended_at - started_at
-                    duration_minutes = duration_seconds // 60
-                    duration_hours = duration_minutes // 60
-                    duration_minutes_remainder = duration_minutes % 60
-
-                    if duration_hours > 0:
-                        duration_str = f"{duration_hours}h {duration_minutes_remainder}m"
-                    else:
-                        duration_str = f"{duration_minutes}m"
-
-                    if watch_data.get('status') == 'failed':
-                        field_value = (
-                            f"**Status:** <:Denied:1426930694633816248> FAILED\n"
-                            f"**Reason:** {watch_data.get('reason', 'Unknown')}\n"
-                            f"**Colour:** {watch_data.get('colour', 'Unknown')}\n"
-                            f"**Station:** {watch_data.get('station', 'Unknown')}\n"
-                            f"**Votes:** {watch_data.get('votes_received', 0)}/{watch_data.get('votes_required', 0)}\n"
-                            f"**Started:** <t:{started_at}:f> (<t:{started_at}:R>)\n"
-                            f"**Terminated:** <t:{ended_at}:f> (<t:{ended_at}:R>)"
-                        )
-                    else:
-                        field_value = (
-                            f"**Started by:** {started_by_name}\n"
-                            f"**Ended by:** {ended_by_name}\n"
-                            f"**Duration:** {duration_str}\n"
-                            f"**Attendees:** {watch_data.get('attendees', 'N/A')}\n"
-                            f"**Started:** <t:{started_at}:f> (<t:{started_at}:R>)\n"
-                            f"**Ended:** <t:{ended_at}:f> (<t:{ended_at}:R>)"
-                        )
-
-                    # Add switch history if exists
-                    switch_history = watch_data.get('switch_history', [])
-                    if switch_history:
-                        switches = []
-                        for switch in switch_history:
-                            switch_time = f"<t:{switch['timestamp']}:t>"
-                            changes = []
-                            if 'from_colour' in switch:
-                                changes.append(f"{switch['from_colour']}→{switch['to_colour']}")
-                            if 'from_station' in switch:
-                                changes.append(f"{switch['from_station']}→{switch['to_station']}")
-                            switches.append(f"{' & '.join(changes)} at {switch_time}")
-
-                        field_value += f"\n**Switches:** {', '.join(switches)}"
-
                     colour_emoji = {
                         'Yellow': '🟡',
                         'Blue': '🔵',
@@ -1592,14 +1633,108 @@ class WatchCog(commands.Cog):
                         'Red': '🔴'
                     }.get(watch_data.get('colour', ''), '⚪')
 
+                    started_at = watch_data.get('started_at', 0)
+                    ended_at = watch_data.get('ended_at', 0)
+
+                    # Calculate duration
+                    duration_seconds = ended_at - started_at
+                    duration_hours = duration_seconds // 3600
+                    duration_minutes = (duration_seconds % 3600) // 60
+
+                    if duration_hours > 0:
+                        duration_str = f"{duration_hours}h {duration_minutes}m"
+                    else:
+                        duration_str = f"{duration_minutes}m"
+
+                    # Build field name with status indicator
+                    if watch_data.get('status') == 'failed':
+                        status_emoji = '<:Denied:1426930694633816248>'
+                        field_name = f"{status_emoji} {colour_emoji} {watch_data.get('colour', 'Unknown')} Watch - {watch_data.get('station', 'Unknown')} (FAILED)"
+                    else:
+                        status_emoji = '<:Accepted:1426930333789585509>'
+                        field_name = f"{status_emoji} {colour_emoji} {watch_data.get('colour', 'Unknown')} Watch - {watch_data.get('station', 'Unknown')}"
+
+                    # Build field value
+                    if watch_data.get('status') == 'failed':
+                        # Failed watch info
+                        reason = watch_data.get('reason', 'Unknown')
+                        if reason == 'insufficient_votes':
+                            reason_text = "Insufficient votes"
+                        elif reason == 'insufficient_votes_at_scheduled_time':
+                            reason_text = "Insufficient votes by scheduled time"
+                        else:
+                            reason_text = reason.replace('_', ' ').title()
+
+                        field_value = (
+                            f"**Status:** Failed\n"
+                            f"**Reason:** {reason_text}\n"
+                            f"**Votes:** {watch_data.get('votes_received', 0)}/{watch_data.get('votes_required', 0)}\n"
+                            f"**Started:** <t:{started_at}:f>\n"
+                            f"**Ended:** <t:{ended_at}:f>"
+                        )
+                    else:
+                        # Successful watch info
+                        started_by = interaction.guild.get_member(watch_data.get('user_id'))
+                        ended_by = interaction.guild.get_member(watch_data.get('ended_by'))
+
+                        started_by_name = started_by.mention if started_by else watch_data.get('user_name', 'Unknown')
+                        ended_by_name = ended_by.mention if ended_by else 'Unknown'
+
+                        field_value = (
+                            f"**Duration:** {duration_str}\n"
+                            f"**Attendees:** {watch_data.get('attendees', 'N/A')}\n"
+                            f"**Started By:** {started_by_name}\n"
+                            f"**Ended By:** {ended_by_name}\n"
+                            f"**Started:** <t:{started_at}:R>\n"
+                            f"**Ended:** <t:{ended_at}:R>"
+                        )
+
+                        # Add switch history if exists
+                        switch_history = watch_data.get('switch_history', [])
+                        if isinstance(switch_history, str):
+                            try:
+                                switch_history = json.loads(switch_history) if switch_history else []
+                            except:
+                                switch_history = []
+
+                        if switch_history:
+                            switch_count = len(switch_history)
+                            # Show first switch with details
+                            first_switch = switch_history[0]
+                            switch_lines = []
+
+                            # Build switch description
+                            changes = []
+                            if 'from_colour' in first_switch and 'to_colour' in first_switch:
+                                changes.append(f"{first_switch['from_colour']}→{first_switch['to_colour']}")
+                            if 'from_station' in first_switch and 'to_station' in first_switch:
+                                changes.append(f"{first_switch['from_station']}→{first_switch['to_station']}")
+                            if 'from_leader' in first_switch and 'to_leader' in first_switch:
+                                old_leader = interaction.guild.get_member(first_switch['from_leader'])
+                                new_leader = interaction.guild.get_member(first_switch['to_leader'])
+                                old_name = old_leader.display_name if old_leader else first_switch.get(
+                                    'switched_by_name', 'Unknown')
+                                new_name = new_leader.display_name if new_leader else 'Unknown'
+                                changes.append(f"Leader: {old_name}→{new_name}")
+                            if 'from_comms' in first_switch and 'to_comms' in first_switch:
+                                changes.append(f"Comms: {first_switch['from_comms']}→{first_switch['to_comms']}")
+
+                            if changes:
+                                switch_text = ', '.join(changes)
+                                if switch_count > 1:
+                                    field_value += f"\n**Switches:** {switch_text} (+{switch_count - 1} more)"
+                                else:
+                                    field_value += f"\n**Switch:** {switch_text}"
+
                     page_embed.add_field(
-                        name=f"{colour_emoji} {watch_data.get('colour', 'Unknown')} Watch - {watch_data.get('station', 'Unknown')}",
+                        name=field_name,
                         value=field_value,
                         inline=False
                     )
 
                 pages.append(page_embed)
 
+            # Send response
             if len(pages) == 1:
                 await interaction.followup.send(embed=pages[0], ephemeral=True)
             else:
@@ -1611,13 +1746,77 @@ class WatchCog(commands.Cog):
             error_embed = discord.Embed(description=f'<:Denied:1426930694633816248> Error: {e}',
                                         colour=discord.Colour(0xf24d4d))
 
-            # Handle if response not sent yet
             await interaction.delete_original_response()
             if not interaction.response.is_done():
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
             else:
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
             raise
+
+    # Add autocomplete functions for filter and sort:
+
+    @watch_logs.autocomplete('filter')
+    async def logs_filter_autocomplete(self, interaction: discord.Interaction, current: str) -> list[
+        app_commands.Choice[str]]:
+        """Provide autocomplete options for the filter parameter"""
+
+        # Define all filterable options (removed status filters)
+        filter_options = [
+            # Colours
+            app_commands.Choice(name='🔴 Red Watch', value='Red'),
+            app_commands.Choice(name='🟡 Yellow Watch', value='Yellow'),
+            app_commands.Choice(name='🔵 Blue Watch', value='Blue'),
+            app_commands.Choice(name='🟤 Brown Watch', value='Brown'),
+
+            # Stations
+            app_commands.Choice(name='1️⃣ Station 1', value='Station 1'),
+            app_commands.Choice(name='2️⃣ Station 2', value='Station 2'),
+        ]
+
+        # Filter based on current input
+        if not current:
+            return filter_options
+
+        current_lower = current.lower()
+        filtered = [
+            choice for choice in filter_options
+            if current_lower in choice.name.lower() or current_lower in choice.value.lower()
+        ]
+
+        return filtered[:25]
+
+    @watch_logs.autocomplete('sort')
+    async def logs_sort_autocomplete(self, interaction: discord.Interaction, current: str) -> list[
+        app_commands.Choice[str]]:
+        """Provide autocomplete options for the sort parameter"""
+
+        sort_options = [
+            # Default
+            app_commands.Choice(name='📅 Most Recent First (Default)', value='recent'),
+
+            # Leader
+            app_commands.Choice(name='👤 Watch Leader (A-Z)', value='leader_alphabetical'),
+
+            # Length
+            app_commands.Choice(name='⏱️ Length: Shortest First', value='length_ascending'),
+            app_commands.Choice(name='⏱️ Length: Longest First', value='length_descending'),
+
+            # Attendees
+            app_commands.Choice(name='👥 Attendees: Least First', value='attendees_ascending'),
+            app_commands.Choice(name='👥 Attendees: Most First', value='attendees_descending'),
+        ]
+
+        # Filter based on current input
+        if not current:
+            return sort_options
+
+        current_lower = current.lower()
+        filtered = [
+            choice for choice in sort_options
+            if current_lower in choice.name.lower() or current_lower in choice.value.lower()
+        ]
+
+        return filtered[:25]
 
     @watch_group.command(name='delete-log', description='Delete a specific watch log')
     @app_commands.default_permissions(administrator=True)
@@ -2186,12 +2385,14 @@ class WatchCog(commands.Cog):
         colour='New colour for the watch',
         station='New station for the watch',
         watch_leader='New watch leader',
-        comms='New FIRE COMMS status'
+        comms='New FIRE COMMS status',
+        ping='Whether to ping roles when switching (default: True)'
     )
 
     async def watch_switch(self, interaction: discord.Interaction, watch: str,
                            colour: str = None, station: str = None,
-                           watch_leader: discord.Member = None, comms: str = None):
+                           watch_leader: discord.Member = None, comms: str = None,
+                           ping: bool = True):
         try:
             allowed_role_ids = [1285474077556998196, 1389550689113473024, 1365536209681514636]
             user_roles = [role.id for role in interaction.user.roles]
@@ -2443,8 +2644,13 @@ class WatchCog(commands.Cog):
 
                 view = WatchRoleButton(0)
 
+                if ping:
+                    ping_content = f'-# ||<@&1285474077556998196><@&1365536209681514636><@&1390867686170300456><@{final_leader_id}><@{interaction.user.id}>||'
+                else:
+                    ping_content = ''
+
                 msg = await channel.send(
-                    content=f'-# ||<@&1285474077556998196><@&1365536209681514636><@&1390867686170300456><@{final_leader_id}><@{interaction.user.id}>||',
+                    content=ping_content,
                     embed=embed,
                     view=view
                 )
