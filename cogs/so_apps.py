@@ -34,12 +34,30 @@ class StationOfficerCog(commands.Cog):
 
     async def cog_load(self):
         """Initialize database connection pool"""
-        try:
-            self.db_pool = await asyncpg.create_pool(dsn=DATABASE_URL)
-            print("✓ StationOfficerCog: Database pool created")
-        except Exception as e:
-            print(f"✗ StationOfficerCog: Failed to create database pool: {e}")
-            raise
+        max_retries = 3
+        retry_delay = 2
+
+        for attempt in range(max_retries):
+            try:
+                self.db_pool = await asyncpg.create_pool(
+                    dsn=DATABASE_URL,
+                    timeout=30,  # 30 second timeout
+                    command_timeout=10,  # 10 second command timeout
+                    min_size=1,
+                    max_size=10
+                )
+                print("✓ StationOfficerCog: Database pool created")
+                return
+            except asyncio.TimeoutError:
+                print(f"✗ StationOfficerCog: Connection timeout (attempt {attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+                else:
+                    print("✗ StationOfficerCog: Failed to create database pool after all retries")
+                    raise
+            except Exception as e:
+                print(f"✗ StationOfficerCog: Failed to create database pool: {e}")
+                raise
 
     async def cog_unload(self):
         """Cleanup database connection pool"""
