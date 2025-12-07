@@ -465,7 +465,7 @@ class QuotaTimeView(discord.ui.View):
     """View with button to trigger time input modal"""
 
     def __init__(self, cog, admin: discord.Member, role_ids: list, type: str, guild,
-                 period_weeks: int = 1):  # Changed: cog: ShiftManagementCog → cog
+                 period_weeks: int = 1):  # Remove : ShiftManagementCog type hint
         super().__init__(timeout=60)
         self.cog = cog
         self.admin = admin
@@ -491,8 +491,8 @@ class QuotaTimeView(discord.ui.View):
 class QuotaTimeModal(discord.ui.Modal):
     """Modal for entering quota time and watch requirement"""
 
-    def __init__(self, cog: ShiftManagementCog, admin: discord.Member, role_ids: list, type: str, guild,
-                 period_weeks: int = 1):
+    def __init__(self, cog: "ShiftManagementCog", admin: discord.Member, role_ids: list, type: str, guild,
+                 period_weeks: int = 1):  # Use string "ShiftManagementCog" for forward reference
         super().__init__(title=f"Set Quota ({period_weeks}w)")
         self.cog = cog
         self.admin = admin
@@ -2115,7 +2115,8 @@ class ShiftManagementCog(commands.Cog):
     class QuotaPeriodSelectView(discord.ui.View):
         """View for selecting quota period before setting time"""
 
-        def __init__(self, cog: ShiftManagementCog, admin: discord.Member, role_ids: list, type: str, guild):
+        def __init__(self, cog: "ShiftManagementCog", admin: discord.Member, role_ids: list, type: str, guild):
+            # Use string "ShiftManagementCog" for forward reference
             super().__init__(timeout=60)
             self.cog = cog
             self.admin = admin

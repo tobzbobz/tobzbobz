@@ -2299,5 +2299,3 @@ class ModerateCog(commands.Cog):
 async def setup(bot):
     cog = ModerateCog(bot)
     await bot.add_cog(cog)
-    bot.tree.add_command(cog.vc_group)
-    bot.tree.add_command(cog.vca_group)
