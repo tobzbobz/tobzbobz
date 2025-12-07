@@ -771,6 +771,85 @@ class QuotaTimeModal(discord.ui.Modal):
             import traceback
             traceback.print_exc()
 
+class QuotaPeriodSelectView(discord.ui.View):
+    """View for selecting quota period before setting time"""
+
+    def __init__(self, cog: "ShiftManagementCog", admin: discord.Member, role_ids: list, type: str, guild):
+        # Use string "ShiftManagementCog" for forward reference
+        super().__init__(timeout=60)
+        self.cog = cog
+        self.admin = admin
+        self.role_ids = role_ids
+        self.type = type
+        self.guild = guild
+        self.message = None
+
+        # Add period selection dropdown
+        options = [
+            discord.SelectOption(label="1 Week", value="1", description="Quota resets weekly", emoji="📅"),
+            discord.SelectOption(label="2 Weeks", value="2", description="Quota resets bi-weekly", emoji="📅"),
+            discord.SelectOption(label="3 Weeks", value="3", description="Quota resets every 3 weeks", emoji="📅"),
+            discord.SelectOption(label="4 Weeks", value="4", description="Quota resets monthly", emoji="📅"),
+        ]
+
+        select = discord.ui.Select(
+            placeholder="Select quota period...",
+            options=options,
+            custom_id="period_select"
+        )
+        select.callback = self.period_callback
+        self.add_item(select)
+
+        # Add cancel button
+        cancel_btn = discord.ui.Button(
+            label="Cancel",
+            style=discord.ButtonStyle.secondary,
+            emoji="<:Denied:1426930694633816248>"
+        )
+        cancel_btn.callback = self.cancel_callback
+        self.add_item(cancel_btn)
+
+    async def period_callback(self, interaction: discord.Interaction):
+        """Handle period selection"""
+        if interaction.user.id != self.admin.id:
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> This is not your quota panel!",
+                ephemeral=True
+            )
+            return
+
+        period_weeks = int(interaction.data['values'][0])
+
+        # Show time input modal
+        modal = QuotaTimeModal(self.cog, self.admin, self.role_ids, self.type, self.guild, period_weeks)
+        await interaction.response.send_modal(modal)
+
+    async def cancel_callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.admin.id:
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> This is not your quota panel!",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message("Cancelled.", ephemeral=True)
+        if self.message:
+            try:
+                await self.message.delete()
+            except:
+                pass
+        self.stop()
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except:
+                pass
+
+
 
 class ShiftManagementCog(commands.Cog):
     shift_group = app_commands.Group(name="shift", description="Shift management commands")
@@ -1850,10 +1929,10 @@ class ShiftManagementCog(commands.Cog):
     @app_commands.choices(
         action=[
             app_commands.Choice(name="View My Quota", value="view"),
-            app_commands.Choice(name="Set Quota (Admin)", value="set"),
-            app_commands.Choice(name="Remove Quota (Admin)", value="remove"),
+            app_commands.Choice(name="Set Quota", value="set"),
+            app_commands.Choice(name="Remove Quota", value="remove"),
             app_commands.Choice(name="View All Quotas", value="view_all"),
-            app_commands.Choice(name="Toggle Role Visibility in Reports (Admin)", value="toggle_visibility")
+            app_commands.Choice(name="Toggle Role Visibility in Reports", value="toggle_visibility")
         ],
         type=[
             app_commands.Choice(name="Shift FENZ", value="Shift FENZ"),
@@ -2290,85 +2369,6 @@ class ShiftManagementCog(commands.Cog):
             )
             import traceback
             traceback.print_exc()
-
-
-    class QuotaPeriodSelectView(discord.ui.View):
-        """View for selecting quota period before setting time"""
-
-        def __init__(self, cog: "ShiftManagementCog", admin: discord.Member, role_ids: list, type: str, guild):
-            # Use string "ShiftManagementCog" for forward reference
-            super().__init__(timeout=60)
-            self.cog = cog
-            self.admin = admin
-            self.role_ids = role_ids
-            self.type = type
-            self.guild = guild
-            self.message = None
-
-            # Add period selection dropdown
-            options = [
-                discord.SelectOption(label="1 Week", value="1", description="Quota resets weekly", emoji="📅"),
-                discord.SelectOption(label="2 Weeks", value="2", description="Quota resets bi-weekly", emoji="📅"),
-                discord.SelectOption(label="3 Weeks", value="3", description="Quota resets every 3 weeks", emoji="📅"),
-                discord.SelectOption(label="4 Weeks", value="4", description="Quota resets monthly", emoji="📅"),
-            ]
-
-            select = discord.ui.Select(
-                placeholder="Select quota period...",
-                options=options,
-                custom_id="period_select"
-            )
-            select.callback = self.period_callback
-            self.add_item(select)
-
-            # Add cancel button
-            cancel_btn = discord.ui.Button(
-                label="Cancel",
-                style=discord.ButtonStyle.secondary,
-                emoji="<:Denied:1426930694633816248>"
-            )
-            cancel_btn.callback = self.cancel_callback
-            self.add_item(cancel_btn)
-
-        async def period_callback(self, interaction: discord.Interaction):
-            """Handle period selection"""
-            if interaction.user.id != self.admin.id:
-                await interaction.response.send_message(
-                    "<:Denied:1426930694633816248> This is not your quota panel!",
-                    ephemeral=True
-                )
-                return
-
-            period_weeks = int(interaction.data['values'][0])
-
-            # Show time input modal
-            modal = QuotaTimeModal(self.cog, self.admin, self.role_ids, self.type, self.guild, period_weeks)
-            await interaction.response.send_modal(modal)
-
-        async def cancel_callback(self, interaction: discord.Interaction):
-            if interaction.user.id != self.admin.id:
-                await interaction.response.send_message(
-                    "<:Denied:1426930694633816248> This is not your quota panel!",
-                    ephemeral=True
-                )
-                return
-
-            await interaction.response.send_message("Cancelled.", ephemeral=True)
-            if self.message:
-                try:
-                    await self.message.delete()
-                except:
-                    pass
-            self.stop()
-
-        async def on_timeout(self):
-            for item in self.children:
-                item.disabled = True
-            if self.message:
-                try:
-                    await self.message.edit(view=self)
-                except:
-                    pass
 
     @shift_group.command(name="leaderboard", description="View shift leaderboard")
     @app_commands.describe(
@@ -4193,17 +4193,7 @@ class ShiftTypeSelectView(discord.ui.View):
         self.user = user
         self.message = None
 
-        async def on_timeout(self):
-            """Clean up when view times out"""
-            for item in self.children:
-                item.disabled = True
-            if self.message:
-                try:
-                    await self.message.edit(view=self)
-                except:
-                    pass
-
-        # Add a button for each shift type
+        # Add a button for each shift type - THIS MUST STAY INSIDE __init__
         for type in types:
             button = discord.ui.Button(
                 label=type,
@@ -4212,6 +4202,17 @@ class ShiftTypeSelectView(discord.ui.View):
             )
             button.callback = self.create_callback(type)
             self.add_item(button)
+
+    # UNINDENT THESE METHODS - they should be at class level, not inside __init__
+    async def on_timeout(self):
+        """Clean up when view times out"""
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except:
+                pass
 
     def create_callback(self, type: str):
         async def callback(interaction: discord.Interaction):
@@ -4228,7 +4229,7 @@ class ShiftTypeSelectView(discord.ui.View):
                 )
                 return
 
-            current_week = WeeklyShiftManager.get_current_week_monday()  # ← ADD THIS
+            current_week = WeeklyShiftManager.get_current_week_monday()
 
             # Start the shift
             async with db.pool.acquire() as conn:
@@ -4237,7 +4238,7 @@ class ShiftTypeSelectView(discord.ui.View):
                        (discord_user_id, discord_username, type, start_time, pause_duration, week_identifier, guild_id)
                        VALUES ($1, $2, $3, $4, 0, $5, $6)''',
                     self.user.id, str(self.user), type, datetime.utcnow(),
-                    current_week, interaction.guild.id  # ← ADD THESE TWO
+                    current_week, interaction.guild.id
                 )
 
             # Update nickname to DUTY
@@ -4270,9 +4271,6 @@ class ShiftTypeSelectView(discord.ui.View):
             # Edit the original message
             await interaction.edit_original_response(embed=embed, view=view)
 
-            # Note: Don't disable buttons or edit the old message since we're replacing it
-            
-
             self.stop()
 
         return callback
@@ -4286,7 +4284,6 @@ class ShiftTypeSelectView(discord.ui.View):
             return False
         return True
 
-
 class AdminShiftTypeSelectView(discord.ui.View):
     """View for admins to select shift type"""
 
@@ -4297,16 +4294,7 @@ class AdminShiftTypeSelectView(discord.ui.View):
         self.target_user = target_user
         self.message = None
 
-        async def on_timeout(self):
-            """Clean up when view times out"""
-            for item in self.children:
-                item.disabled = True
-            if self.message:
-                try:
-                    await self.message.edit(view=self)
-                except:
-                    pass
-
+        # Add buttons for each type - THIS STAYS INSIDE __init__
         for type in types:
             button = discord.ui.Button(
                 label=type,
@@ -4315,6 +4303,17 @@ class AdminShiftTypeSelectView(discord.ui.View):
             )
             button.callback = self.create_callback(type)
             self.add_item(button)
+
+    # UNINDENT THESE - they're class methods, not nested in __init__
+    async def on_timeout(self):
+        """Clean up when view times out"""
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except:
+                pass
 
     def create_callback(self, type: str):
         async def callback(interaction: discord.Interaction):
@@ -4332,7 +4331,6 @@ class AdminShiftTypeSelectView(discord.ui.View):
             )
             return False
         return True
-
 
 class AdminShiftControlView(discord.ui.View):
     """Main admin control view with dropdown and action buttons"""
@@ -6082,55 +6080,6 @@ class ClearShiftsScopeView(discord.ui.View):
         )
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="All Time", style=discord.ButtonStyle.danger, emoji="<:Wipe:1434954284851658762>")
-    async def all_time_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
-
-        # Check if user is the owner for all-time wipe
-        if interaction.user.id != OWNER_USER_ID:
-            await interaction.followup.send(
-                "<:Denied:1426930694633816248> You don't have permission to clear all-time shifts. Owner only.",
-                ephemeral=True
-            )
-            return
-
-        if self.all_count == 0:
-            await interaction.followup.send(
-                "<:Denied:1426930694633816248> No shifts to clear.",
-                ephemeral=True
-            )
-            return
-
-        # REPLACE show_confirm call with direct embed creation
-        embed = discord.Embed(
-            title=f"**Clear User Shifts - All Time**",
-            description=f"Are you sure you want to clear **{self.all_count}** shifts from all time?\n\nThis cannot be undone.",
-            color=discord.Color.red()
-        )
-
-        embed.set_author(
-            name=f"@{self.target_user.display_name}",
-            icon_url=self.target_user.display_avatar.url
-        )
-
-        embed.set_footer(text=f"Shift Type: {self.type}")
-
-        view = ClearShiftsConfirmView(
-            self.cog,
-            self.admin,
-            self.target_user,
-            self.type,
-            self.all_count,
-            "all",
-            None  # No wave number for all time
-        )
-
-        if self.message:
-            await self.message.edit(embed=embed, view=view)
-            view.message = self.message
-        else:
-            await interaction.edit_original_response(embed=embed, view=view)
-
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="<:Denied:1426930694633816248>")
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
@@ -6149,7 +6098,7 @@ class ClearShiftsConfirmView(discord.ui.View):
     """Confirmation view for clearing all shifts"""
 
     def __init__(self, cog: ShiftManagementCog, admin: discord.Member, target_user: discord.Member, type: str,
-                 count: int, scope: str, max_wave: int):
+                 count: int, scope: str, wave_number: int):  # CHANGE: max_wave -> wave_number
         super().__init__(timeout=60)
         self.cog = cog
         self.admin = admin
@@ -6157,7 +6106,7 @@ class ClearShiftsConfirmView(discord.ui.View):
         self.type = type
         self.count = count
         self.scope = scope
-        self.wave_number = wave_number
+        self.wave_number = wave_number  # CHANGE: Add this line
         self.armed = False
         self.message = None
 
