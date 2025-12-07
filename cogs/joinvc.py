@@ -17,14 +17,14 @@ STAFF_ROLES = {  # Roles allowed to use /vc request
 }
 
 class VCRequestCog(commands.Cog):
-    vc_group = app_commands.Group(name="vc", description="Voice channel management commands")
+    join_group = app_commands.Group(name="join", description="Voice channel management commands")
 
     def __init__(self, bot):
         self.bot = bot
         # Start checking for expired tracking on bot startup
         self.bot.loop.create_task(self.check_expired_tracking())
 
-    @vc_group.command(name="request", description="Request a user to join a voice channel")
+    @join_group.command(name="vc", description="Request a user to join a voice channel")
     @app_commands.describe(
         user="The user being requested to join voice",
         voice_channel="The voice channel they should join",

@@ -460,6 +460,145 @@ class WeeklyShiftManager:
         else:
             print(f"No embeds generated for wave {wave_number}")
 
+
+class QuotaTimeView(discord.ui.View):
+    """View with button to trigger time input modal"""
+
+    def __init__(self, cog, admin: discord.Member, role_ids: list, type: str, guild,
+                 period_weeks: int = 1):  # Changed: cog: ShiftManagementCog → cog
+        super().__init__(timeout=60)
+        self.cog = cog
+        self.admin = admin
+        self.role_ids = role_ids
+        self.type = type
+        self.guild = guild
+        self.period_weeks = period_weeks
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+       if interaction.user.id != self.admin.id:
+           await interaction.response.send_message(
+               "<:Denied:1426930694633816248> This is not your quota panel!",
+                ephemeral=True
+           )
+           return False
+       return True
+
+    @discord.ui.button(label="Set Time", style=discord.ButtonStyle.primary, emoji="⏰")
+    async def set_time_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = QuotaTimeModal(self.cog, self.admin, self.role_ids, self.type, self.guild, self.period_weeks)
+        await interaction.response.send_modal(modal)
+
+class QuotaTimeModal(discord.ui.Modal):
+    """Modal for entering quota time and watch requirement"""
+
+    def __init__(self, cog: ShiftManagementCog, admin: discord.Member, role_ids: list, type: str, guild,
+                 period_weeks: int = 1):
+        super().__init__(title=f"Set Quota ({period_weeks}w)")
+        self.cog = cog
+        self.admin = admin
+        self.role_ids = role_ids
+        self.type = type
+        self.guild = guild
+        self.period_weeks = period_weeks
+
+        self.add_item(discord.ui.TextInput(
+            label="Hours",
+            placeholder="Enter hours (0-999)",
+            required=True,
+            max_length=3
+        ))
+
+        self.add_item(discord.ui.TextInput(
+            label="Minutes",
+            placeholder="Enter minutes (0-59)",
+            required=True,
+            max_length=2
+        ))
+
+        # Add watch quota field for FENZ only
+        if type == "Shift FENZ":
+            self.add_item(discord.ui.TextInput(
+                label="Watch Quota (FENZ only)",
+                placeholder="Number of watches required (0 for none)",
+                required=False,
+                default="0",
+                max_length=3
+            ))
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            hours = int(self.children[0].value or 0)
+            minutes = int(self.children[1].value or 0)
+            watch_quota = 0
+
+            # Get watch quota if FENZ
+            if self.type == "Shift FENZ" and len(self.children) > 2:
+                watch_quota = int(self.children[2].value or 0)
+
+            # Validate
+            valid, error_msg = validate_time_input(hours, minutes, 0)
+            if not valid:
+                await interaction.followup.send(
+                    f"<:Denied:1426930694633816248> {error_msg}",
+                    ephemeral=True
+                )
+                return
+
+            if watch_quota < 0:
+                await interaction.followup.send(
+                    "<:Denied:1426930694633816248> Watch quota cannot be negative.",
+                    ephemeral=True
+                )
+                return
+
+            # Calculate total seconds
+            total_seconds = (hours * 3600) + (minutes * 60)
+
+            if total_seconds < 0:
+                await interaction.followup.send(
+                    "<:Denied:1426930694633816248> Quota cannot be negative.",
+                    ephemeral=True
+                )
+                return
+
+            # Save to database
+            async with db.pool.acquire() as conn:
+                role_mentions = []
+                for role_id in self.role_ids:
+                    await conn.execute(
+                        '''INSERT INTO shift_quotas (role_id, quota_seconds, type, quota_period_weeks, watch_quota)
+                           VALUES ($1, $2, $3, $4, $5) ON CONFLICT (role_id, type) 
+                           DO UPDATE SET quota_seconds = $2, quota_period_weeks = $4, watch_quota = $5''',
+                        role_id, total_seconds, self.type, self.period_weeks, watch_quota
+                    )
+                    role = self.guild.get_role(role_id)
+                    if role:
+                        role_mentions.append(role.mention)
+
+                period_text = f"{self.period_weeks} week{'s' if self.period_weeks != 1 else ''}"
+                watch_text = f" + {watch_quota} watches" if watch_quota > 0 else ""
+
+                await interaction.followup.send(
+                    f"<:Accepted:1426930333789585509> Set quota for {', '.join(role_mentions)} to {self.cog.format_duration(timedelta(seconds=total_seconds))}{watch_text} over {period_text} ({self.type})",
+                    ephemeral=True
+                )
+
+        except ValueError:
+            await interaction.followup.send(
+                "<:Denied:1426930694633816248> Please enter valid numbers.",
+                ephemeral=True
+            )
+        except Exception as e:
+            await interaction.followup.send(
+                f"<:Denied:1426930694633816248> Error: {str(e)}",
+                ephemeral=True
+            )
+            import traceback
+            traceback.print_exc()
+
+
 class ShiftManagementCog(commands.Cog):
     shift_group = app_commands.Group(name="shift", description="Shift management commands")
 
@@ -1329,7 +1468,7 @@ class ShiftManagementCog(commands.Cog):
             'watch_quota': watch_quota,
             'reset_timestamp': reset_timestamp
         }
-    
+
     async def get_total_active_time(self, user_id: int, type: str = None) -> int:
         """Get total active shift time in seconds for current week"""
         current_week = self.weekly_manager.get_current_week_monday()
@@ -1972,142 +2111,6 @@ class ShiftManagementCog(commands.Cog):
             import traceback
             traceback.print_exc()
 
-    class QuotaTimeView(discord.ui.View):
-        """View with button to trigger time input modal"""
-
-        def __init__(self, cog: ShiftManagementCog, admin: discord.Member, role_ids: list, type: str, guild,
-                     period_weeks: int = 1):
-            super().__init__(timeout=60)
-            self.cog = cog
-            self.admin = admin
-            self.role_ids = role_ids
-            self.type = type
-            self.guild = guild
-            self.period_weeks = period_weeks
-
-        async def interaction_check(self, interaction: discord.Interaction) -> bool:
-            if interaction.user.id != self.admin.id:
-                await interaction.response.send_message(
-                    "<:Denied:1426930694633816248> This is not your quota panel!",
-                    ephemeral=True
-                )
-                return False
-            return True
-
-        @discord.ui.button(label="Set Time", style=discord.ButtonStyle.primary, emoji="⏰")
-        async def set_time_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-            modal = QuotaTimeModal(self.cog, self.admin, self.role_ids, self.type, self.guild, self.period_weeks)
-            await interaction.response.send_modal(modal)
-
-    class QuotaTimeModal(discord.ui.Modal):
-        """Modal for entering quota time and watch requirement"""
-
-        def __init__(self, cog: ShiftManagementCog, admin: discord.Member, role_ids: list, type: str, guild,
-                     period_weeks: int = 1):
-            super().__init__(title=f"Set Quota ({period_weeks}w)")
-            self.cog = cog
-            self.admin = admin
-            self.role_ids = role_ids
-            self.type = type
-            self.guild = guild
-            self.period_weeks = period_weeks
-
-            self.add_item(discord.ui.TextInput(
-                label="Hours",
-                placeholder="Enter hours (0-999)",
-                required=True,
-                max_length=3
-            ))
-
-            self.add_item(discord.ui.TextInput(
-                label="Minutes",
-                placeholder="Enter minutes (0-59)",
-                required=True,
-                max_length=2
-            ))
-
-            # Add watch quota field for FENZ only
-            if type == "Shift FENZ":
-                self.add_item(discord.ui.TextInput(
-                    label="Watch Quota (FENZ only)",
-                    placeholder="Number of watches required (0 for none)",
-                    required=False,
-                    default="0",
-                    max_length=3
-                ))
-
-        async def on_submit(self, interaction: discord.Interaction):
-            await interaction.response.defer(ephemeral=True)
-
-            try:
-                hours = int(self.children[0].value or 0)
-                minutes = int(self.children[1].value or 0)
-                watch_quota = 0
-
-                # Get watch quota if FENZ
-                if self.type == "Shift FENZ" and len(self.children) > 2:
-                    watch_quota = int(self.children[2].value or 0)
-
-                # Validate
-                valid, error_msg = validate_time_input(hours, minutes, 0)
-                if not valid:
-                    await interaction.followup.send(
-                        f"<:Denied:1426930694633816248> {error_msg}",
-                        ephemeral=True
-                    )
-                    return
-
-                if watch_quota < 0:
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> Watch quota cannot be negative.",
-                        ephemeral=True
-                    )
-                    return
-
-                # Calculate total seconds
-                total_seconds = (hours * 3600) + (minutes * 60)
-
-                if total_seconds < 0:
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> Quota cannot be negative.",
-                        ephemeral=True
-                    )
-                    return
-
-                # Save to database
-                async with db.pool.acquire() as conn:
-                    role_mentions = []
-                    for role_id in self.role_ids:
-                        await conn.execute(
-                            '''INSERT INTO shift_quotas (role_id, quota_seconds, type, quota_period_weeks, watch_quota)
-                               VALUES ($1, $2, $3, $4, $5) ON CONFLICT (role_id, type) 
-                               DO UPDATE SET quota_seconds = $2, quota_period_weeks = $4, watch_quota = $5''',
-                            role_id, total_seconds, self.type, self.period_weeks, watch_quota
-                        )
-                        role = self.guild.get_role(role_id)
-                        if role:
-                            role_mentions.append(role.mention)
-
-                    period_text = f"{self.period_weeks} week{'s' if self.period_weeks != 1 else ''}"
-                    watch_text = f" + {watch_quota} watches" if watch_quota > 0 else ""
-
-                    await interaction.followup.send(
-                        f"<:Accepted:1426930333789585509> Set quota for {', '.join(role_mentions)} to {self.cog.format_duration(timedelta(seconds=total_seconds))}{watch_text} over {period_text} ({self.type})",
-                        ephemeral=True
-                    )
-
-            except ValueError:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> Please enter valid numbers.",
-                    ephemeral=True
-                )
-            except Exception as e:
-                await interaction.followup.send(
-                    f"<:Denied:1426930694633816248> Error: {str(e)}",
-                    ephemeral=True
-                )
-                import traceback
-                traceback.print_exc()
 
     class QuotaPeriodSelectView(discord.ui.View):
         """View for selecting quota period before setting time"""
