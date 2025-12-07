@@ -245,38 +245,43 @@ class WeeklyShiftManager:
                 print(f"No shifts found for wave {wave_number}")
                 return
 
-            # Get historical shifts for rolling totals
-            # For FENZ: previous 2 waves (including current)
-            # For HHStJ: previous 4 waves (including current)
-            fenz_historical = await conn.fetch(
-                '''SELECT discord_user_id,
-                          SUM(EXTRACT(EPOCH FROM (end_time - start_time)) -
-                              COALESCE(pause_duration, 0)) as total_seconds
-                   FROM shifts
-                   WHERE wave_number <= $1
-                     AND wave_number > $2
-                     AND type = 'Shift FENZ'
-                     AND end_time IS NOT NULL
-                   GROUP BY discord_user_id''',
-                wave_number, wave_number - 2  # Current + previous 1 wave
+            # ✅ FIX: Get all quotas to find max period per shift type
+            all_quotas = await conn.fetch(
+                'SELECT role_id, quota_seconds, type, quota_period_weeks FROM shift_quotas'
             )
 
-            hhstj_historical = await conn.fetch(
-                '''SELECT discord_user_id,
-                          SUM(EXTRACT(EPOCH FROM (end_time - start_time)) -
-                              COALESCE(pause_duration, 0)) as total_seconds
-                   FROM shifts
-                   WHERE wave_number <= $1
-                     AND wave_number > $2
-                     AND type = 'Shift HHStJ'
-                     AND end_time IS NOT NULL
-                   GROUP BY discord_user_id''',
-                wave_number, wave_number - 4  # Current + previous 3 waves
-            )
+            # Find max period for each shift type (for historical data fetching)
+            max_periods = {}
+            for q in all_quotas:
+                shift_type = q['type']
+                period = q.get('quota_period_weeks', 1)
+                if shift_type not in max_periods or period > max_periods[shift_type]:
+                    max_periods[shift_type] = period
 
-            # Create lookup maps for historical data
-            fenz_historical_map = {row['discord_user_id']: row['total_seconds'] for row in fenz_historical}
-            hhstj_historical_map = {row['discord_user_id']: row['total_seconds'] for row in hhstj_historical}
+            # ✅ FIX: Fetch historical data based on max period needed for each type
+            historical_data = {}
+
+            for shift_type, max_period in max_periods.items():
+                # Fetch enough historical data to cover the longest quota period
+                historical = await conn.fetch(
+                    '''SELECT discord_user_id,
+                              SUM(EXTRACT(EPOCH FROM (end_time - start_time)) -
+                                  COALESCE(pause_duration, 0)) as total_seconds
+                       FROM shifts
+                       WHERE wave_number <= $1
+                         AND wave_number > $2
+                         AND type = $3
+                         AND end_time IS NOT NULL
+                       GROUP BY discord_user_id''',
+                    wave_number,
+                    wave_number - max_period,  # ✅ Use longest period for this type
+                    shift_type
+                )
+
+                historical_data[shift_type] = {
+                    row['discord_user_id']: row['total_seconds']
+                    for row in historical
+                }
 
             # Get guild
             guild = None
@@ -291,14 +296,17 @@ class WeeklyShiftManager:
 
             # Get all role quotas
             quotas = await conn.fetch(
-                'SELECT role_id, quota_seconds, type FROM shift_quotas'
+                'SELECT role_id, quota_seconds, type, quota_period_weeks FROM shift_quotas'
             )
             quota_map = {}
             for q in quotas:
                 key = (q['role_id'], q['type'])
-                quota_map[key] = q['quota_seconds']
+                quota_map[key] = {
+                    'seconds': q['quota_seconds'],
+                    'period': q.get('quota_period_weeks', 1)
+                }
 
-            # GET IGNORED ROLES (FIXED INDENTATION)
+            # Get ignored roles
             ignored_roles = await conn.fetch(
                 'SELECT role_id, type FROM quota_ignored_roles'
             )
@@ -328,47 +336,43 @@ class WeeklyShiftManager:
 
                 # Get user's highest quota for this shift type
                 max_quota = 0
+                user_quota_period = 1  # ✅ Track the user's specific quota period
                 user_ignored = False
 
                 for role in member.roles:
-                    # CHECK IF ROLE IS IGNORED
                     if (role.id, shift_type) in ignored_set:
                         user_ignored = True
                         break
 
-                    quota = quota_map.get((role.id, shift_type), 0)
-                    if quota > max_quota:
-                        max_quota = quota
+                    quota_info = quota_map.get((role.id, shift_type))
+                    if quota_info and quota_info['seconds'] > max_quota:
+                        max_quota = quota_info['seconds']
+                        user_quota_period = quota_info['period']  # ✅ Use this role's period
 
-                # SKIP IGNORED USERS
-                if user_ignored:
-                    continue
-
-                # Skip users without quota requirements
-                if max_quota == 0:
+                if user_ignored or max_quota == 0:
                     continue
 
                 active_seconds = shift_data['total_seconds']
 
-                # Calculate rolling totals based on shift type
+                # ✅ FIX: Calculate rolling totals based on USER'S quota period
                 rolling_seconds = None
                 weeks_included = 0
 
-                if shift_type == 'Shift FENZ':
-                    # FENZ: Show rolling total for wave 2, 4, 6, etc. (even waves)
-                    # Odd waves (1, 3, 5) show single week only
-                    if wave_number % 2 == 0:  # Even wave number
-                        rolling_seconds = fenz_historical_map.get(member.id, active_seconds)
-                        weeks_included = 2
+                # Use the user's specific quota period (from their highest quota role)
+                if user_quota_period > 1:
+                    # Calculate position in THIS user's quota cycle
+                    # Wave 1 starts the cycle, so: waves 1,2,3,4 = positions 1,2,3,4 for 4-week
+                    cycle_position = ((wave_number - 1) % user_quota_period) + 1
 
-                elif shift_type == 'Shift HHStJ':
-                    # HHStJ: Show cumulative weeks 1-4, then reset
-                    cycle_position = ((wave_number - 1) % 4) + 1  # 1, 2, 3, or 4
-                    if cycle_position > 1:  # Don't show brackets for week 1
-                        rolling_seconds = hhstj_historical_map.get(member.id, active_seconds)
+                    # Show rolling total except for first week of user's cycle
+                    if cycle_position > 1:
+                        rolling_seconds = historical_data.get(shift_type, {}).get(
+                            member.id,
+                            active_seconds
+                        )
                         weeks_included = cycle_position
 
-                # Check bypass roles
+                # Check bypass roles (rest of the code remains the same)
                 user_role_ids = {role.id for role in member.roles}
                 bypass_type = None
                 completed = False
@@ -388,7 +392,6 @@ class WeeklyShiftManager:
                     completed = percentage >= 100
                     emoji = "<:Accepted:1426930333789585509>" if completed else "<:Denied:1426930694633816248>"
 
-                    # Add rolling total in brackets if applicable
                     if rolling_seconds and rolling_seconds > active_seconds:
                         status = f"{emoji} {member.mention} - {self.cog.format_duration(timedelta(seconds=active_seconds))} ({self.cog.format_duration(timedelta(seconds=rolling_seconds))}) / {self.cog.format_duration(timedelta(seconds=max_quota))} **({percentage:.1f}% - RA 50% Required)**"
                     else:
@@ -399,7 +402,6 @@ class WeeklyShiftManager:
                     completed = percentage >= 100
                     emoji = "<:Accepted:1426930333789585509>" if completed else "<:Denied:1426930694633816248>"
 
-                    # Add rolling total in brackets if applicable
                     if rolling_seconds and rolling_seconds > active_seconds:
                         status = f"{emoji} {member.mention} - {self.cog.format_duration(timedelta(seconds=active_seconds))} ({self.cog.format_duration(timedelta(seconds=rolling_seconds))}) / {self.cog.format_duration(timedelta(seconds=max_quota))} **({percentage:.1f}%)**"
                     else:
@@ -424,15 +426,11 @@ class WeeklyShiftManager:
                 if week_start:
                     week_end = week_start + timedelta(days=6)
 
-                    # Add rolling period indicator to footer
+                    # ✅ FIX: Dynamic footer based on user's actual quota period
                     footer_text = f"Wave {wave_number} • {week_start.strftime('%d %b')} - {week_end.strftime('%d %b %Y')}"
 
-                    if shift_type == 'Shift FENZ' and wave_number % 2 == 0:
-                        footer_text += " • 2 Week Total"
-                    elif shift_type == 'Shift HHStJ':
-                        cycle_position = ((wave_number - 1) % 4) + 1
-                        if cycle_position > 1:
-                            footer_text += f" • {cycle_position} Week Total"
+                    # Note: Footer shows general info, individual users may have different periods
+                    # This is intentional - each user's line shows their own rolling total
 
                     embed.set_footer(text=footer_text)
                 else:
@@ -440,7 +438,7 @@ class WeeklyShiftManager:
 
                 embeds.append(embed)
 
-        # Send to multiple channels (FIXED INDENTATION)
+        # Send to multiple channels
         if embeds:
             ping_mentions = " ".join([f"<@&{role_id}>" for role_id in WEEKLY_REPORT_PING_ROLES])
 
@@ -448,11 +446,16 @@ class WeeklyShiftManager:
                 channel = self.bot.get_channel(channel_id)
                 if channel:
                     try:
+                        # Send main report embeds
                         await channel.send(
-                            content=f"||{ping_mentions}||\n**Weekly Shift Report**",
+                            content=f"||{ping_mentions}||\n**Weekly Shift Report - Wave {wave_number}**",
                             embeds=embeds
                         )
                         print(f"Sent weekly report to channel {channel_id} with {len(embeds)} embeds")
+
+                        # ✅ NEW: Send quota information summary
+                        await self.send_quota_summary(channel, wave_number, guild, quota_map, types)
+
                     except Exception as e:
                         print(f"Failed to send weekly report to channel {channel_id}: {e}")
                 else:
@@ -460,6 +463,176 @@ class WeeklyShiftManager:
         else:
             print(f"No embeds generated for wave {wave_number}")
 
+    async def send_quota_summary(self, channel, wave_number: int, guild, quota_map, types):
+        """Send detailed quota information after the weekly report"""
+
+        try:
+            async with self.cog.db.pool.acquire() as conn:
+                # Get next wave start time (Monday at 00:00 NZST)
+                current_wave_monday = self.get_week_monday()
+                next_wave_monday = current_wave_monday + timedelta(days=7)
+                reset_timestamp = int(next_wave_monday.timestamp())
+
+                # Get bypass role members
+                qb_role = guild.get_role(QUOTA_BYPASS_ROLE)
+                loa_role = guild.get_role(LOA_ROLE)
+                ra_role = guild.get_role(REDUCED_ACTIVITY_ROLE)
+
+                # Organize quotas by shift type and period
+                quota_info_by_type = {}
+
+                for (role_id, shift_type), quota_data in quota_map.items():
+                    if shift_type not in quota_info_by_type:
+                        quota_info_by_type[shift_type] = {}
+
+                    period = quota_data['period']
+                    quota_seconds = quota_data['seconds']
+
+                    if period not in quota_info_by_type[shift_type]:
+                        quota_info_by_type[shift_type][period] = []
+
+                    role = guild.get_role(role_id)
+                    if role:
+                        # Count members with this role (approximate - counts all role members)
+                        member_count = len(role.members)
+
+                        quota_info_by_type[shift_type][period].append({
+                            'role': role,
+                            'seconds': quota_seconds,
+                            'members': member_count
+                        })
+
+            # Create summary embed for each shift type that appeared in the report
+            for shift_type in types.keys():
+                if shift_type not in quota_info_by_type:
+                    continue
+
+                embed = discord.Embed(
+                    title=f"**{shift_type.replace('Shift ', '')} Quota Information**",
+                    color=discord.Color(0x5865f2)
+                )
+
+                # Add reset information
+                embed.add_field(
+                    name="Next Wave Reset",
+                    value=f"<t:{reset_timestamp}:F> (<t:{reset_timestamp}:R>)",
+                    inline=False
+                )
+
+                # Calculate total members with quotas
+                total_members = set()
+                for period_quotas in quota_info_by_type[shift_type].values():
+                    for quota in period_quotas:
+                        total_members.update([m.id for m in quota['role'].members])
+
+                embed.add_field(
+                    name="Members with Quotas",
+                    value=f"{len(total_members)} members have quota requirements",
+                    inline=False
+                )
+
+                # Add quota details organized by period
+                sorted_periods = sorted(quota_info_by_type[shift_type].keys())
+
+                for period in sorted_periods:
+                    period_quotas = quota_info_by_type[shift_type][period]
+
+                    # Sort by quota amount (highest first)
+                    period_quotas.sort(key=lambda x: x['seconds'], reverse=True)
+
+                    quota_lines = []
+                    for quota in period_quotas:
+                        duration_str = self.cog.format_duration(timedelta(seconds=quota['seconds']))
+                        quota_lines.append(
+                            f"{quota['role'].mention} • {duration_str} • {quota['members']} member{'s' if quota['members'] != 1 else ''}"
+                        )
+
+                    period_text = f"{period} Week" if period == 1 else f"{period} Weeks"
+
+                    # Add cycle information
+                    cycle_position = ((wave_number - 1) % period) + 1
+
+                    waves_until_reset = period - cycle_position
+                    quota_reset_date = current_wave_monday + timedelta(weeks=waves_until_reset + 1)
+                    quota_reset_timestamp = int(quota_reset_date.timestamp())
+
+                    if period > 1:
+                        cycle_info = f" (Week {cycle_position}/{period} of cycle)"
+                        reset_info = f"\n**Resets:** <t:{quota_reset_timestamp}:F> (<t:{quota_reset_timestamp}:R>)"
+                    else:
+                        cycle_info = " (Resets every wave)"
+                        reset_info = f"\n**Resets:** <t:{reset_timestamp}:F> (<t:{reset_timestamp}:R>)"
+
+                    field_value = "\n".join(quota_lines) if quota_lines else "No roles configured"
+                    field_value += reset_info
+
+                    embed.add_field(
+                        name=f"{period_text} Quota Period{cycle_info}",
+                        value=field_value,
+                        inline=False
+                    )
+
+                # ✅ NEW: Add bypass roles section
+                bypass_sections = []
+
+                # Get members with shift type access for this specific shift type
+                shift_type_members = set()
+                for member in guild.members:
+                    # Check if member has any role that grants this shift type
+                    for role in member.roles:
+                        if role.id in typeS and typeS[role.id] == shift_type:
+                            shift_type_members.add(member.id)
+                            break
+                        # Check additional shift access
+                        if role.id in ADDITIONAL_SHIFT_ACCESS and shift_type in ADDITIONAL_SHIFT_ACCESS[role.id]:
+                            shift_type_members.add(member.id)
+                            break
+
+                # QB (Quota Bypass) - Full exemption
+                if qb_role and qb_role.members:
+                    qb_members = [m.mention for m in qb_role.members if m.id in shift_type_members]
+                    if qb_members:
+                        qb_text = ", ".join(qb_members[:15])  # Limit to 15 to avoid embed length issues
+                        if len(qb_members) > 15:
+                            qb_text += f" *+{len(qb_members) - 15} more*"
+                        bypass_sections.append(f"**QB (Full Exemption):** {qb_text}")
+
+                # LOA (Leave of Absence) - Full exemption
+                if loa_role and loa_role.members:
+                    loa_members = [m.mention for m in loa_role.members if m.id in shift_type_members]
+                    if loa_members:
+                        loa_text = ", ".join(loa_members[:15])
+                        if len(loa_members) > 15:
+                            loa_text += f" *+{len(loa_members) - 15} more*"
+                        bypass_sections.append(f"**LOA (Full Exemption):** {loa_text}")
+
+                # RA (Reduced Activity) - 50% requirement
+                if ra_role and ra_role.members:
+                    ra_members = [m.mention for m in ra_role.members if m.id in shift_type_members]
+                    if ra_members:
+                        ra_text = ", ".join(ra_members[:15])
+                        if len(ra_members) > 15:
+                            ra_text += f" *+{len(ra_members) - 15} more*"
+                        bypass_sections.append(f"**RA (50% Required):** {ra_text}")
+
+                if bypass_sections:
+                    embed.add_field(
+                        name="Quota Modifications",
+                        value="\n\n".join(bypass_sections),
+                        inline=False
+                    )
+
+                # Add footer with helpful info
+                embed.set_footer(
+                    text=f"Wave {wave_number} • Shifts Reset at the start of each week (but quotas may not)"
+                )
+
+                await channel.send(embed=embed)
+
+        except Exception as e:
+            print(f"Error sending quota summary: {e}")
+            import traceback
+            traceback.print_exc()
 
 class QuotaTimeView(discord.ui.View):
     """View with button to trigger time input modal"""
