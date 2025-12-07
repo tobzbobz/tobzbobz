@@ -1848,6 +1848,13 @@ class ShiftManagementCog(commands.Cog):
         type="The shift type to set quota for (for set/remove actions)"
     )
     @app_commands.choices(
+        action=[
+            app_commands.Choice(name="View My Quota", value="view"),
+            app_commands.Choice(name="Set Quota (Admin)", value="set"),
+            app_commands.Choice(name="Remove Quota (Admin)", value="remove"),
+            app_commands.Choice(name="View All Quotas", value="view_all"),
+            app_commands.Choice(name="Toggle Role Visibility in Reports (Admin)", value="toggle_visibility")
+        ],
         type=[
             app_commands.Choice(name="Shift FENZ", value="Shift FENZ"),
             app_commands.Choice(name="Shift HHStJ", value="Shift HHStJ"),
