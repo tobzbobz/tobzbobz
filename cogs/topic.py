@@ -127,7 +127,7 @@ class TopicCog(commands.Cog):
             )
 
             user_embed.add_field(
-                name="â€Ž",
+                name="",
                 value=f"*Requested by {interaction.user.mention}*",
                 inline=False
             )

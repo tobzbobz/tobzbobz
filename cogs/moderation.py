@@ -71,6 +71,9 @@ class ModerateCog(commands.Cog):
         # Track last channel for hop detection
         self.last_channel = {}
 
+    vc_group = app_commands.Group(name="vc", description="Voice channel moderation commands")
+    vca_group = app_commands.Group(name="vca", description="Advanced voice channel moderation commands")
+
     async def send_to_mod_logs(self, guild: discord.Guild, embed: discord.Embed):
         """Send an embed to the mod logs channel"""
         if MOD_LOGS_CHANNEL_ID:
@@ -879,538 +882,435 @@ class ModerateCog(commands.Cog):
         await interaction.delete_original_response()
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="move",
-                          description="Move users between voice channels with various options")
+    @vc_group.command(name="move", description="Move all users from one channel to another")
     @app_commands.describe(
-        mode="Type of move operation",
-        users="User(s) to move (separate with spaces)",
-        c_from="Source channel(s)",
-        to="Destination channel(s)",
-        repetitions="Number of times to repeat",
-        include_me="Include Owner",
-        reason="Reason for the action"
+        to_channel="Destination channel",
+        from_channel="Source channel (owner can leave empty for all channels)",
+        reason="Reason for the move"
     )
     @has_role_level(SUPERVISORS + LEADERS + LOCKS + [YOUR_USER_ID])
-    async def move(
+    async def vc_move(
             self,
             interaction: discord.Interaction,
-            mode: str,
-            to: Optional[str] = None,
-            users: Optional[str] = None,
-            c_from: Optional[str] = None,
-            repetitions: Optional[int] = None,
-            include_me: Optional[bool] = False,
+            to_channel: discord.VoiceChannel,
+            from_channel: Optional[discord.VoiceChannel] = None,
             reason: Optional[str] = "No reason provided"
     ):
-        """Move users between voice channels with multiple modes"""
+        """Move all users from one channel to another"""
+        await interaction.response.send_message("<a:Load:1430912797469970444> Moving users...", ephemeral=True)
 
-        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Moving User(s)",
+        # If no from_channel and user is owner, move from ALL channels
+        if not from_channel:
+            if interaction.user.id == YOUR_USER_ID:
+                source_channels = [c for c in interaction.guild.voice_channels if len(c.members) > 0]
+                if not source_channels:
+                    await interaction.followup.send("<:Denied:1426930694633816248> No users in any voice channels.",
+                                                    ephemeral=True)
+                    return
+            else:
+                await interaction.followup.send("<:Denied:1426930694633816248> You must specify a source channel!",
                                                 ephemeral=True)
-
-        # Role-based permission checks
-        user_role_ids = [role.id for role in interaction.user.roles]
-        is_supervisor = any(role_id in SUPERVISORS for role_id in user_role_ids)
-        is_leader = any(role_id in LEADERS for role_id in user_role_ids)
-        is_locks = any(role_id in LOCKS for role_id in user_role_ids)
-        is_owner_user = interaction.user.id == YOUR_USER_ID
-
-        # Permission validation based on mode
-        if mode == "specific":
-            # Supervisors+ can use, but only to single channel
-            if not (is_supervisor or is_leader or is_locks or is_owner_user):
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> You do not have the required role to use this command!",
-                    ephemeral=True
-                )
                 return
+        else:
+            source_channels = [from_channel]
 
-            # Check single channel restriction for non-owners
-            if not is_owner_user:
-                dest_channels = await self.parse_channels_spaces(interaction, to) if to else []
-                if len(dest_channels) > 1:
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> You can only move users to one channel at a time!",
-                        ephemeral=True
-                    )
-                    return
+        # Collect members
+        members_to_move = []
+        for channel in source_channels:
+            members_to_move.extend(channel.members)
+        members_to_move = list(set(members_to_move))
 
-        elif mode == "c_from":
-            # Parse source channels (must use 'ALL' for all channels)
-            source_channels = await self.parse_channels_or_all(interaction, c_from, filter_with_users=True)
-            if not source_channels:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> No valid source channels found. Use 'ALL' to select all channels.",
-                    ephemeral=True
-                )
-                return
+        if not members_to_move:
+            await interaction.followup.send("<:Denied:1426930694633816248> No users found in source channel(s).",
+                                            ephemeral=True)
+            return
 
-        elif mode == "disperse":
-            # Parse source channels (must use 'ALL' for all channels)
-            source_channels = await self.parse_channels_or_all(interaction, c_from, filter_with_users=True)
-            if not source_channels:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> No valid source channels found. Use 'ALL' to select all channels.",
-                    ephemeral=True
-                )
-                return
+        # Perform moves (owner included)
+        results = await self.perform_bulk_moves(
+            members=members_to_move,
+            dest_channels=[to_channel],
+            reason=reason,
+            moderator=interaction.user,
+            include_me=True
+        )
 
-            # Parse destination channels (must use 'ALL' for all channels)
-            dest_channels = await self.parse_channels_or_all(interaction, to, filter_with_users=False)
-            if not dest_channels:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> No valid destination channels found. Use 'ALL' to select all channels.",
-                    ephemeral=True
-                )
-                return
+        await self.send_move_summary(interaction, results, f"Move to {to_channel.name}", reason)
 
-            await self.move_disperse_enhanced(interaction, source_channels, dest_channels, reason, include_me)
-
-        elif mode == "disperse_trail":
-            # Default to 3 repetitions if not specified
-            reps = repetitions if repetitions and repetitions > 0 else 3
-
-            # Parse destination channels first (always needed)
-            dest_channels = await self.parse_channels_or_all(interaction, to, filter_with_users=False)
-            if not dest_channels:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> No valid destination channels found. Use 'ALL' to select all channels.",
-                    ephemeral=True
-                )
-                return
-
-            # Check if specific users or from channels
-            if users and users.strip().upper() != "ALL":
-                # Move specific users
-                member_list = await self.parse_users(interaction, users)
-                if not member_list:
-                    await interaction.followup.send("<:Denied:1426930694633816248> No valid users found.",
-                                                    ephemeral=True)
-                    return
-                # Call the method that accepts a list of members
-                await self.move_disperse_trail_users(interaction, member_list, dest_channels, reps, reason, include_me)
-            else:
-                # Move all from source channels
-                if not c_from:
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> You must specify either users or c_from!",
-                        ephemeral=True
-                    )
-                    return
-
-                source_channels = await self.parse_channels_or_all(interaction, c_from, filter_with_users=True)
-                if not source_channels:
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> No valid source channels found. Use 'ALL' to select all channels.",
-                        ephemeral=True
-                    )
-                    return
-                await self.move_disperse_trail_from_channels(interaction, source_channels, dest_channels, reps, reason,
-                                                             include_me)
-
-        elif mode == "move_trail":
-            if not to:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> You must specify the destination channel(s)!",
-                    ephemeral=True
-                )
-                return
-
-            dest_channels = await self.parse_channels_or_all(interaction, to, filter_with_users=False)
-            if not dest_channels:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> No valid destination channels found.",
-                    ephemeral=True
-                )
-                return
-
-            # Check if specific users or from channels
-            if users and users.strip().upper() != "ALL":
-                # Move specific users through the trail
-                member_list = await self.parse_users(interaction, users)
-                if not member_list:
-                    await interaction.followup.send("<:Denied:1426930694633816248> No valid users found.",
-                                                    ephemeral=True)
-                    return
-                await self.move_trail_users(interaction, member_list, dest_channels, reason, include_me)
-            elif c_from:
-                # Move all from source channels through the trail
-                source_channels = await self.parse_channels_or_all(interaction, c_from, filter_with_users=True)
-                if not source_channels:
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> No valid source channels found.",
-                        ephemeral=True
-                    )
-                    return
-
-                # Collect all members
-                members_to_move = []
-                for channel in source_channels:
-                    members_to_move.extend(channel.members)
-                members_to_move = list(set(members_to_move))
-
-                if not members_to_move:
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> No users found in source channel(s).",
-                        ephemeral=True
-                    )
-                    return
-
-                await self.move_trail_users(interaction, members_to_move, dest_channels, reason, include_me)
-            else:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> You must specify either users or c_from! Use 'ALL' for all users.",
-                    ephemeral=True
-                )
-                return
-
-        elif mode == "swap":
-            # Supervisors can swap, but repetitions restricted to owner
-            if not (is_supervisor or is_leader or is_locks or is_owner_user):
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> You do not have the permission use this command!",
-                    ephemeral=True
-                )
-                return
-
-            # Check repetitions restriction
-            if repetitions and repetitions > 1 and not is_owner_user:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> You do not have the permission use this command with repetitions!",
-                    ephemeral=True
-                )
-                return
-
-        elif mode == "empty":
-            # Empty single channel: Leaders+
-            # Empty all channels: Locks+
-            source_channels = await self.parse_channels_spaces(interaction, c_from) if c_from else []
-
-            if not c_from or len(source_channels) == 0:
-                # Emptying all channels - Locks+
-                if not (is_locks or is_owner_user):
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> Please select a channel to use this command!",
-                        ephemeral=True
-                    )
-                    return
-
-                if mode == "c_from" and is_owner_user and include_me is None:
-                    include_me = True
-
-                # Require reason for major action
-                if not reason or reason == "No reason provided":
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> Warning, you are taking major moderation action - a reason is required when proceeding with these actions!",
-                        ephemeral=True
-                    )
-                    return
-            else:
-                # Emptying specific channel(s) - Leaders+
-                if not (is_leader or is_locks or is_owner_user):
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> You do not have the permission use this command!",
-                        ephemeral=True
-                    )
-                    return
-
-        # Execute based on mode with different validation requirements
-        if mode == "specific":
-            if not users:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> You must specify the users to move!",
-                    ephemeral=True
-                )
-                return
-            if not to:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> You must specify destination channel(s)!",
-                    ephemeral=True
-                )
-                return
-
-            dest_channels = await self.parse_channels_spaces(interaction, to)
-            if not dest_channels:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> No valid destination channels found.",
-                    ephemeral=True
-                )
-                return
-
-            await self.move_specific_users(interaction, users, dest_channels, reason)
-
-        elif mode == "c_from":
-            # If from is empty, use all voice channels with users
-            if not c_from:
-                # Get all voice channels with members
-                all_voice = [c for c in interaction.guild.voice_channels if len(c.members) > 0]
-                if not all_voice:
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> No users found in any voice channels.",
-                        ephemeral=True
-                    )
-                    return
-                source_channels = all_voice
-            else:
-                source_channels = await self.parse_channels_spaces(interaction, c_from)
-                if not source_channels:
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> No valid source channels found.",
-                        ephemeral=True
-                    )
-                    return
-
-            if not to:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> You must specify the destination channel(s)!",
-                    ephemeral=True
-                )
-                return
-
-            dest_channels = await self.parse_channels_spaces(interaction, to)
-            if not dest_channels:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> No valid destination channels found.",
-                    ephemeral=True
-                )
-                return
-
-            await self.move_from_enhanced(interaction, source_channels, dest_channels, reason, include_me)
-
-        elif mode == "disperse":
-            # If from is empty, use all voice channels with users
-            if not c_from:
-                source_channels = [c for c in interaction.guild.voice_channels if len(c.members) > 0]
-                if not source_channels:
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> No users found in any voice channels.",
-                        ephemeral=True
-                    )
-                    return
-            else:
-                source_channels = await self.parse_channels_spaces(interaction, c_from)
-                if not source_channels:
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> No valid source channels found.",
-                        ephemeral=True
-                    )
-                    return
-
-            # If to is empty, use all voice channels in server
-            if not to:
-                dest_channels = interaction.guild.voice_channels
-                if not dest_channels:
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> No voice channels found in this server.",
-                        ephemeral=True
-                    )
-                    return
-            else:
-                dest_channels = await self.parse_channels_spaces(interaction, to)
-                if not dest_channels:
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> No valid destination channels found.",
-                        ephemeral=True
-                    )
-                    return
-
-            await self.move_disperse_enhanced(interaction, source_channels, dest_channels, reason)
-
-        elif mode == "disperse_trail":
-            # If from is empty, use all voice channels with users
-            if not c_from:
-                source_channels = [c for c in interaction.guild.voice_channels if len(c.members) > 0]
-                if not source_channels:
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> No users found in any voice channels.",
-                        ephemeral=True
-                    )
-                    return
-            else:
-                source_channels = await self.parse_channels_spaces(interaction, c_from)
-                if not source_channels:
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> No valid source channels found.",
-                        ephemeral=True
-                    )
-                    return
-
-            # If to is empty, use all voice channels in server
-            if not to:
-                dest_channels = interaction.guild.voice_channels
-                if not dest_channels:
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> No voice channels found in this server.",
-                        ephemeral=True
-                    )
-                    return
-            else:
-                dest_channels = await self.parse_channels_spaces(interaction, to)
-                if not dest_channels:
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> No valid destination channels found.",
-                        ephemeral=True
-                    )
-                    return
-
-            # Default to 3 repetitions if not specified
-            reps = repetitions if repetitions and repetitions > 0 else 3
-
-            await self.move_disperse_trail(interaction, source_channels, dest_channels, reps, reason)
-
-        elif mode == "move_trail":
-            if not to:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> You must specify the destination channel(s)!",
-                    ephemeral=True
-                )
-                return
-
-            dest_channels = await self.parse_channels_spaces(interaction, to)
-            if not dest_channels:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> No valid destination channels found.",
-                    ephemeral=True
-                )
-                return
-
-            # For move trail, we need either specific users or from
-            if users:
-                # Move specific users through the trail
-                member_list = await self.parse_users(interaction, users)
-                if not member_list:
-                    await interaction.followup.send("<:Denied:1426930694633816248> No valid users found.", ephemeral=True)
-                    return
-                await self.move_trail_users(interaction, member_list, dest_channels, reason)
-
-            elif c_from:
-                # Move all from source channels through the trail
-                source_channels = await self.parse_channels_spaces(interaction, c_from)
-                if not source_channels:
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> No valid source channels found.",
-                        ephemeral=True
-                    )
-                    return
-
-                # Collect all members
-                members_to_move = []
-                for channel in source_channels:
-                    members_to_move.extend(channel.members)
-                members_to_move = list(set(members_to_move))
-
-                if not members_to_move:
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> No users found in source channel(s).",
-                        ephemeral=True
-                    )
-                    return
-
-                await self.move_trail_users(interaction, members_to_move, dest_channels, reason)
-            else:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> You must specify either the users or the from!",
-                    ephemeral=True
-                )
-                return
-
-        elif mode == "swap":
-            if not c_from or not to:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> You must specify both the source and destination channel(s)!",
-                    ephemeral=True
-                )
-                return
-
-            source_channels = await self.parse_channels_or_all(interaction, c_from, filter_with_users=False)
-            dest_channels = await self.parse_channels_or_all(interaction, to, filter_with_users=False)
-
-            if not source_channels or not dest_channels:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> Invalid source or destination channels.",
-                    ephemeral=True
-                )
-                return
-
-            # Default to 1 repetition if not specified
-            reps = repetitions if repetitions and repetitions > 0 else 1
-
-            await self.move_swap_channels_repeated(interaction, source_channels, dest_channels, reps, reason,
-                                                   include_me)
-
-        elif mode == "empty":
-            if not c_from:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> You must specify channel(s) to empty. Use 'ALL' for all channels.",
-                    ephemeral=True
-                )
-                return
-
-            source_channels = await self.parse_channels_or_all(interaction, c_from, filter_with_users=True)
-
-            if not source_channels:
-                await interaction.followup.send(
-                    "<:Denied:1426930694633816248> No valid channels found to empty.",
-                    ephemeral=True
-                )
-                return
-
-
-            await self.move_empty_channels(interaction, source_channels, reason, include_me)
-
-    @move.autocomplete('mode')
-    async def move_mode_autocomplete(
+    # /vc swap - Supervisor+ (single channels only)
+    @vc_group.command(name="swap", description="Swap users between two voice channels")
+    @app_commands.describe(
+        channel_a="First channel",
+        channel_b="Second channel",
+        reason="Reason for the swap"
+    )
+    @has_role_level(SUPERVISORS + LEADERS + LOCKS + [YOUR_USER_ID])
+    async def vc_swap(
             self,
             interaction: discord.Interaction,
-            current: str
-    ) -> list[app_commands.Choice[str]]:
-        """Provide mode choices based on user permissions"""
+            channel_a: discord.VoiceChannel,
+            channel_b: discord.VoiceChannel,
+            reason: Optional[str] = "No reason provided"
+    ):
+        """Swap users between two channels"""
+        await interaction.response.send_message("<a:Load:1430912797469970444> Swapping users...", ephemeral=True)
 
-        user_role_ids = {role.id for role in interaction.user.roles}
-        is_supervisor = bool(user_role_ids & set(SUPERVISORS))
-        is_leader = bool(user_role_ids & set(LEADERS))
-        is_locks = bool(user_role_ids & set(LOCKS))
-        is_owner = interaction.user.id == YOUR_USER_ID
+        # Collect members from both channels
+        members_a = list(channel_a.members)
+        members_b = list(channel_b.members)
 
-        # Start with empty choices
-        choices = []
+        if not members_a and not members_b:
+            await interaction.followup.send("<:Denied:1426930694633816248> No users in either channel.", ephemeral=True)
+            return
 
-        # Specific Users - Supervisors+
-        if is_supervisor or is_leader or is_locks or is_owner:
-            choices.append(app_commands.Choice(name="Move Specific Users", value="specific"))
+        results = {'success': [], 'failed': [], 'not_in_voice': []}
 
-        # Move from Channel - Supervisors+
-        if is_supervisor or is_leader or is_locks or is_owner:
-            choices.append(app_commands.Choice(name="Move All from Channel(s)", value="c_from"))
+        # Move A to B
+        if members_a:
+            results_a = await self.perform_bulk_moves(
+                members=members_a,
+                dest_channels=[channel_b],
+                reason=f"Swap (A→B): {reason}",
+                moderator=interaction.user,
+                include_me=True
+            )
+            results['success'].extend(results_a['success'])
+            results['failed'].extend(results_a['failed'])
+            results['not_in_voice'].extend(results_a['not_in_voice'])
 
-        # Disperse - Leaders+ (single), Locks+ (multi)
-        if is_leader or is_locks or is_owner:
-            choices.append(app_commands.Choice(name="Disperse Users Randomly", value="disperse"))
+        await asyncio.sleep(0.3)
 
-        # Disperse Trail - Owner only
-        if is_owner:
-            choices.append(
-                app_commands.Choice(name="Disperse Trail (Multiple Random Dispersions)", value="disperse_trail"))
+        # Move B to A
+        if members_b:
+            results_b = await self.perform_bulk_moves(
+                members=members_b,
+                dest_channels=[channel_a],
+                reason=f"Swap (B→A): {reason}",
+                moderator=interaction.user,
+                include_me=True
+            )
+            results['success'].extend(results_b['success'])
+            results['failed'].extend(results_b['failed'])
+            results['not_in_voice'].extend(results_b['not_in_voice'])
 
-        # Move Trail - Owner only
-        if is_owner:
-            choices.append(app_commands.Choice(name="Move Trail (Sequential Channel Tour)", value="move_trail"))
+        await self.send_move_summary(
+            interaction, results,
+            f"Swapped {len(members_a)} ↔️ {len(members_b)} users",
+            reason
+        )
 
-        # Swap - Supervisors+ (single swap), Owner (with repetitions)
-        if is_supervisor or is_leader or is_locks or is_owner:
-            choices.append(app_commands.Choice(name="Swap Channels", value="swap"))
+    # /vc wipe - Leader+ (single channel, owner can leave empty for all)
+    @vc_group.command(name="wipe", description="Disconnect all users from a voice channel")
+    @app_commands.describe(
+        channel="Channel to empty (owner can leave empty for all channels)",
+        reason="Reason for wiping"
+    )
+    @has_role_level(LEADERS + LOCKS + [YOUR_USER_ID])
+    async def vc_wipe(
+            self,
+            interaction: discord.Interaction,
+            channel: Optional[discord.VoiceChannel] = None,
+            reason: Optional[str] = "No reason provided"
+    ):
+        """Empty a voice channel"""
+        await interaction.response.send_message("<a:Load:1430912797469970444> Wiping channel(s)...", ephemeral=True)
 
-        # Empty - Leaders+
-        if is_leader or is_locks or is_owner:
-            choices.append(app_commands.Choice(name="Empty Channel", value="empty"))
+        # Check if wiping all channels (owner only)
+        if not channel:
+            if interaction.user.id == YOUR_USER_ID:
+                source_channels = [c for c in interaction.guild.voice_channels if len(c.members) > 0]
+                if not source_channels:
+                    await interaction.followup.send("<:Denied:1426930694633816248> No users in any voice channels.",
+                                                    ephemeral=True)
+                    return
 
-        # Filter by current input if user is typing
-        if current:
-            return [
-                choice for choice in choices
-                if current.lower() in choice.name.lower()
-            ]
+                # Require reason for major action
+                if reason == "No reason provided":
+                    await interaction.followup.send(
+                        "<:Denied:1426930694633816248> Reason required for wiping all channels!", ephemeral=True)
+                    return
+            else:
+                await interaction.followup.send("<:Denied:1426930694633816248> You must specify a channel!",
+                                                ephemeral=True)
+                return
+        else:
+            source_channels = [channel]
 
-        return choices
+        # Collect members
+        members_to_disconnect = []
+        for ch in source_channels:
+            members_to_disconnect.extend(ch.members)
+        members_to_disconnect = list(set(members_to_disconnect))
+
+        if not members_to_disconnect:
+            await interaction.followup.send("<:Denied:1426930694633816248> No users to disconnect.", ephemeral=True)
+            return
+
+        # Disconnect all (owner included)
+        results = {'success': [], 'failed': [], 'not_in_voice': []}
+        tasks = []
+        for member in members_to_disconnect:
+            task = self.safe_disconnect_member(member, reason, interaction.user, results)
+            tasks.append(task)
+
+        # Execute in batches
+        batch_size = 5
+        for i in range(0, len(tasks), batch_size):
+            batch = tasks[i:i + batch_size]
+            await asyncio.gather(*batch, return_exceptions=True)
+            if i + batch_size < len(tasks):
+                await asyncio.sleep(0.2)
+
+        # Send summary
+        embed = discord.Embed(
+            title="Wipe Operation",
+            description=f"**Channels:** {len(source_channels)}\n**Users Disconnected:** {len(results['success'])}",
+            color=discord.Color.red(),
+            timestamp=datetime.now()
+        )
+        embed.add_field(name="Reason", value=reason, inline=False)
+
+        if results['success']:
+            success_names = ", ".join([m['member'].name for m in results['success'][:15]])
+            if len(results['success']) > 15:
+                success_names += f" +{len(results['success']) - 15} more"
+            embed.add_field(name="<:Accepted:1426930333789585509> Disconnected", value=success_names, inline=False)
+
+        if results['failed']:
+            failed_text = "\n".join([f"• {item['member'].name}: {item['error']}" for item in results['failed'][:5]])
+            if len(results['failed']) > 5:
+                failed_text += f"\n*... and {len(results['failed']) - 5} more*"
+            embed.add_field(name="<:Denied:1426930694633816248> Failed", value=failed_text, inline=False)
+
+        embed.set_footer(text=f"Executed by {interaction.user.name}")
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        await self.send_to_mod_logs(interaction.guild, embed)
+
+    # /vc user - Supervisor+ (move specific users)
+    @vc_group.command(name="user", description="Move specific user(s) to a voice channel")
+    @app_commands.describe(
+        users="Users to move (space-separated mentions, IDs, or names)",
+        to_channel="Destination channel",
+        reason="Reason for the move"
+    )
+    @has_role_level(SUPERVISORS + LEADERS + LOCKS + [YOUR_USER_ID])
+    async def vc_user(
+            self,
+            interaction: discord.Interaction,
+            users: str,
+            to_channel: discord.VoiceChannel,
+            reason: Optional[str] = "No reason provided"
+    ):
+        """Move specific users to a channel"""
+        await interaction.response.send_message("<a:Load:1430912797469970444> Moving users...", ephemeral=True)
+
+        # Parse users
+        member_list = await self.parse_users(interaction, users)
+        if not member_list:
+            await interaction.followup.send("<:Denied:1426930694633816248> No valid users found.", ephemeral=True)
+            return
+
+        # Perform moves (owner included)
+        results = await self.perform_bulk_moves(
+            members=member_list,
+            dest_channels=[to_channel],
+            reason=reason,
+            moderator=interaction.user,
+            include_me=True
+        )
+
+        await self.send_move_summary(interaction, results, "Specific Users", reason)
+
+    @vca_group.command(name="move", description="Move all users from multiple channels with optional trail")
+    @app_commands.describe(
+        from_channels="Source channels (space-separated, or 'ALL')",
+        to_channels="Destination channels (space-separated, or 'ALL')",
+        trail="Enable trail mode (sequential moves through channels) - Owner only",
+        reason="Reason for the move"
+    )
+    @has_role_level(LOCKS + [YOUR_USER_ID])
+    async def vca_move(
+            self,
+            interaction: discord.Interaction,
+            from_channels: str,
+            to_channels: str,
+            trail: bool = False,
+            reason: Optional[str] = "No reason provided"
+    ):
+        """Advanced move with multi-channel support and trail option"""
+        await interaction.response.send_message("<a:Load:1430912797469970444> Moving users...", ephemeral=True)
+
+        # Check trail permission
+        if trail and interaction.user.id != YOUR_USER_ID:
+            await interaction.followup.send("<:Denied:1426930694633816248> Trail mode is owner only!", ephemeral=True)
+            return
+
+        # Parse channels
+        source_channels = await self.parse_channels_or_all(interaction, from_channels, filter_with_users=True)
+        dest_channels = await self.parse_channels_or_all(interaction, to_channels, filter_with_users=False)
+
+        if not source_channels:
+            await interaction.followup.send("<:Denied:1426930694633816248> No valid source channels found.",
+                                            ephemeral=True)
+            return
+
+        if not dest_channels:
+            await interaction.followup.send("<:Denied:1426930694633816248> No valid destination channels found.",
+                                            ephemeral=True)
+            return
+
+        # Collect members
+        members_to_move = []
+        for channel in source_channels:
+            members_to_move.extend(channel.members)
+        members_to_move = list(set(members_to_move))
+
+        if not members_to_move:
+            await interaction.followup.send("<:Denied:1426930694633816248> No users found in source channels.",
+                                            ephemeral=True)
+            return
+
+        if trail:
+            # Trail mode: move through each channel sequentially
+            await self.move_trail_users(interaction, members_to_move, dest_channels, reason, include_me=True)
+        else:
+            # Normal mode: move all to destination channels (distributed)
+            results = await self.perform_bulk_moves(
+                members=members_to_move,
+                dest_channels=dest_channels,
+                reason=reason,
+                moderator=interaction.user,
+                distribute=True,
+                include_me=True
+            )
+            await self.send_move_summary(interaction, results,
+                                         f"From {len(source_channels)} to {len(dest_channels)} channels", reason)
+
+    # /vca disperse - Locks+ (trail is owner only)
+    @vca_group.command(name="disperse", description="Randomly disperse users across channels with optional trail")
+    @app_commands.describe(
+        from_channels="Source channels (space-separated, or 'ALL')",
+        to_channels="Destination channels (space-separated, or 'ALL')",
+        trail="Enable trail mode (repeated random dispersions) - Owner only",
+        repetitions="Number of trail repetitions (only with trail=True)",
+        reason="Reason for dispersing"
+    )
+    @has_role_level(LOCKS + [YOUR_USER_ID])
+    async def vca_disperse(
+            self,
+            interaction: discord.Interaction,
+            from_channels: str,
+            to_channels: str,
+            trail: bool = False,
+            repetitions: Optional[int] = 3,
+            reason: Optional[str] = "No reason provided"
+    ):
+        """Advanced disperse with multi-channel support and trail option"""
+        await interaction.response.send_message("<a:Load:1430912797469970444> Dispersing users...", ephemeral=True)
+
+        # Check trail permission
+        if trail and interaction.user.id != YOUR_USER_ID:
+            await interaction.followup.send("<:Denied:1426930694633816248> Trail mode is owner only!", ephemeral=True)
+            return
+
+        # Parse channels
+        source_channels = await self.parse_channels_or_all(interaction, from_channels, filter_with_users=True)
+        dest_channels = await self.parse_channels_or_all(interaction, to_channels, filter_with_users=False)
+
+        if not source_channels:
+            await interaction.followup.send("<:Denied:1426930694633816248> No valid source channels found.",
+                                            ephemeral=True)
+            return
+
+        if not dest_channels:
+            await interaction.followup.send("<:Denied:1426930694633816248> No valid destination channels found.",
+                                            ephemeral=True)
+            return
+
+        # Collect members
+        members_to_move = []
+        for channel in source_channels:
+            members_to_move.extend(channel.members)
+        members_to_move = list(set(members_to_move))
+
+        if not members_to_move:
+            await interaction.followup.send("<:Denied:1426930694633816248> No users found in source channels.",
+                                            ephemeral=True)
+            return
+
+        if trail:
+            # Trail mode: repeated random dispersions
+            if repetitions < 1:
+                repetitions = 3
+            await self.move_disperse_trail_users(interaction, members_to_move, dest_channels, repetitions, reason,
+                                                 include_me=True)
+        else:
+            # Normal mode: single random dispersion
+            import random
+            shuffled = members_to_move.copy()
+            random.shuffle(shuffled)
+
+            results = await self.perform_bulk_moves(
+                members=shuffled,
+                dest_channels=dest_channels,
+                reason=reason,
+                moderator=interaction.user,
+                distribute=True,
+                include_me=True
+            )
+            await self.send_move_summary(interaction, results, f"Dispersed across {len(dest_channels)} channels",
+                                         reason)
+
+    # /vca tour - Owner only (sequential channel tour)
+    @vca_group.command(name="tour", description="Move users sequentially through multiple channels")
+    @app_commands.describe(
+        channels="Channels for the tour (space-separated, or 'ALL')",
+        users="Specific users (optional, leave empty for all users in voice)",
+        reason="Reason for the tour"
+    )
+    @is_owner()
+    async def vca_tour(
+            self,
+            interaction: discord.Interaction,
+            channels: str,
+            users: Optional[str] = None,
+            reason: Optional[str] = "No reason provided"
+    ):
+        """Sequential channel tour - owner only"""
+        await interaction.response.send_message("<a:Load:1430912797469970444> Starting tour...", ephemeral=True)
+
+        # Parse channels
+        tour_channels = await self.parse_channels_or_all(interaction, channels, filter_with_users=False)
+
+        if not tour_channels:
+            await interaction.followup.send("<:Denied:1426930694633816248> No valid channels found.", ephemeral=True)
+            return
+
+        if len(tour_channels) < 2:
+            await interaction.followup.send("<:Denied:1426930694633816248> Tour requires at least 2 channels.",
+                                            ephemeral=True)
+            return
+
+        # Get members
+        if users:
+            member_list = await self.parse_users(interaction, users)
+            if not member_list:
+                await interaction.followup.send("<:Denied:1426930694633816248> No valid users found.", ephemeral=True)
+                return
+        else:
+            # Get all users currently in voice
+            member_list = []
+            for channel in interaction.guild.voice_channels:
+                member_list.extend(channel.members)
+            member_list = list(set(member_list))
+
+            if not member_list:
+                await interaction.followup.send("<:Denied:1426930694633816248> No users in voice channels.",
+                                                ephemeral=True)
+                return
+
+        # Execute tour (owner included)
+        await self.move_trail_users(interaction, member_list, tour_channels, reason, include_me=True)
 
     async def move_swap_channels(self, interaction: discord.Interaction,
                                  source_channels: List[discord.VoiceChannel],
@@ -2397,4 +2297,7 @@ class ModerateCog(commands.Cog):
 
 
 async def setup(bot):
-    await bot.add_cog(ModerateCog(bot))
+    cog = ModerateCog(bot)
+    await bot.add_cog(cog)
+    bot.tree.add_command(cog.vc_group)
+    bot.tree.add_command(cog.vca_group)

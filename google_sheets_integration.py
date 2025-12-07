@@ -555,8 +555,8 @@ class GoogleSheetsManager:
                 discord_id = str(data['discord_user_id'])
                 is_command = data.get('is_command', False)
 
-                # <:Accepted:1426930333789585509> Skip RFF-### from being synced to sheets
-                if data['callsign'] == '###' and fenz_prefix == 'RFF':
+                # <:Accepted:1426930333789585509> Skip RFF-Not Assigned from being synced to sheets
+                if data['callsign'] == 'Not Assigned' and fenz_prefix == 'RFF':
                     # If it exists in sheets, mark for deletion
                     if discord_id in existing_nc_map:
                         nc_deletes.add(discord_id)
@@ -570,21 +570,26 @@ class GoogleSheetsManager:
                     cmd_deletes.discard(discord_id)
                     nc_deletes.discard(discord_id)
 
-                    # Handle "Not Assigned" callsigns - show only prefix
-                    if data['callsign'] == "Not Assigned":
+                    # ✅ FIX: Calculate sort value for Command
+                    callsign = data['callsign']
+
+                    if callsign in ["Not Assigned", "BLANK"]:
+                        sort_value = 99999  # Sorts last
                         full_callsign = fenz_prefix if fenz_prefix else "Not Assigned"
                     else:
-                        full_callsign = f"{fenz_prefix}-{data['callsign']}" if fenz_prefix else data['callsign']
+                        sort_value = int(callsign)  # Sorts numerically
+                        full_callsign = f"{fenz_prefix}-{callsign}" if fenz_prefix else callsign
 
                     rank_priority = COMMAND_RANK_PRIORITY.get(fenz_prefix, 99)
 
                     new_row = [
-                        full_callsign,
-                        data['roblox_username'],
-                        qualifications or "No Additional Qualifications",  # <:Accepted:1426930333789585509> Use passed value
-                        strikes or "Good Boy",  # <:Accepted:1426930333789585509> Use passed value
-                        discord_id,
-                        rank_priority
+                        full_callsign,  # A: Callsign
+                        data['roblox_username'],  # B: Roblox
+                        qualifications or "No Additional Qualifications",  # C: Quals
+                        strikes or "Good Boy",  # D: Strikes
+                        discord_id,  # E: Discord ID
+                        rank_priority,  # F: Rank Priority
+                        sort_value  # G: Sort Helper ← NEW COLUMN!
                     ]
 
                     if discord_id in existing_cmd_map:
@@ -592,13 +597,17 @@ class GoogleSheetsManager:
                         while len(existing) < 6:
                             existing.append('')
 
-                        # <:Accepted:1426930333789585509> Check if ANY field changed (including strikes/qualifications)
+                        while len(existing) < 7:  # ← Now need 7 fields (added G)
+                            existing.append('')
+
                         if (existing[0] != new_row[0] or
                                 existing[1] != new_row[1] or
                                 existing[2] != new_row[2] or  # Qualifications
                                 existing[3] != new_row[3] or  # Strikes
                                 existing[4] != new_row[4] or
-                                str(existing[5]) != str(new_row[5])):
+                                str(existing[5]) != str(new_row[5]) or  # Rank Priority
+                                str(existing[6]) != str(new_row[6])):  # Sort Helper ← NEW!
+
                             cmd_updates.append({
                                 'row': existing_cmd_map[discord_id]['row'],
                                 'data': new_row
@@ -613,31 +622,40 @@ class GoogleSheetsManager:
                     nc_deletes.discard(discord_id)
                     cmd_deletes.discard(discord_id)
 
-                    # Handle "Not Assigned" callsigns - show only prefix
-                    if data['callsign'] == "Not Assigned":
-                        full_callsign = fenz_prefix  # Just the prefix
+                    callsign = data['callsign']
+                    roblox_username = data['roblox_username']
+
+                    # Calculate sort value FIRST
+                    if callsign in ["Not Assigned", "BLANK"]:
+                        sort_value = 99999  # Sorts last
+                        full_callsign = fenz_prefix  # Display as just "SFF"
                     else:
-                        full_callsign = f"{fenz_prefix}-{data['callsign']}"
+                        sort_value = int(callsign)  # Sorts numerically
+                        full_callsign = f"{fenz_prefix}-{callsign}"  # Display as "SFF-42"
 
                     rank_number = next((num for _, (_, prefix, num) in NON_COMMAND_RANKS.items()
                                         if prefix == fenz_prefix), 3)
 
                     new_row = [
-                        full_callsign,
-                        fenz_prefix,
-                        data['callsign'],
-                        data['roblox_username'],
-                        "",  # Column E (empty)
-                        strikes or "Clear",  # <:Accepted:1426930333789585509> Use passed value
-                        discord_id,
-                        rank_number,
-                        qualifications or "No Additional Qualifications"  # <:Accepted:1426930333789585509> Use passed value
+                        full_callsign,  # A: Display callsign
+                        fenz_prefix,  # B: Prefix
+                        callsign,  # C: Number
+                        roblox_username,  # D: Roblox
+                        "",  # E: Empty
+                        strikes or "Clear",  # F: Strikes
+                        discord_id,  # G: Discord ID
+                        rank_number,  # H: Rank (1=SFF, 2=QFF, 3=RFF)
+                        qualifications or "No Additional Qualifications",  # I: Quals
+                        sort_value  # J: Sort Helper (NEW!)
                     ]
 
                     if discord_id in existing_nc_map:
                         existing = existing_nc_map[discord_id]['data']
 
-                        # <:Accepted:1426930333789585509> Check if ANY field changed (including strikes/qualifications)
+                        while len(existing) < 10:  # ← Now need 10 fields (added J)
+                            existing.append('')
+
+                        # Check if ANY field changed
                         if (existing[0] != new_row[0] or
                                 existing[1] != new_row[1] or
                                 existing[2] != new_row[2] or
@@ -645,7 +663,8 @@ class GoogleSheetsManager:
                                 existing[5] != new_row[5] or  # Strikes
                                 existing[6] != new_row[6] or
                                 str(existing[7]) != str(new_row[7]) or
-                                existing[8] != new_row[8]):  # Qualifications
+                                existing[8] != new_row[8] or  # Qualifications
+                                str(existing[9]) != str(new_row[9])):  # Sort Helper ← NEW!
 
                             nc_updates.append({
                                 'row': existing_nc_map[discord_id]['row'],
@@ -676,7 +695,7 @@ class GoogleSheetsManager:
                 batch_data = []
                 for update in nc_updates:
                     batch_data.append({
-                        'range': f'A{update["row"]}:I{update["row"]}',
+                        'range': f'A{update["row"]}:J{update["row"]}',  # ← Missing column J!
                         'values': [update['data']]
                     })
 
@@ -697,7 +716,7 @@ class GoogleSheetsManager:
                 batch_data = []
                 for update in cmd_updates:
                     batch_data.append({
-                        'range': f'A{update["row"]}:F{update["row"]}',
+                        'range': f'A{update["row"]}:G{update["row"]}',
                         'values': [update['data']]
                     })
 
@@ -734,12 +753,18 @@ class GoogleSheetsManager:
 
             # Sort both sheets
             print("📊 Sorting sheets...")
+
+            # Non-Command: Sort by Rank → Sort Helper → Callsign
             self.sort_worksheet_multi(non_command_sheet, [
-                {'column': 8, 'order': 'ASCENDING'},
-                {'column': 3, 'order': 'ASCENDING'}
+                {'column': 8, 'order': 'ASCENDING'},  # H: Rank (1=SFF, 2=QFF, 3=RFF)
+                {'column': 10, 'order': 'ASCENDING'},  # J: Sort Helper (number or 99999)
+                {'column': 3, 'order': 'ASCENDING'}  # C: Callsign number (tiebreaker)
             ])
+
+            # Command: Sort by Rank Priority → Sort Helper
             self.sort_worksheet_multi(command_sheet, [
-                {'column': 6, 'order': 'ASCENDING'}
+                {'column': 6, 'order': 'ASCENDING'},  # F: Rank Priority (1=NC, 2=DNC...)
+                {'column': 7, 'order': 'ASCENDING'}  # G: Sort Helper (number or 99999) ← NEW!
             ])
 
             print(f"<:Accepted:1426930333789585509> Smart update complete!")
@@ -994,6 +1019,43 @@ class GoogleSheetsManager:
             import traceback
             traceback.print_exc()
             return False
+
+    def get_dropdown_values_from_template(self, worksheet, column, template_row=2):
+        """Extract dropdown values from template row"""
+        try:
+            worksheet_id = worksheet.id
+            sheet_metadata = self.spreadsheet.fetch_sheet_metadata()
+
+            for sheet in sheet_metadata['sheets']:
+                if sheet['properties']['sheetId'] == worksheet_id:
+                    # Look for data validation rules
+                    if 'dataValidation' in sheet:
+                        for rule in sheet['dataValidation']:
+                            if rule['range']['startColumnIndex'] == column - 1:
+                                # Extract values
+                                return rule['condition']['values']
+
+            return None
+        except Exception as e:
+            print(f"⚠️ Could not read dropdown from template: {e}")
+            return None
+
+    def ensure_dropdown_exists(self, worksheet, row, column, template_row=2):
+        """Copy dropdown from template, or create with template's values"""
+        try:
+            # Try copying (fastest)
+            self.copy_data_validation_to_cell(worksheet, template_row, row, column)
+            return True
+        except:
+            # Read values from template
+            values = self.get_dropdown_values_from_template(worksheet, column, template_row)
+
+            if not values:
+                # Ultimate fallback: use hardcoded defaults
+                values = self._get_default_dropdown_values(worksheet.title, column)
+
+            # Create dropdown with those values
+            return self.apply_validations_directly(worksheet, [row], column, values)
 
 # Create global instance
 sheets_manager = GoogleSheetsManager()

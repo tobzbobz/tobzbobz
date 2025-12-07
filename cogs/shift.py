@@ -226,7 +226,7 @@ class WeeklyShiftManager:
         """Generate and send weekly leaderboard report for a specific wave"""
 
         async with self.cog.db.pool.acquire() as conn:
-            # Get all users who had shifts in this wave
+            # Get current wave shifts
             shifts = await conn.fetch(
                 '''SELECT discord_user_id,
                           type,
@@ -244,6 +244,39 @@ class WeeklyShiftManager:
             if not shifts:
                 print(f"No shifts found for wave {wave_number}")
                 return
+
+            # Get historical shifts for rolling totals
+            # For FENZ: previous 2 waves (including current)
+            # For HHStJ: previous 4 waves (including current)
+            fenz_historical = await conn.fetch(
+                '''SELECT discord_user_id,
+                          SUM(EXTRACT(EPOCH FROM (end_time - start_time)) -
+                              COALESCE(pause_duration, 0)) as total_seconds
+                   FROM shifts
+                   WHERE wave_number <= $1
+                     AND wave_number > $2
+                     AND type = 'Shift FENZ'
+                     AND end_time IS NOT NULL
+                   GROUP BY discord_user_id''',
+                wave_number, wave_number - 2  # Current + previous 1 wave
+            )
+
+            hhstj_historical = await conn.fetch(
+                '''SELECT discord_user_id,
+                          SUM(EXTRACT(EPOCH FROM (end_time - start_time)) -
+                              COALESCE(pause_duration, 0)) as total_seconds
+                   FROM shifts
+                   WHERE wave_number <= $1
+                     AND wave_number > $2
+                     AND type = 'Shift HHStJ'
+                     AND end_time IS NOT NULL
+                   GROUP BY discord_user_id''',
+                wave_number, wave_number - 4  # Current + previous 3 waves
+            )
+
+            # Create lookup maps for historical data
+            fenz_historical_map = {row['discord_user_id']: row['total_seconds'] for row in fenz_historical}
+            hhstj_historical_map = {row['discord_user_id']: row['total_seconds'] for row in hhstj_historical}
 
             # Get guild
             guild = None
@@ -317,6 +350,24 @@ class WeeklyShiftManager:
 
                 active_seconds = shift_data['total_seconds']
 
+                # Calculate rolling totals based on shift type
+                rolling_seconds = None
+                weeks_included = 0
+
+                if shift_type == 'Shift FENZ':
+                    # FENZ: Show rolling total for wave 2, 4, 6, etc. (even waves)
+                    # Odd waves (1, 3, 5) show single week only
+                    if wave_number % 2 == 0:  # Even wave number
+                        rolling_seconds = fenz_historical_map.get(member.id, active_seconds)
+                        weeks_included = 2
+
+                elif shift_type == 'Shift HHStJ':
+                    # HHStJ: Show cumulative weeks 1-4, then reset
+                    cycle_position = ((wave_number - 1) % 4) + 1  # 1, 2, 3, or 4
+                    if cycle_position > 1:  # Don't show brackets for week 1
+                        rolling_seconds = hhstj_historical_map.get(member.id, active_seconds)
+                        weeks_included = cycle_position
+
                 # Check bypass roles
                 user_role_ids = {role.id for role in member.roles}
                 bypass_type = None
@@ -336,13 +387,23 @@ class WeeklyShiftManager:
                     percentage = (active_seconds / modified_quota * 100) if modified_quota > 0 else 0
                     completed = percentage >= 100
                     emoji = "<:Accepted:1426930333789585509>" if completed else "<:Denied:1426930694633816248>"
-                    status = f"{emoji} {member.mention} - {self.cog.format_duration(timedelta(seconds=active_seconds))} / {self.cog.format_duration(timedelta(seconds=max_quota))} **({percentage:.1f}% - RA 50% Required)**"
+
+                    # Add rolling total in brackets if applicable
+                    if rolling_seconds and rolling_seconds > active_seconds:
+                        status = f"{emoji} {member.mention} - {self.cog.format_duration(timedelta(seconds=active_seconds))} ({self.cog.format_duration(timedelta(seconds=rolling_seconds))}) / {self.cog.format_duration(timedelta(seconds=max_quota))} **({percentage:.1f}% - RA 50% Required)**"
+                    else:
+                        status = f"{emoji} {member.mention} - {self.cog.format_duration(timedelta(seconds=active_seconds))} / {self.cog.format_duration(timedelta(seconds=max_quota))} **({percentage:.1f}% - RA 50% Required)**"
                 else:
                     bypass_type = None
                     percentage = (active_seconds / max_quota * 100) if max_quota > 0 else 0
                     completed = percentage >= 100
                     emoji = "<:Accepted:1426930333789585509>" if completed else "<:Denied:1426930694633816248>"
-                    status = f"{emoji} {member.mention} - {self.cog.format_duration(timedelta(seconds=active_seconds))} / {self.cog.format_duration(timedelta(seconds=max_quota))} **({percentage:.1f}%)**"
+
+                    # Add rolling total in brackets if applicable
+                    if rolling_seconds and rolling_seconds > active_seconds:
+                        status = f"{emoji} {member.mention} - {self.cog.format_duration(timedelta(seconds=active_seconds))} ({self.cog.format_duration(timedelta(seconds=rolling_seconds))}) / {self.cog.format_duration(timedelta(seconds=max_quota))} **({percentage:.1f}%)**"
+                    else:
+                        status = f"{emoji} {member.mention} - {self.cog.format_duration(timedelta(seconds=active_seconds))} / {self.cog.format_duration(timedelta(seconds=max_quota))} **({percentage:.1f}%)**"
 
                 lines.append(status)
 
@@ -362,9 +423,18 @@ class WeeklyShiftManager:
 
                 if week_start:
                     week_end = week_start + timedelta(days=6)
-                    embed.set_footer(
-                        text=f"Wave {wave_number} • {week_start.strftime('%d %b')} - {week_end.strftime('%d %b %Y')}"
-                    )
+
+                    # Add rolling period indicator to footer
+                    footer_text = f"Wave {wave_number} • {week_start.strftime('%d %b')} - {week_end.strftime('%d %b %Y')}"
+
+                    if shift_type == 'Shift FENZ' and wave_number % 2 == 0:
+                        footer_text += " • 2 Week Total"
+                    elif shift_type == 'Shift HHStJ':
+                        cycle_position = ((wave_number - 1) % 4) + 1
+                        if cycle_position > 1:
+                            footer_text += f" • {cycle_position} Week Total"
+
+                    embed.set_footer(text=footer_text)
                 else:
                     embed.set_footer(text=f"Wave {wave_number}")
 
@@ -1133,10 +1203,27 @@ class ShiftManagementCog(commands.Cog):
         return (max_quota, has_any_quota)
 
     async def get_quota_info(self, member: discord.Member, type: str = None) -> dict:
-        """Get quota information for a user including percentage and bypass status"""
-        quota_seconds, has_any_quota = await self.get_user_quota(member, type)
+        """Get quota information including percentage, bypass status, and reset time"""
 
-        # If user has no quota roles at all, return no quota
+        # Get quota and period
+        max_quota = 0
+        quota_period_weeks = 1
+        watch_quota = 0  # Track watch requirement
+        has_any_quota = False
+
+        async with db.pool.acquire() as conn:
+            for role in member.roles:
+                quota_data = await conn.fetchrow(
+                    'SELECT quota_seconds, quota_period_weeks, watch_quota FROM shift_quotas WHERE role_id = $1 AND type = $2',
+                    role.id, type
+                )
+                if quota_data and quota_data['quota_seconds'] > 0:
+                    has_any_quota = True
+                    if quota_data['quota_seconds'] > max_quota:
+                        max_quota = quota_data['quota_seconds']
+                        quota_period_weeks = quota_data.get('quota_period_weeks', 1)
+                        watch_quota = quota_data.get('watch_quota', 0)
+
         if not has_any_quota:
             return {
                 'has_quota': False,
@@ -1144,102 +1231,105 @@ class ShiftManagementCog(commands.Cog):
                 'active_seconds': 0,
                 'percentage': 0,
                 'completed': False,
-                'bypass_type': None
+                'bypass_type': None,
+                'quota_period_weeks': 1,
+                'watch_count': 0,
+                'watch_quota': 0,
+                'reset_timestamp': None
             }
 
-        active_seconds = await self.get_total_active_time(member.id, type)
+        # ✅ FIX: Get active time AND watch count
+        active_seconds, watch_count = await self.get_total_active_time_with_watches(
+            member.id, type, quota_period_weeks
+        )
 
-        # Check for bypass roles FIRST
+        # Calculate when quota resets
+        current_week = self.weekly_manager.get_current_week_monday()
+        reset_date = current_week + timedelta(weeks=quota_period_weeks)
+        reset_timestamp = int(reset_date.timestamp())
+
+        # Check for bypass roles
         user_role_ids = {role.id for role in member.roles}
 
-        # If user has QB or LOA, they're always completed regardless of quota
         if QUOTA_BYPASS_ROLE in user_role_ids:
             return {
                 'has_quota': True,
-                'quota_seconds': quota_seconds,
+                'quota_seconds': max_quota,
                 'active_seconds': active_seconds,
                 'percentage': 100,
                 'completed': True,
-                'bypass_type': 'QB'
+                'bypass_type': 'QB',
+                'quota_period_weeks': quota_period_weeks,
+                'watch_count': watch_count,
+                'watch_quota': watch_quota,
+                'reset_timestamp': reset_timestamp
             }
         elif LOA_ROLE in user_role_ids:
             return {
                 'has_quota': True,
-                'quota_seconds': quota_seconds,
+                'quota_seconds': max_quota,
                 'active_seconds': active_seconds,
                 'percentage': 100,
                 'completed': True,
-                'bypass_type': 'LOA'
+                'bypass_type': 'LOA',
+                'quota_period_weeks': quota_period_weeks,
+                'watch_count': watch_count,
+                'watch_quota': watch_quota,
+                'reset_timestamp': reset_timestamp
             }
 
-        # Special handling for 0-second quotas - they're always completed
-        if quota_seconds == 0:
+        # Special handling for 0-second quotas
+        if max_quota == 0:
             return {
                 'has_quota': True,
                 'quota_seconds': 0,
                 'active_seconds': active_seconds,
                 'percentage': 100,
                 'completed': True,
-                'bypass_type': None
+                'bypass_type': None,
+                'quota_period_weeks': quota_period_weeks,
+                'watch_count': watch_count,
+                'watch_quota': watch_quota,
+                'reset_timestamp': reset_timestamp
             }
 
         # Check for RA (Reduced Activity)
         if REDUCED_ACTIVITY_ROLE in user_role_ids:
             bypass_type = 'RA'
-            modified_quota = quota_seconds * 0.5
-            percentage = (active_seconds / modified_quota * 100) if modified_quota > 0 else 0
-            completed = percentage >= 100
+            modified_quota = max_quota * 0.5
+
+            # ✅ FIX: Calculate percentage including watch completion
+            watch_completed = (watch_count >= watch_quota) if watch_quota > 0 else True
+            time_percentage = (active_seconds / modified_quota * 100) if modified_quota > 0 else 0
+
+            # Must meet BOTH requirements
+            completed = time_percentage >= 100 and watch_completed
+            percentage = min(time_percentage, 100)
         else:
             bypass_type = None
-            percentage = (active_seconds / quota_seconds) * 100 if quota_seconds > 0 else 0
-            completed = percentage >= 100
+
+            # ✅ FIX: Calculate percentage including watch completion
+            watch_completed = (watch_count >= watch_quota) if watch_quota > 0 else True
+            time_percentage = (active_seconds / max_quota * 100) if max_quota > 0 else 0
+
+            # Must meet BOTH requirements
+            completed = time_percentage >= 100 and watch_completed
+            percentage = time_percentage
 
         return {
             'has_quota': True,
-            'quota_seconds': quota_seconds,
-            'modified_quota_seconds': modified_quota if bypass_type == 'RA' else quota_seconds,
+            'quota_seconds': max_quota,
+            'modified_quota_seconds': modified_quota if bypass_type == 'RA' else max_quota,
             'active_seconds': active_seconds,
             'percentage': percentage,
             'completed': completed,
-            'bypass_type': bypass_type
+            'bypass_type': bypass_type,
+            'quota_period_weeks': quota_period_weeks,
+            'watch_count': watch_count,
+            'watch_quota': watch_quota,
+            'reset_timestamp': reset_timestamp
         }
-
-        active_seconds = await self.get_total_active_time(member.id, type)
-
-        # Check for quota bypass roles
-        user_role_ids = {role.id for role in member.roles}
-        bypass_type = None
-        modified_quota = quota_seconds
-
-        if QUOTA_BYPASS_ROLE in user_role_ids:
-            bypass_type = 'QB'
-            completed = True
-        elif LOA_ROLE in user_role_ids:
-            bypass_type = 'LOA'
-            completed = True
-        elif REDUCED_ACTIVITY_ROLE in user_role_ids:
-            bypass_type = 'RA'
-            modified_quota = quota_seconds * 0.5  # 50% of quota
-            percentage = (active_seconds / modified_quota) * 100 if modified_quota > 0 else 0
-            completed = percentage >= 100
-        else:
-            bypass_type = None
-            percentage = (active_seconds / quota_seconds) * 100
-            completed = percentage >= 100
-
-        # Calculate percentage based on original quota for display
-        display_percentage = (active_seconds / quota_seconds) * 100 if quota_seconds > 0 else 0
-
-        return {
-            'has_quota': True,
-            'quota_seconds': quota_seconds,
-            'modified_quota_seconds': modified_quota if bypass_type == 'RA' else quota_seconds,
-            'active_seconds': active_seconds,
-            'percentage': display_percentage,
-            'completed': completed,
-            'bypass_type': bypass_type
-        }
-
+    
     async def get_total_active_time(self, user_id: int, type: str = None) -> int:
         """Get total active shift time in seconds for current week"""
         current_week = self.weekly_manager.get_current_week_monday()
@@ -1437,15 +1527,14 @@ class ShiftManagementCog(commands.Cog):
             import traceback
             traceback.print_exc()
 
+    # Replace the shift_quota command (around line 1068) with this:
+
     @shift_group.command(name="quota", description="View your quota (Leadership+ - Set Quota)")
     @app_commands.describe(
         action="What you want to do.",
-        roles="The role(s) to set quota for",
-        hours="Hours for the quota",
-        minutes="Minutes for the quota",
-        type="The shift type to set quota for"
+        roles="The role(s) to set quota for (for set/remove actions)",
+        type="The shift type to set quota for (for set/remove actions)"
     )
-
     @app_commands.choices(
         type=[
             app_commands.Choice(name="Shift FENZ", value="Shift FENZ"),
@@ -1458,21 +1547,19 @@ class ShiftManagementCog(commands.Cog):
             interaction: discord.Interaction,
             action: str,
             roles: str = None,
-            hours: int = 0,
-            minutes: int = 0,
             type: app_commands.Choice[str] = None
     ):
         await interaction.response.defer(ephemeral=True)
 
         try:
             if action == "view":
-
                 # View user's own quota
                 quota_info = await self.get_quota_info(interaction.user, type.value if type else None)
 
                 if not quota_info['has_quota']:
                     embed = discord.Embed(
                         title="<:Search:1434957367505719457> Your Quota",
+                        description="You don't have any quota requirements set.",
                         color=discord.Color(0x000000)
                     )
                     embed.set_author(
@@ -1491,6 +1578,7 @@ class ShiftManagementCog(commands.Cog):
                     icon_url=interaction.user.display_avatar.url
                 )
 
+                # Build status text based on bypass type
                 if quota_info['bypass_type']:
                     if quota_info['bypass_type'] == 'RA':
                         status_text = f"<:Accepted:1426930333789585509> **{quota_info['percentage']:.1f}%** (RA - 50% Required)"
@@ -1501,19 +1589,38 @@ class ShiftManagementCog(commands.Cog):
                         'completed'] else "<:Denied:1426930694633816248>"
                     status_text = f"{status_emoji} **{quota_info['percentage']:.1f}%**"
 
-                embed.description = (
-                    f"{status_text}\n"
-                    f"**Required:** {self.format_duration(timedelta(seconds=quota_info['quota_seconds']))}\n"
+                period_weeks = quota_info.get('quota_period_weeks', 1)
+                period_text = f"{period_weeks} week{'s' if period_weeks != 1 else ''}"
+
+                # Build description with shift time
+                desc_parts = [
+                    status_text,
+                    f"**Required:** {self.format_duration(timedelta(seconds=quota_info['quota_seconds']))} per {period_text}",
                     f"**Completed:** {self.format_duration(timedelta(seconds=quota_info['active_seconds']))}"
-                )
+                ]
+
+                # Add watch requirement if applicable
+                if quota_info.get('watch_quota', 0) > 0:
+                    watch_emoji = "<:Accepted:1426930333789585509>" if quota_info['watch_count'] >= quota_info[
+                        'watch_quota'] else "<:Denied:1426930694633816248>"
+                    desc_parts.append(
+                        f"\n**Watches:** {watch_emoji} {quota_info['watch_count']}/{quota_info['watch_quota']} required")
+
+                # Add reset time
+                if quota_info.get('reset_timestamp'):
+                    desc_parts.append(f"\n**Resets:** <t:{quota_info['reset_timestamp']}:R>")
+
+                embed.description = "\n".join(desc_parts)
 
                 if type:
-                    embed.set_footer(text=f"Shift Type: {type.value}")
+                    footer_text = f"Shift Type: {type.value}"
+                    if type.value == "Shift FENZ" and quota_info.get('watch_quota', 0) > 0:
+                        footer_text += " • Includes watch hosting requirement"
+                    embed.set_footer(text=footer_text)
 
                 await interaction.followup.send(embed=embed, ephemeral=True)
 
             elif action == "set":
-
                 # Check admin permission
                 if not any(role_check.id in QUOTA_ADMIN_ROLES for role_check in interaction.user.roles):
                     await interaction.followup.send(
@@ -1521,7 +1628,6 @@ class ShiftManagementCog(commands.Cog):
                         ephemeral=True
                     )
                     return
-
 
                 if not roles:
                     await interaction.followup.send(
@@ -1548,10 +1654,7 @@ class ShiftManagementCog(commands.Cog):
                         role = interaction.guild.get_role(role_id)
                         if role:
                             role_ids.append(role_id)
-                        else:
-                            print(f"Warning: Role ID {role_id} not found in guild")
                     except ValueError:
-                        print(f"Warning: Could not parse role ID from: {role_str}")
                         continue
 
                 if not role_ids:
@@ -1561,72 +1664,14 @@ class ShiftManagementCog(commands.Cog):
                     )
                     return
 
-                # Calculate total seconds
-                total_seconds = (hours * 3600) + (minutes * 60)
-
-                if total_seconds < 0:
-                    await interaction.followup.send(
-                        "<:Denied:1426930694633816248> Quota cannot be negative.",
-                        ephemeral=True
-                    )
-                    return
-
-                # Allow 0 as a valid quota (means no requirement for this role)
-                if total_seconds == 0:
-                    # Confirm the user wants to set a 0 quota
-                    if not (hours == 0 and minutes == 0):
-                        await interaction.followup.send(
-                            "<:Denied:1426930694633816248> Invalid time values.",
-                            ephemeral=True
-                        )
-                        return
-
-                # Check for conflicts and save to database
-                async with db.pool.acquire() as conn:
-                    conflicts = []
-                    for role_id in role_ids:
-                        existing = await conn.fetchrow(
-                            'SELECT quota_seconds FROM shift_quotas WHERE role_id = $1 AND type = $2',
-                            role_id, type.value
-                        )
-
-                        if existing:
-                            role = interaction.guild.get_role(role_id)
-                            conflicts.append(
-                                f"{role.mention} (currently: {self.format_duration(timedelta(seconds=existing['quota_seconds']))})")
-
-                    if conflicts:
-                        # Show confirmation for overwriting
-                        view = QuotaConflictView(
-                            self, interaction.user, role_ids, total_seconds, type.value
-                        )
-                        await interaction.followup.send(
-                            f"**The following roles already have quotas set for {type.value}:**\n" +
-                            "\n".join(conflicts) +
-                            f"\n\nOverwrite with **{self.format_duration(timedelta(seconds=total_seconds))}**?",
-                            view=view,
-                            ephemeral=True
-                        )
-                        return
-
-                    # No conflicts, set quotas directly
-                    role_mentions = []
-                    for role_id in role_ids:
-                        await conn.execute(
-                            '''INSERT INTO shift_quotas (role_id, quota_seconds, type)
-                               VALUES ($1, $2, $3) ON CONFLICT (role_id, type) 
-                               DO
-                            UPDATE SET quota_seconds = $2''',
-                            role_id, total_seconds, type.value
-                        )
-                        role = interaction.guild.get_role(role_id)
-                        if role:
-                            role_mentions.append(role.mention)
-
-                    await interaction.followup.send(
-                        f"<:Accepted:1426930333789585509> Set quota for {', '.join(role_mentions)} to {self.format_duration(timedelta(seconds=total_seconds))} ({type.value})",
-                        ephemeral=True
-                    )
+                # Show period selection view
+                view = QuotaPeriodSelectView(self, interaction.user, role_ids, type.value, interaction.guild)
+                message = await interaction.followup.send(
+                    "**Select Quota Period**\nHow often should this quota reset?",
+                    view=view,
+                    ephemeral=True
+                )
+                view.message = message
 
             elif action == "remove":
                 # Check admin permission
@@ -1702,7 +1747,6 @@ class ShiftManagementCog(commands.Cog):
 
             elif action == "view_all":
                 # View all quotas - ANYONE with shift access can use this
-                # Check if user has any shift role
                 user_types = await self.get_user_types(interaction.user)
                 if not user_types:
                     await interaction.followup.send(
@@ -1774,7 +1818,6 @@ class ShiftManagementCog(commands.Cog):
                             is_ignored = (quota['role_id'], type_name) in ignored_set
 
                             if is_ignored:
-                                # Only show ignored roles to admins
                                 if is_admin:
                                     ignored_lines.append(
                                         f"~~{quota_role.mention}~~ • {self.format_duration(timedelta(seconds=quota['quota_seconds']))} **(Hidden)**"
@@ -1818,7 +1861,6 @@ class ShiftManagementCog(commands.Cog):
                     )
                     return
 
-
                 if not roles:
                     await interaction.followup.send(
                         "<:Denied:1426930694633816248> Please specify role(s) to toggle visibility for.",
@@ -1856,11 +1898,10 @@ class ShiftManagementCog(commands.Cog):
 
                 # Toggle visibility for each role
                 async with db.pool.acquire() as conn:
-                    toggled_on = []  # Roles made visible (removed from ignored)
-                    toggled_off = []  # Roles made hidden (added to ignored)
+                    toggled_on = []
+                    toggled_off = []
 
                     for role_id in role_ids:
-                        # Check if role has a quota
                         has_quota = await conn.fetchval(
                             'SELECT EXISTS(SELECT 1 FROM shift_quotas WHERE role_id = $1 AND type = $2)',
                             role_id, type.value
@@ -1869,7 +1910,6 @@ class ShiftManagementCog(commands.Cog):
                         if not has_quota:
                             continue
 
-                        # Check if currently ignored
                         is_ignored = await conn.fetchval(
                             'SELECT EXISTS(SELECT 1 FROM quota_ignored_roles WHERE role_id = $1 AND type = $2)',
                             role_id, type.value
@@ -1880,14 +1920,12 @@ class ShiftManagementCog(commands.Cog):
                             continue
 
                         if is_ignored:
-                            # Currently hidden - make visible (remove from ignored)
                             await conn.execute(
                                 'DELETE FROM quota_ignored_roles WHERE role_id = $1 AND type = $2',
                                 role_id, type.value
                             )
                             toggled_on.append(role.mention)
                         else:
-                            # Currently visible - make hidden (add to ignored)
                             await conn.execute(
                                 '''INSERT INTO quota_ignored_roles (role_id, type, added_by_id, added_by_name)
                                    VALUES ($1, $2, $3, $4)''',
@@ -1924,8 +1962,6 @@ class ShiftManagementCog(commands.Cog):
                 )
                 embed.set_footer(text=f"Hidden roles will not appear in weekly leaderboards for {type.value}")
 
-                
-
                 await interaction.followup.send(embed=embed, ephemeral=True)
 
         except Exception as e:
@@ -1936,37 +1972,219 @@ class ShiftManagementCog(commands.Cog):
             import traceback
             traceback.print_exc()
 
-    @shift_quota.autocomplete('action')
-    async def quota_action_autocomplete(
-            self,
-            interaction: discord.Interaction,
-            current: str
-    ) -> list[app_commands.Choice[str]]:
+    class QuotaTimeView(discord.ui.View):
+        """View with button to trigger time input modal"""
 
-        choices = [
-            app_commands.Choice(name="View My Quota", value="view"),
-            app_commands.Choice(name="View All Quotas", value="view_all")
-        ]
+        def __init__(self, cog: ShiftManagementCog, admin: discord.Member, role_ids: list, type: str, guild,
+                     period_weeks: int = 1):
+            super().__init__(timeout=60)
+            self.cog = cog
+            self.admin = admin
+            self.role_ids = role_ids
+            self.type = type
+            self.guild = guild
+            self.period_weeks = period_weeks
 
-        # Check if user has quota admin permissions
-        user_role_ids = {role.id for role in interaction.user.roles}
-        is_quota_admin = bool(user_role_ids & set(QUOTA_ADMIN_ROLES))
+        async def interaction_check(self, interaction: discord.Interaction) -> bool:
+            if interaction.user.id != self.admin.id:
+                await interaction.response.send_message(
+                    "<:Denied:1426930694633816248> This is not your quota panel!",
+                    ephemeral=True
+                )
+                return False
+            return True
 
-        if is_quota_admin:
-            choices.extend([
-                app_commands.Choice(name="Set Role Quota", value="set"),
-                app_commands.Choice(name="Remove Role Quota", value="remove"),
-                app_commands.Choice(name="Toggle Role Visibility in Reports", value="toggle_visibility")
-            ])
+        @discord.ui.button(label="Set Time", style=discord.ButtonStyle.primary, emoji="⏰")
+        async def set_time_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+            modal = QuotaTimeModal(self.cog, self.admin, self.role_ids, self.type, self.guild, self.period_weeks)
+            await interaction.response.send_modal(modal)
 
-        # Filter by current input
-        if current:
-            return [
-                choice for choice in choices
-                if current.lower() in choice.name.lower()
+    class QuotaTimeModal(discord.ui.Modal):
+        """Modal for entering quota time and watch requirement"""
+
+        def __init__(self, cog: ShiftManagementCog, admin: discord.Member, role_ids: list, type: str, guild,
+                     period_weeks: int = 1):
+            super().__init__(title=f"Set Quota ({period_weeks}w)")
+            self.cog = cog
+            self.admin = admin
+            self.role_ids = role_ids
+            self.type = type
+            self.guild = guild
+            self.period_weeks = period_weeks
+
+            self.add_item(discord.ui.TextInput(
+                label="Hours",
+                placeholder="Enter hours (0-999)",
+                required=True,
+                max_length=3
+            ))
+
+            self.add_item(discord.ui.TextInput(
+                label="Minutes",
+                placeholder="Enter minutes (0-59)",
+                required=True,
+                max_length=2
+            ))
+
+            # Add watch quota field for FENZ only
+            if type == "Shift FENZ":
+                self.add_item(discord.ui.TextInput(
+                    label="Watch Quota (FENZ only)",
+                    placeholder="Number of watches required (0 for none)",
+                    required=False,
+                    default="0",
+                    max_length=3
+                ))
+
+        async def on_submit(self, interaction: discord.Interaction):
+            await interaction.response.defer(ephemeral=True)
+
+            try:
+                hours = int(self.children[0].value or 0)
+                minutes = int(self.children[1].value or 0)
+                watch_quota = 0
+
+                # Get watch quota if FENZ
+                if self.type == "Shift FENZ" and len(self.children) > 2:
+                    watch_quota = int(self.children[2].value or 0)
+
+                # Validate
+                valid, error_msg = validate_time_input(hours, minutes, 0)
+                if not valid:
+                    await interaction.followup.send(
+                        f"<:Denied:1426930694633816248> {error_msg}",
+                        ephemeral=True
+                    )
+                    return
+
+                if watch_quota < 0:
+                    await interaction.followup.send(
+                        "<:Denied:1426930694633816248> Watch quota cannot be negative.",
+                        ephemeral=True
+                    )
+                    return
+
+                # Calculate total seconds
+                total_seconds = (hours * 3600) + (minutes * 60)
+
+                if total_seconds < 0:
+                    await interaction.followup.send(
+                        "<:Denied:1426930694633816248> Quota cannot be negative.",
+                        ephemeral=True
+                    )
+                    return
+
+                # Save to database
+                async with db.pool.acquire() as conn:
+                    role_mentions = []
+                    for role_id in self.role_ids:
+                        await conn.execute(
+                            '''INSERT INTO shift_quotas (role_id, quota_seconds, type, quota_period_weeks, watch_quota)
+                               VALUES ($1, $2, $3, $4, $5) ON CONFLICT (role_id, type) 
+                               DO UPDATE SET quota_seconds = $2, quota_period_weeks = $4, watch_quota = $5''',
+                            role_id, total_seconds, self.type, self.period_weeks, watch_quota
+                        )
+                        role = self.guild.get_role(role_id)
+                        if role:
+                            role_mentions.append(role.mention)
+
+                    period_text = f"{self.period_weeks} week{'s' if self.period_weeks != 1 else ''}"
+                    watch_text = f" + {watch_quota} watches" if watch_quota > 0 else ""
+
+                    await interaction.followup.send(
+                        f"<:Accepted:1426930333789585509> Set quota for {', '.join(role_mentions)} to {self.cog.format_duration(timedelta(seconds=total_seconds))}{watch_text} over {period_text} ({self.type})",
+                        ephemeral=True
+                    )
+
+            except ValueError:
+                await interaction.followup.send(
+                    "<:Denied:1426930694633816248> Please enter valid numbers.",
+                    ephemeral=True
+                )
+            except Exception as e:
+                await interaction.followup.send(
+                    f"<:Denied:1426930694633816248> Error: {str(e)}",
+                    ephemeral=True
+                )
+                import traceback
+                traceback.print_exc()
+
+    class QuotaPeriodSelectView(discord.ui.View):
+        """View for selecting quota period before setting time"""
+
+        def __init__(self, cog: ShiftManagementCog, admin: discord.Member, role_ids: list, type: str, guild):
+            super().__init__(timeout=60)
+            self.cog = cog
+            self.admin = admin
+            self.role_ids = role_ids
+            self.type = type
+            self.guild = guild
+            self.message = None
+
+            # Add period selection dropdown
+            options = [
+                discord.SelectOption(label="1 Week", value="1", description="Quota resets weekly", emoji="📅"),
+                discord.SelectOption(label="2 Weeks", value="2", description="Quota resets bi-weekly", emoji="📅"),
+                discord.SelectOption(label="3 Weeks", value="3", description="Quota resets every 3 weeks", emoji="📅"),
+                discord.SelectOption(label="4 Weeks", value="4", description="Quota resets monthly", emoji="📅"),
             ]
 
-        return choices
+            select = discord.ui.Select(
+                placeholder="Select quota period...",
+                options=options,
+                custom_id="period_select"
+            )
+            select.callback = self.period_callback
+            self.add_item(select)
+
+            # Add cancel button
+            cancel_btn = discord.ui.Button(
+                label="Cancel",
+                style=discord.ButtonStyle.secondary,
+                emoji="<:Denied:1426930694633816248>"
+            )
+            cancel_btn.callback = self.cancel_callback
+            self.add_item(cancel_btn)
+
+        async def period_callback(self, interaction: discord.Interaction):
+            """Handle period selection"""
+            if interaction.user.id != self.admin.id:
+                await interaction.response.send_message(
+                    "<:Denied:1426930694633816248> This is not your quota panel!",
+                    ephemeral=True
+                )
+                return
+
+            period_weeks = int(interaction.data['values'][0])
+
+            # Show time input modal
+            modal = QuotaTimeModal(self.cog, self.admin, self.role_ids, self.type, self.guild, period_weeks)
+            await interaction.response.send_modal(modal)
+
+        async def cancel_callback(self, interaction: discord.Interaction):
+            if interaction.user.id != self.admin.id:
+                await interaction.response.send_message(
+                    "<:Denied:1426930694633816248> This is not your quota panel!",
+                    ephemeral=True
+                )
+                return
+
+            await interaction.response.send_message("Cancelled.", ephemeral=True)
+            if self.message:
+                try:
+                    await self.message.delete()
+                except:
+                    pass
+            self.stop()
+
+        async def on_timeout(self):
+            for item in self.children:
+                item.disabled = True
+            if self.message:
+                try:
+                    await self.message.edit(view=self)
+                except:
+                    pass
 
     @shift_group.command(name="leaderboard", description="View shift leaderboard")
     @app_commands.describe(
@@ -2087,17 +2305,15 @@ class ShiftManagementCog(commands.Cog):
 
                 # ONLY show quota icons for current wave (wave is None)
                 if wave is None:  # Current wave
-                    quota_info = quota_infos.get(row['discord_user_id'],
-                                                 {'has_quota': False, 'bypass_type': None, 'completed': False})
+                    quota_info = quota_infos.get(row['discord_user_id'])
 
-                    if quota_info['has_quota']:
-                        if quota_info['bypass_type']:
+                    if quota_info and quota_info.get('has_quota'):
+                        if quota_info.get('bypass_type'):
                             quota_status = f" • <:Accepted:1426930333789585509> ({quota_info['bypass_type']})"
-                        elif quota_info['completed']:
+                        elif quota_info.get('completed'):
                             quota_status = f" • <:Accepted:1426930333789585509>"
                         else:
                             quota_status = f" • <:Denied:1426930694633816248>"
-                # For historical waves, don't show quota status at all
 
                 time_str = self.format_duration(timedelta(seconds=int(row['total_seconds'])))
                 leaderboard_lines.append(f"`{idx}.` {member.mention} • {time_str}{quota_status}")
@@ -3055,17 +3271,108 @@ class ShiftManagementCog(commands.Cog):
         """Wait until bot is ready before starting the task"""
         await self.bot.wait_until_ready()
 
+    async def get_watch_hosting_count(self, user_id: int, weeks_back: int = 1) -> int:
+        """
+        Get number of watches hosted by user (for FENZ supervisors)
+        Returns count of watches, NOT duration
+
+        Args:
+            user_id: Discord user ID
+            weeks_back: Number of weeks to look back (for quota period)
+        """
+        try:
+            from watches import load_completed_watches
+            completed_watches = await load_completed_watches()
+
+            # Calculate cutoff time
+            cutoff_timestamp = int((datetime.utcnow() - timedelta(weeks=weeks_back)).timestamp())
+
+            watch_count = 0
+
+            for watch_id, watch_data in completed_watches.items():
+                # Check if this user hosted the watch
+                if watch_data.get('user_id') != user_id:
+                    continue
+
+                # Check if watch is within time period
+                if watch_data.get('started_at', 0) < cutoff_timestamp:
+                    continue
+
+                # Only count successful watches
+                if watch_data.get('status') == 'failed':
+                    continue
+
+                watch_count += 1
+
+            return watch_count
+
+        except Exception as e:
+            print(f'Error getting watch hosting count: {e}')
+            return 0
+
+    async def get_total_active_time_with_watches(self, user_id: int, type: str, quota_period_weeks: int = 1) -> tuple[
+        int, int]:
+        """
+        Get total active shift time + watch count (for FENZ only)
+
+        Args:
+            user_id: Discord user ID
+            type: Shift type
+            quota_period_weeks: Number of weeks in quota period
+
+        Returns:
+            Tuple of (shift_seconds, watch_count)
+        """
+        current_week = self.weekly_manager.get_current_week_monday()
+        cutoff_week = current_week - timedelta(weeks=quota_period_weeks - 1)
+
+        async with db.pool.acquire() as conn:
+            if type:
+                shifts = await conn.fetch(
+                    '''SELECT *
+                       FROM shifts
+                       WHERE discord_user_id = $1
+                         AND type = $2
+                         AND end_time IS NOT NULL
+                         AND week_identifier >= $3''',
+                    user_id, type, cutoff_week
+                )
+            else:
+                shifts = await conn.fetch(
+                    '''SELECT *
+                       FROM shifts
+                       WHERE discord_user_id = $1
+                         AND end_time IS NOT NULL
+                         AND week_identifier >= $2''',
+                    user_id, cutoff_week
+                )
+
+            total_seconds = 0
+            for shift in shifts:
+                duration = shift['end_time'] - shift['start_time']
+                active_duration = duration - timedelta(seconds=shift.get('pause_duration', 0))
+                total_seconds += active_duration.total_seconds()
+
+        # Get watch count for FENZ only
+        watch_count = 0
+        if type == "Shift FENZ":
+            watch_count = await self.get_watch_hosting_count(user_id, quota_period_weeks)
+            print(f"User {user_id} FENZ quota: {int(total_seconds)}s shifts + {watch_count} watches")
+
+        return int(total_seconds), watch_count
+
 class QuotaConflictView(discord.ui.View):
     """Confirmation view for overwriting existing quotas"""
 
     def __init__(self, cog: ShiftManagementCog, admin: discord.Member, role_ids: list,
-                 quota_seconds: int, type: str):
+                 quota_seconds: int, type: str, period_weeks: int = 1):
         super().__init__(timeout=60)
         self.cog = cog
         self.admin = admin
         self.role_ids = role_ids
         self.quota_seconds = quota_seconds
         self.type = type
+        self.period_weeks = period_weeks
         self.message = None
 
     async def on_timeout(self):
@@ -3086,7 +3393,6 @@ class QuotaConflictView(discord.ui.View):
             return False
         return True
 
-
     @discord.ui.button(label="Confirm Overwrite", style=discord.ButtonStyle.danger)
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Overwriting",
@@ -3097,18 +3403,18 @@ class QuotaConflictView(discord.ui.View):
                 role_mentions = []
                 for role_id in self.role_ids:
                     await conn.execute(
-                        '''INSERT INTO shift_quotas (role_id, quota_seconds, type)
-                           VALUES ($1, $2, $3) ON CONFLICT (role_id, type) 
-                               DO
-                        UPDATE SET quota_seconds = $2''',
-                        role_id, self.quota_seconds, self.type
+                        '''INSERT INTO shift_quotas (role_id, quota_seconds, type, quota_period_weeks)
+                           VALUES ($1, $2, $3, $4) ON CONFLICT (role_id, type) 
+                           DO UPDATE SET quota_seconds = $2, quota_period_weeks = $4''',
+                        role_id, self.quota_seconds, self.type, self.period_weeks
                     )
                     role = interaction.guild.get_role(role_id)
                     if role:
                         role_mentions.append(role.mention)
 
+            period_text = f"{self.period_weeks} week{'s' if self.period_weeks != 1 else ''}"
             await interaction.followup.send(
-                f"<:Accepted:1426930333789585509> Updated quota for {', '.join(role_mentions)} to {self.cog.format_duration(timedelta(seconds=self.quota_seconds))} ({self.type})",
+                f"<:Accepted:1426930333789585509> Updated quota for {', '.join(role_mentions)} to {self.cog.format_duration(timedelta(seconds=self.quota_seconds))} over {period_text} ({self.type})",
                 ephemeral=True
             )
 
@@ -3119,11 +3425,9 @@ class QuotaConflictView(discord.ui.View):
             try:
                 await interaction.message.edit(view=self)
             except discord.NotFound:
-                pass  # Message was deleted, ignore
+                pass
             except discord.HTTPException:
-                pass  # Other HTTP error, ignore
-
-            
+                pass
 
             self.stop()
 
@@ -3145,9 +3449,9 @@ class QuotaConflictView(discord.ui.View):
         try:
             await interaction.message.edit(view=self)
         except discord.NotFound:
-            pass  # Message was deleted, ignore
+            pass
         except discord.HTTPException:
-            pass  # Other HTTP error, ignore
+            pass
 
         self.stop()
 
@@ -4329,15 +4633,13 @@ class AdminActionsSelect(discord.ui.Select):
             max_wave
         )
 
-        # Try to get the admin actions dropdown parent message
-        # This assumes we can access it through the interaction
+        # Try to edit original response
         try:
             await interaction.edit_original_response(embed=embed, view=view)
             view.message = interaction.message
         except:
             message = await interaction.followup.send(embed=embed, view=view, ephemeral=True)
             view.message = message
-
 
 class PageJumpModal(discord.ui.Modal):
     """Modal for jumping to specific page"""
@@ -4494,6 +4796,9 @@ class ShiftListView(discord.ui.View):
                 icon_url=self.target_user.display_avatar.url
             )
             embed.set_footer(text=f"Shift Type: {self.type}")
+
+            # Add return button even when no shifts
+            self._create_navigation_buttons()
 
             if not interaction.response.is_done():
                 await interaction.response.defer(ephemeral=True)
@@ -4967,12 +5272,22 @@ class TimeModifyModal(discord.ui.Modal):
             time_delta = timedelta(hours=hours, minutes=minutes, seconds=seconds)
 
             if self.action == "set":
+                # Calculate new start time to achieve desired duration
                 new_start_time = self.shift['end_time'] - time_delta
+
+                # Make sure start time isn't in the future
+                if new_start_time > datetime.utcnow():
+                    await interaction.followup.send(
+                        "<:Denied:1426930694633816248> Cannot set duration that would result in future start time.",
+                        ephemeral=True
+                    )
+                    return
 
                 async with db.pool.acquire() as conn:
                     await conn.execute(
                         '''UPDATE shifts
-                           SET start_time = $1
+                           SET start_time = $1,
+                               pause_duration = 0
                            WHERE id = $2''',
                         new_start_time, self.shift['id']
                     )
@@ -5020,7 +5335,16 @@ class TimeModifyModal(discord.ui.Modal):
             elif self.action == "remove":
                 # Add time to pause_duration (which decreases active time)
                 current_pause = self.shift.get('pause_duration', 0)
+                total_duration = (self.shift['end_time'] - self.shift['start_time']).total_seconds()
                 new_pause = current_pause + time_delta.total_seconds()
+
+                # Make sure we don't remove more time than exists
+                if new_pause >= total_duration:
+                    await interaction.followup.send(
+                        "<:Denied:1426930694633816248> Cannot remove more time than the shift's total duration.",
+                        ephemeral=True
+                    )
+                    return
 
                 async with db.pool.acquire() as conn:
                     await conn.execute(
@@ -5043,10 +5367,10 @@ class TimeModifyModal(discord.ui.Modal):
                     ephemeral=True
                 )
 
-            # UPDATE THE MODIFY PANEL EMBED
+            # UPDATE THE MODIFY PANEL EMBED WITH FRESH DATA
             if self.view and hasattr(self.view, 'message') and self.view.message:
                 try:
-                    # Get fresh shift data
+                    # Get fresh shift data from database
                     async with db.pool.acquire() as conn:
                         fresh_shift = await conn.fetchrow('SELECT * FROM shifts WHERE id = $1', self.shift['id'])
 
@@ -5075,7 +5399,7 @@ class TimeModifyModal(discord.ui.Modal):
                         await self.view.message.edit(embed=embed, view=new_view)
 
                 except discord.NotFound:
-                    pass
+                    pass  # Message was deleted
                 except discord.HTTPException as e:
                     print(f"Failed to edit message: {e}")
 
@@ -5089,6 +5413,8 @@ class TimeModifyModal(discord.ui.Modal):
                 f"<:Denied:1426930694633816248> Error: {str(e)}",
                 ephemeral=True
             )
+            import traceback
+            traceback.print_exc()
 
 class DeleteShiftSelectView(discord.ui.View):
     """View for selecting which shift to delete"""
@@ -5355,12 +5681,15 @@ class DeleteShiftConfirmView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
 
         try:
+            # Create completed shift dict for logging BEFORE deleting
+            completed_shift = dict(self.shift)
+
             # Log before deleting
             await self.cog.log_shift_event(
                 interaction.guild,
                 'delete',
                 self.target_user,
-                self.shift,
+                completed_shift,
                 admin=self.admin
             )
 
@@ -5389,7 +5718,8 @@ class DeleteShiftConfirmView(discord.ui.View):
                 f"<:Denied:1426930694633816248> Error: {str(e)}",
                 ephemeral=True
             )
-
+            import traceback
+            traceback.print_exc()
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="<:Denied:1426930694633816248>")
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -5438,7 +5768,7 @@ class ClearShiftsScopeView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="Current Wave", style=discord.ButtonStyle.primary, emoji="📍")
+    @discord.ui.button(label="Current Wave", style=discord.ButtonStyle.primary, emoji="📅")
     async def current_wave_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
 
@@ -5477,7 +5807,7 @@ class ClearShiftsScopeView(discord.ui.View):
             self.type,
             self.current_count,
             "current",
-            None
+            None  # No wave number for current
         )
 
         # Edit original message
@@ -5485,7 +5815,57 @@ class ClearShiftsScopeView(discord.ui.View):
             await self.message.edit(embed=embed, view=view)
             view.message = self.message
         else:
-            await interaction.edit_original_response(embed=embed, view=view)
+            message = await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+            view.message = message
+
+    @discord.ui.button(label="All Time", style=discord.ButtonStyle.danger, emoji="<:Wipe:1434954284851658762>")
+    async def all_time_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+
+        # Check if user is the owner for all-time wipe
+        if interaction.user.id != OWNER_USER_ID:
+            await interaction.followup.send(
+                "<:Denied:1426930694633816248> You don't have permission to clear all-time shifts. Owner only.",
+                ephemeral=True
+            )
+            return
+
+        if self.all_count == 0:
+            await interaction.followup.send(
+                "<:Denied:1426930694633816248> No shifts to clear.",
+                ephemeral=True
+            )
+            return
+
+        embed = discord.Embed(
+            title=f"**Clear User Shifts - All Time**",
+            description=f"Are you sure you want to clear **{self.all_count}** shifts from all time?\n\nThis cannot be undone.",
+            color=discord.Color.red()
+        )
+
+        embed.set_author(
+            name=f"@{self.target_user.display_name}",
+            icon_url=self.target_user.display_avatar.url
+        )
+
+        embed.set_footer(text=f"Shift Type: {self.type}")
+
+        view = ClearShiftsConfirmView(
+            self.cog,
+            self.admin,
+            self.target_user,
+            self.type,
+            self.all_count,
+            "all",
+            None  # No wave number for all time
+        )
+
+        if self.message:
+            await self.message.edit(embed=embed, view=view)
+            view.message = self.message
+        else:
+            message = await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+            view.message = message
 
     @discord.ui.button(label="Previous Waves", style=discord.ButtonStyle.primary, emoji="🔙")
     async def previous_waves_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -5593,7 +5973,7 @@ class ClearShiftsConfirmView(discord.ui.View):
         self.type = type
         self.count = count
         self.scope = scope
-        self.max_wave = max_wave
+        self.wave_number = wave_number
         self.armed = False
         self.message = None
 
@@ -5653,7 +6033,7 @@ class ClearShiftsConfirmView(discord.ui.View):
             await interaction.edit_original_response(view=self)
 
     @discord.ui.button(label=f"Clear User Shifts", style=discord.ButtonStyle.secondary, disabled=True,
-                       custom_id="clear_shifts")
+                       custom_id="clear_shifts", emoji="<:Reset:1434959478796714074>")
     async def clear_button(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         if not self.armed:
@@ -5669,8 +6049,7 @@ class ClearShiftsConfirmView(discord.ui.View):
             async with db.pool.acquire() as conn:
                 if self.scope == "current":
                     await conn.execute(
-                        '''DELETE
-                           FROM shifts
+                        '''DELETE FROM shifts
                            WHERE discord_user_id = $1
                              AND type = $2
                              AND wave_number IS NULL
@@ -5681,30 +6060,17 @@ class ClearShiftsConfirmView(discord.ui.View):
 
                 elif self.scope == "wave":
                     await conn.execute(
-                        '''DELETE
-                           FROM shifts
+                        '''DELETE FROM shifts
                            WHERE discord_user_id = $1
                              AND type = $2
                              AND wave_number = $3''',
-                        self.target_user.id, self.type, self.max_wave
+                        self.target_user.id, self.type, self.wave_number  # Use wave_number
                     )
-                    scope_text = f"Wave {self.max_wave}"
-
-                elif self.scope == "previous":
-                    await conn.execute(
-                        '''DELETE
-                           FROM shifts
-                           WHERE discord_user_id = $1
-                             AND type = $2
-                             AND wave_number = $3''',
-                        self.target_user.id, self.type, self.max_wave
-                    )
-                    scope_text = f"previous wave (Wave {self.max_wave})"
+                    scope_text = f"Wave {self.wave_number}"
 
                 else:  # "all"
                     await conn.execute(
-                        '''DELETE
-                           FROM shifts
+                        '''DELETE FROM shifts
                            WHERE discord_user_id = $1
                              AND type = $2''',
                         self.target_user.id, self.type
@@ -5736,6 +6102,14 @@ class ClearShiftsConfirmView(discord.ui.View):
             # Return to admin panel
             await self.cog.show_admin_shift_panel(interaction, self.target_user, self.type)
             self.stop()
+
+        except Exception as e:
+            await interaction.followup.send(
+                f"<:Denied:1426930694633816248> Error: {str(e)}",
+                ephemeral=True
+            )
+            import traceback
+            traceback.print_exc()
 
         except Exception as e:
             await interaction.followup.send(
