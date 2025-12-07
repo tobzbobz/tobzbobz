@@ -884,23 +884,23 @@ class ModerateCog(commands.Cog):
 
     @vc_group.command(name="move", description="Move all users from one channel to another")
     @app_commands.describe(
-        to_channel="Destination channel",
-        from_channel="Source channel (owner can leave empty for all channels)",
+        to="Destination channel",
+        origin="Source channel (owner can leave empty for all channels)",
         reason="Reason for the move"
     )
     @has_role_level(SUPERVISORS + LEADERS + LOCKS + [YOUR_USER_ID])
     async def vc_move(
             self,
             interaction: discord.Interaction,
-            to_channel: discord.VoiceChannel,
-            from_channel: Optional[discord.VoiceChannel] = None,
+            to: discord.VoiceChannel,
+            origin: Optional[discord.VoiceChannel] = None,
             reason: Optional[str] = "No reason provided"
     ):
         """Move all users from one channel to another"""
         await interaction.response.send_message("<a:Load:1430912797469970444> Moving users...", ephemeral=True)
 
-        # If no from_channel and user is owner, move from ALL channels
-        if not from_channel:
+        # If no origin and user is owner, move from ALL channels
+        if not origin:
             if interaction.user.id == YOUR_USER_ID:
                 source_channels = [c for c in interaction.guild.voice_channels if len(c.members) > 0]
                 if not source_channels:
@@ -912,7 +912,7 @@ class ModerateCog(commands.Cog):
                                                 ephemeral=True)
                 return
         else:
-            source_channels = [from_channel]
+            source_channels = [origin]
 
         # Collect members
         members_to_move = []
@@ -928,35 +928,35 @@ class ModerateCog(commands.Cog):
         # Perform moves (owner included)
         results = await self.perform_bulk_moves(
             members=members_to_move,
-            dest_channels=[to_channel],
+            dest_channels=[to],
             reason=reason,
             moderator=interaction.user,
             include_me=True
         )
 
-        await self.send_move_summary(interaction, results, f"Move to {to_channel.name}", reason)
+        await self.send_move_summary(interaction, results, f"Move to {to.name}", reason)
 
     # /vc swap - Supervisor+ (single channels only)
     @vc_group.command(name="swap", description="Swap users between two voice channels")
     @app_commands.describe(
-        channel_a="First channel",
-        channel_b="Second channel",
+        a="First channel",
+        b="Second channel",
         reason="Reason for the swap"
     )
     @has_role_level(SUPERVISORS + LEADERS + LOCKS + [YOUR_USER_ID])
     async def vc_swap(
             self,
             interaction: discord.Interaction,
-            channel_a: discord.VoiceChannel,
-            channel_b: discord.VoiceChannel,
+            a: discord.VoiceChannel,
+            b: discord.VoiceChannel,
             reason: Optional[str] = "No reason provided"
     ):
         """Swap users between two channels"""
         await interaction.response.send_message("<a:Load:1430912797469970444> Swapping users...", ephemeral=True)
 
         # Collect members from both channels
-        members_a = list(channel_a.members)
-        members_b = list(channel_b.members)
+        members_a = list(a.members)
+        members_b = list(b.members)
 
         if not members_a and not members_b:
             await interaction.followup.send("<:Denied:1426930694633816248> No users in either channel.", ephemeral=True)
@@ -968,7 +968,7 @@ class ModerateCog(commands.Cog):
         if members_a:
             results_a = await self.perform_bulk_moves(
                 members=members_a,
-                dest_channels=[channel_b],
+                dest_channels=[b],
                 reason=f"Swap (A→B): {reason}",
                 moderator=interaction.user,
                 include_me=True
@@ -983,7 +983,7 @@ class ModerateCog(commands.Cog):
         if members_b:
             results_b = await self.perform_bulk_moves(
                 members=members_b,
-                dest_channels=[channel_a],
+                dest_channels=[a],
                 reason=f"Swap (B→A): {reason}",
                 moderator=interaction.user,
                 include_me=True
@@ -1001,7 +1001,7 @@ class ModerateCog(commands.Cog):
     # /vc wipe - Leader+ (single channel, owner can leave empty for all)
     @vc_group.command(name="wipe", description="Disconnect all users from a voice channel")
     @app_commands.describe(
-        channel="Channel to empty (owner can leave empty for all channels)",
+        channel="Channel to empty",
         reason="Reason for wiping"
     )
     @has_role_level(LEADERS + LOCKS + [YOUR_USER_ID])
@@ -1090,7 +1090,7 @@ class ModerateCog(commands.Cog):
     @vc_group.command(name="user", description="Move specific user(s) to a voice channel")
     @app_commands.describe(
         users="Users to move (space-separated mentions, IDs, or names)",
-        to_channel="Destination channel",
+        to="Destination channel",
         reason="Reason for the move"
     )
     @has_role_level(SUPERVISORS + LEADERS + LOCKS + [YOUR_USER_ID])
@@ -1098,7 +1098,7 @@ class ModerateCog(commands.Cog):
             self,
             interaction: discord.Interaction,
             users: str,
-            to_channel: discord.VoiceChannel,
+            to: discord.VoiceChannel,
             reason: Optional[str] = "No reason provided"
     ):
         """Move specific users to a channel"""
@@ -1113,7 +1113,7 @@ class ModerateCog(commands.Cog):
         # Perform moves (owner included)
         results = await self.perform_bulk_moves(
             members=member_list,
-            dest_channels=[to_channel],
+            dest_channels=[to],
             reason=reason,
             moderator=interaction.user,
             include_me=True
@@ -1123,8 +1123,8 @@ class ModerateCog(commands.Cog):
 
     @vca_group.command(name="move", description="Move all users from multiple channels with optional trail")
     @app_commands.describe(
-        from_channels="Source channels (space-separated, or 'ALL')",
-        to_channels="Destination channels (space-separated, or 'ALL')",
+        origin="Source channels (space-separated, or 'ALL')",
+        to="Destination channels (space-separated, or 'ALL')",
         trail="Enable trail mode (sequential moves through channels) - Owner only",
         reason="Reason for the move"
     )
@@ -1132,8 +1132,8 @@ class ModerateCog(commands.Cog):
     async def vca_move(
             self,
             interaction: discord.Interaction,
-            from_channels: str,
-            to_channels: str,
+            origin: str,
+            to: str,
             trail: bool = False,
             reason: Optional[str] = "No reason provided"
     ):
@@ -1146,8 +1146,8 @@ class ModerateCog(commands.Cog):
             return
 
         # Parse channels
-        source_channels = await self.parse_channels_or_all(interaction, from_channels, filter_with_users=True)
-        dest_channels = await self.parse_channels_or_all(interaction, to_channels, filter_with_users=False)
+        source_channels = await self.parse_channels_or_all(interaction, origin, filter_with_users=True)
+        dest_channels = await self.parse_channels_or_all(interaction, to, filter_with_users=False)
 
         if not source_channels:
             await interaction.followup.send("<:Denied:1426930694633816248> No valid source channels found.",
@@ -1189,8 +1189,8 @@ class ModerateCog(commands.Cog):
     # /vca disperse - Locks+ (trail is owner only)
     @vca_group.command(name="disperse", description="Randomly disperse users across channels with optional trail")
     @app_commands.describe(
-        from_channels="Source channels (space-separated, or 'ALL')",
-        to_channels="Destination channels (space-separated, or 'ALL')",
+        origin="Source channels (space-separated, or 'ALL')",
+        to="Destination channels (space-separated, or 'ALL')",
         trail="Enable trail mode (repeated random dispersions) - Owner only",
         repetitions="Number of trail repetitions (only with trail=True)",
         reason="Reason for dispersing"
@@ -1199,8 +1199,8 @@ class ModerateCog(commands.Cog):
     async def vca_disperse(
             self,
             interaction: discord.Interaction,
-            from_channels: str,
-            to_channels: str,
+            origin: str,
+            to: str,
             trail: bool = False,
             repetitions: Optional[int] = 3,
             reason: Optional[str] = "No reason provided"
@@ -1214,8 +1214,8 @@ class ModerateCog(commands.Cog):
             return
 
         # Parse channels
-        source_channels = await self.parse_channels_or_all(interaction, from_channels, filter_with_users=True)
-        dest_channels = await self.parse_channels_or_all(interaction, to_channels, filter_with_users=False)
+        source_channels = await self.parse_channels_or_all(interaction, origin, filter_with_users=True)
+        dest_channels = await self.parse_channels_or_all(interaction, to, filter_with_users=False)
 
         if not source_channels:
             await interaction.followup.send("<:Denied:1426930694633816248> No valid source channels found.",
@@ -1696,7 +1696,7 @@ class ModerateCog(commands.Cog):
         await interaction.followup.send(embed=embed, ephemeral=True)
         await self.send_to_mod_logs(interaction.guild, embed)
 
-    async def move_disperse_trail_from_channels(self, interaction: discord.Interaction,
+    async def move_disperse_trail_origin(self, interaction: discord.Interaction,
                                                 source_channels: List[discord.VoiceChannel],
                                                 dest_channels: List[discord.VoiceChannel],
                                                 repetitions: int, reason: str, include_me: bool = False):
