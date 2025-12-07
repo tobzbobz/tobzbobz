@@ -1993,16 +1993,24 @@ class ShiftManagementCog(commands.Cog):
                 # Build description with shift time
                 desc_parts = [
                     status_text,
-                    f"**Required:** {self.format_duration(timedelta(seconds=quota_info['quota_seconds']))} per {period_text}",
-                    f"**Completed:** {self.format_duration(timedelta(seconds=quota_info['active_seconds']))}"
+                    f"**Required:** {self.format_duration(timedelta(seconds=quota_info['quota_seconds']))}"
                 ]
 
-                # Add watch requirement if applicable
+                # Add watch requirement to the required line if applicable
+                if quota_info.get('watch_quota', 0) > 0:
+                    desc_parts[1] += f" + {quota_info['watch_quota']} watches per {period_text}"
+                else:
+                    desc_parts[1] += f" per {period_text}"
+
+                desc_parts.append(
+                    f"**Completed:** {self.format_duration(timedelta(seconds=quota_info['active_seconds']))}")
+
+                # Add watch completion if applicable
                 if quota_info.get('watch_quota', 0) > 0:
                     watch_emoji = "<:Accepted:1426930333789585509>" if quota_info['watch_count'] >= quota_info[
                         'watch_quota'] else "<:Denied:1426930694633816248>"
                     desc_parts.append(
-                        f"\n**Watches:** {watch_emoji} {quota_info['watch_count']}/{quota_info['watch_quota']} required")
+                        f"**Watches:** {watch_emoji} {quota_info['watch_count']}/{quota_info['watch_quota']} hosted")
 
                 # Add reset time
                 if quota_info.get('reset_timestamp'):
@@ -2214,6 +2222,13 @@ class ShiftManagementCog(commands.Cog):
                         quota_role = interaction.guild.get_role(quota['role_id'])
                         if quota_role:
                             is_ignored = (quota['role_id'], type_name) in ignored_set
+
+                            quota_display = self.cog.format_duration(timedelta(seconds=quota['quota_seconds']))
+
+                            # Add watch requirement for FENZ roles
+                            if type_name == "Shift FENZ" and quota.get('watch_quota', 0) > 0:
+                                quota_display += f" + {quota['watch_quota']} watches"
+
 
                             if is_ignored:
                                 if is_admin:

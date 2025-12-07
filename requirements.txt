@@ -12,3 +12,5 @@ discord.py[voice]>=2.6.4
 # SpeechRecognition>=3.10.0
 # groq>=0.4.0
 # pydub>=0.25.1
+wavelink>=3.0.0
+discord.py>=2.0.0
