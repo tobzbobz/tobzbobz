@@ -45,26 +45,6 @@ class MusicCog(commands.Cog):
         if nodes_json:
             try:
                 return json.loads(nodes_json)
-            except json.JSONDecodeError:
-                print("⚠️ Invalid LAVALINK_NODES JSON, falling back to public nodes")
-
-        # Fallback to free public nodes (these are publicly available, not secrets)
-        return [
-            {
-                "identifier": "Serenetia-LDP-NonSSL",
-                "host": "lavalink.serenetia.com",
-                "port": 80,
-                "password": "public",  # Public node
-                "secure": False
-            },
-            {
-                "identifier": "AjieDev-LDP-NonSSL",
-                "host": "lava-all.ajieblogs.eu.org",
-                "port": 80,
-                "password": "public",  # Public node
-                "secure": False
-            }
-        ]
 
     async def cog_load(self):
         """Setup Wavelink node when cog loads"""
