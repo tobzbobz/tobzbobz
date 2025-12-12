@@ -44,7 +44,38 @@ class MusicCog(commands.Cog):
 
         if nodes_json:
             try:
-                return json.loads(nodes_json)
+                custom_nodes = json.loads(nodes_json)
+                print(f"✅ Loaded {len(custom_nodes)} custom Lavalink node(s) from environment")
+                return custom_nodes
+            except json.JSONDecodeError as e:
+                print(f"⚠️ Invalid LAVALINK_NODES JSON: {e}")
+                print("   Falling back to public nodes")
+
+        # Fallback to free public nodes (these are publicly available, not secrets)
+        print("📡 Using public Lavalink nodes (no custom nodes configured)")
+        return [
+            {
+                "identifier": "Serenetia-LDP-NonSSL",
+                "host": "lavalink.serenetia.com",
+                "port": 80,
+                "password": "public",  # Public node
+                "secure": False
+            },
+            {
+                "identifier": "AjieDev-LDP-NonSSL",
+                "host": "lava-all.ajieblogs.eu.org",
+                "port": 80,
+                "password": "public",  # Public node
+                "secure": False
+            },
+            {
+                "identifier": "Lavalink-APGB",
+                "host": "lavalink.devamop.in",
+                "port": 443,
+                "password": "DevamOP",
+                "secure": True
+            }
+        ]
 
     async def cog_load(self):
         """Setup Wavelink node when cog loads"""
