@@ -6,17 +6,20 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python main.py
     envVars:
+      # Required secrets (set these in Render dashboard instead)
       - key: DISCORD_TOKEN
         sync: false
       - key: DATABASE_URL
         sync: false
+
+      # Lavalink connection (automatic from service reference)
       - key: LAVALINK_HOST
         fromService:
           type: web
           name: my-lavalink-server
           property: host
       - key: LAVALINK_PASSWORD
-        value: youshallnotpass
+        sync: false  # Set this in Render dashboard to match Lavalink
       - key: LAVALINK_PORT
         value: "443"
       - key: LAVALINK_SECURE
@@ -29,9 +32,11 @@ services:
     dockerfilePath: ./Dockerfile
     envVars:
       - key: PORT
-        value: "2333"
+        value: "2333"  # Internal port Lavalink runs on
       - key: LAVALINK_PASSWORD
-        value: youshallnotpass
+        sync: false  # Set this in Render dashboard to match bot
+
+      # Optional: Only if you want Spotify support
       - key: SPOTIFY_CLIENT_ID
         sync: false
       - key: SPOTIFY_CLIENT_SECRET

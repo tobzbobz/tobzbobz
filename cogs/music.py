@@ -124,17 +124,21 @@ class MusicCog(commands.Cog):
                     uri = f"{protocol}://{node_info['host']}:{node_info['port']}"
 
                     print(f"🔗 Preparing to connect to {node_info['identifier']} ({uri})...")
+                    print(f"🔑 Using password: {node_info['password'][:3]}***")  # Debug log
 
                     node = wavelink.Node(
                         uri=uri,
                         password=node_info['password'],
-                        identifier=node_info['identifier']
+                        identifier=node_info['identifier'],
+                        heartbeat=30.0,  # Add heartbeat
+                        retries=5  # Add retry logic
                     )
 
                     nodes_to_connect.append(node)
 
                 except Exception as e:
                     print(f"❌ Failed to create node {node_info['identifier']}: {e}")
+                    traceback.print_exc()
                     continue
 
             if nodes_to_connect:
@@ -276,7 +280,7 @@ class MusicCog(commands.Cog):
             search_query = current.strip()
 
             if not any(search_query.startswith(prefix) for prefix in
-                       ['http://', 'https://', 'ytsearch:', 'ytmsearch:', 'scsearch:']):
+                       ['http://', 'https://', 'ytsearch:', 'ytmsearch:', 'scsearch:', 'spotify:']):
                 search_query = f"ytsearch:{search_query}"
 
             tracks = await asyncio.wait_for(
@@ -318,7 +322,7 @@ class MusicCog(commands.Cog):
             return []
 
     @m_group.command(name="play", description="Play a song or add it to queue")
-    @app_commands.describe(query="Song name or URL (YouTube, SoundCloud, etc.)")
+    @app_commands.describe(query="Song name, YouTube/Spotify/SoundCloud URL")
     @app_commands.autocomplete(query=play_autocomplete)
     async def play(self, interaction: discord.Interaction, query: str):
         """Play a song"""
@@ -337,9 +341,13 @@ class MusicCog(commands.Cog):
 
         try:
             search_query = query.strip()
-            if not any(search_query.startswith(prefix) for prefix in
-                       ['http://', 'https://', 'ytsearch:', 'ytmsearch:', 'scsearch:']):
-                search_query = f"ytsearch:{search_query}"
+
+            # Spotify URLs are handled directly by lavasrc plugin
+            if not self.is_spotify_url(search_query):
+                # Only add search prefix if it's not already a URL
+                if not any(search_query.startswith(prefix) for prefix in
+                           ['http://', 'https://', 'ytsearch:', 'ytmsearch:', 'scsearch:']):
+                    search_query = f"ytsearch:{search_query}"
 
             tracks: wavelink.Search = await wavelink.Playable.search(search_query)
 
@@ -352,9 +360,9 @@ class MusicCog(commands.Cog):
             if isinstance(tracks, wavelink.Playlist):
                 added: int = await player.queue.put_wait(tracks)
                 embed = discord.Embed(
-                    title="📚 Playlist Added to Queue",
+                    title="🎵 Playlist Added to Queue" if not self.is_spotify_url(query) else "🎵 Spotify Playlist Added",
                     description=f"Added **{added}** tracks from **{tracks.name}**",
-                    color=discord.Color.blue()
+                    color=discord.Color.green() if self.is_spotify_url(query) else discord.Color.blue()
                 )
                 await interaction.followup.send(embed=embed)
             else:
@@ -374,6 +382,10 @@ class MusicCog(commands.Cog):
                 embed.add_field(name="Duration", value=self.format_duration(track.length), inline=True)
                 embed.add_field(name="Position in Queue", value=str(len(player.queue)), inline=True)
 
+                # Add source indicator
+                if self.is_spotify_url(query):
+                    embed.set_footer(text="🟢 Source: Spotify")
+
                 await interaction.followup.send(embed=embed)
 
             if not player.playing:
@@ -389,6 +401,10 @@ class MusicCog(commands.Cog):
                 f"<:Denied:1426930694633816248> Error: {str(e)}",
                 ephemeral=True
             )
+
+    def is_spotify_url(self, url: str) -> bool:
+        """Check if URL is a Spotify URL"""
+        return 'spotify.com' in url or url.startswith('spotify:')
 
     @m_group.command(name="pause", description="Pause or resume playback")
     async def pause(self, interaction: discord.Interaction):
