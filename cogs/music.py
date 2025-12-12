@@ -5,6 +5,8 @@ import wavelink
 from typing import Optional
 import asyncio
 from database import db
+import os
+import json
 
 OWNER_ID = 678475709257089057
 
@@ -32,6 +34,38 @@ class MusicCog(commands.Cog):
             print(f"Error checking whitelist: {e}")
             return False
 
+    def get_lavalink_nodes(self):
+        """
+        Load Lavalink node configuration from environment variable.
+        Falls back to public nodes if not configured.
+        """
+        # Try to load from environment variable first
+        nodes_json = os.getenv('LAVALINK_NODES')
+
+        if nodes_json:
+            try:
+                return json.loads(nodes_json)
+            except json.JSONDecodeError:
+                print("⚠️ Invalid LAVALINK_NODES JSON, falling back to public nodes")
+
+        # Fallback to free public nodes (these are publicly available, not secrets)
+        return [
+            {
+                "identifier": "Serenetia-LDP-NonSSL",
+                "host": "lavalink.serenetia.com",
+                "port": 80,
+                "password": "public",  # Public node
+                "secure": False
+            },
+            {
+                "identifier": "AjieDev-LDP-NonSSL",
+                "host": "lava-all.ajieblogs.eu.org",
+                "port": 80,
+                "password": "public",  # Public node
+                "secure": False
+            }
+        ]
+
     async def cog_load(self):
         """Setup Wavelink node when cog loads"""
         print("🎵 MusicCog loading...")
@@ -42,74 +76,35 @@ class MusicCog(commands.Cog):
         # Give Discord some time to fully initialize
         await asyncio.sleep(2)
 
-        # List of free public Lavalink nodes
-        public_nodes = [
-            {
-                "identifier": "Serenetia-LDP-NonSSL",
-                "password": "https://dsc.gg/ajidevserver",
-                "host": "lavalink.serenetia.com",
-                "port": 80,
-                "secure": False
-            },
-            {
-                "identifier": "AjieDev-LDP-NonSSL",
-                "password": "https://dsc.gg/ajidevserver",
-                "host": "lava-all.ajieblogs.eu.org",
-                "port": 80,
-                "secure": False
-            },
-            {
-                "identifier": "Lavalink APGB",
-                "password": "youshallnotpass",
-                "host": "airplanegobrr.us.to",
-                "port": 2333,
-                "secure": False
-            },
-            {
-                "identifier": "RRH",
-                "password": "RRHosting",
-                "host": "uk-01.rrhosting.eu",
-                "port": 1337,
-                "secure": False
-            },
-            {
-                "identifier": "dctv (sgp)",
-                "password": "quangloc2018",
-                "host": "s13.oddblox.us",
-                "port": 28405,
-                "secure": False
-            },
-            {
-                "identifier": "V4 (Non SSL)",
-                "password": "https://dsc.gg/ajidevserver",
-                "host": "lavalinkv4-id.serenetiaa.com",
-                "port": 81,
-                "secure": False
-            }
-        ]
+        # Get node configuration
+        public_nodes = self.get_lavalink_nodes()
 
         # Try to connect to nodes
         for node_info in public_nodes:
             try:
-                print(f"🔗 Attempting to connect to {node_info['uri']}...")
+                # Build URI from host, port, and secure flag
+                protocol = "https" if node_info.get("secure", False) else "http"
+                uri = f"{protocol}://{node_info['host']}:{node_info['port']}"
+
+                print(f"🔗 Attempting to connect to {node_info['identifier']} ({uri})...")
 
                 node = wavelink.Node(
-                    uri=node_info['uri'],
+                    uri=uri,
                     password=node_info['password'],
-                    identifier=node_info['uri']  # Add unique identifier
+                    identifier=node_info['identifier']
                 )
 
                 await wavelink.Pool.connect(client=self.bot, nodes=[node])
 
-                print(f"✅ Connected to Lavalink node: {node_info['uri']}")
+                print(f"✅ Connected to Lavalink node: {node_info['identifier']}")
                 self.node_connected = True
                 break  # Successfully connected, stop trying
 
             except wavelink.LavalinkException as e:
-                print(f"⚠️ Lavalink error for {node_info['uri']}: {e}")
+                print(f"⚠️ Lavalink error for {node_info['identifier']}: {e}")
                 continue
             except Exception as e:
-                print(f"❌ Failed to connect to {node_info['uri']}: {e}")
+                print(f"❌ Failed to connect to {node_info['identifier']}: {e}")
                 continue
 
         if not self.node_connected:
@@ -218,7 +213,6 @@ class MusicCog(commands.Cog):
     @app_commands.describe(query="Song name or URL (YouTube, SoundCloud, etc.)")
     async def play(self, interaction: discord.Interaction, query: str):
         """Play a song"""
-        # Check whitelist
         if not await self.is_whitelisted(interaction.user.id):
             await interaction.response.send_message(
                 "<:Denied:1426930694633816248> You don't have permission to use music commands!",
@@ -233,14 +227,12 @@ class MusicCog(commands.Cog):
             return
 
         try:
-            # Search for tracks
             tracks: wavelink.Search = await wavelink.Playable.search(query)
 
             if not tracks:
                 await interaction.followup.send("<:Denied:1426930694633816248> No tracks found!")
                 return
 
-            # If playlist, add all tracks
             if isinstance(tracks, wavelink.Playlist):
                 added: int = await player.queue.put_wait(tracks)
                 embed = discord.Embed(
@@ -250,7 +242,6 @@ class MusicCog(commands.Cog):
                 )
                 await interaction.followup.send(embed=embed)
             else:
-                # Add first track to queue
                 track: wavelink.Playable = tracks[0]
                 await player.queue.put_wait(track)
 
@@ -269,7 +260,6 @@ class MusicCog(commands.Cog):
 
                 await interaction.followup.send(embed=embed)
 
-            # Start playing if not already
             if not player.playing:
                 await player.play(player.queue.get())
 
