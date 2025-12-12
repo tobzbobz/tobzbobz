@@ -8,6 +8,7 @@ from database import db
 import os
 import json
 import traceback
+import aiohttp
 
 OWNER_ID = 678475709257089057
 
@@ -165,6 +166,16 @@ class MusicCog(commands.Cog):
         """Cleanup when cog is unloaded"""
         try:
             print("🛑 MusicCog unloading...")
+
+            # Cancel keep-alive task
+            if hasattr(self, '_keep_alive_task'):
+                self._keep_alive_task.cancel()
+
+            # Cancel connection task
+            if hasattr(self, '_connection_task'):
+                self._connection_task.cancel()
+
+            # Disconnect from all voice channels
             for guild in self.bot.guilds:
                 if guild.voice_client:
                     try:
@@ -173,6 +184,7 @@ class MusicCog(commands.Cog):
                         pass
         except Exception as e:
             print(f"Error during cog unload: {e}")
+
 
     @commands.Cog.listener()
     async def on_wavelink_node_ready(self, payload: wavelink.NodeReadyEventPayload):
@@ -320,6 +332,132 @@ class MusicCog(commands.Cog):
         except Exception as e:
             print(f"❌ Autocomplete error: {e}")
             return []
+
+    async def _keep_lavalink_alive(self):
+        """Background task to keep Lavalink server awake with HTTP pings and Discord notifications"""
+        await self.bot.wait_until_ready()
+        await asyncio.sleep(10)  # Wait for initial connection
+
+        lavalink_host = os.getenv('LAVALINK_HOST')
+        lavalink_password = os.getenv('LAVALINK_PASSWORD')
+        lavalink_port = os.getenv('LAVALINK_PORT', '443')
+        lavalink_secure = os.getenv('LAVALINK_SECURE', 'true').lower() == 'true'
+
+        # Channel ID where you want status updates (set this in your .env or here)
+        status_channel_id = int(os.getenv('LAVALINK_STATUS_CHANNEL_ID', '0'))
+
+        if not lavalink_host or not lavalink_password:
+            print("⚠️ Lavalink credentials not found, keep-alive disabled")
+            return
+
+        protocol = "https" if lavalink_secure else "http"
+        url = f"{protocol}://{lavalink_host}:{lavalink_port}/version"
+        headers = {"Authorization": lavalink_password}
+
+        print(f"💚 Starting keep-alive pings to {url}")
+
+        ping_count = 0
+        consecutive_failures = 0
+
+        while not self.bot.is_closed():
+            try:
+                await asyncio.sleep(300)  # Wait 5 minutes between pings
+
+                ping_count += 1
+                status_channel = None
+
+                # Get the status channel
+                if status_channel_id:
+                    try:
+                        status_channel = self.bot.get_channel(status_channel_id)
+                        if not status_channel:
+                            status_channel = await self.bot.fetch_channel(status_channel_id)
+                    except:
+                        pass
+
+                async with aiohttp.ClientSession() as session:
+                    try:
+                        async with session.get(url, headers=headers, timeout=10) as response:
+                            if response.status == 200:
+                                data = await response.json()
+                                version = data.get('version', 'unknown')
+                                consecutive_failures = 0
+
+                                print(f"💚 Keep-alive ping #{ping_count} successful - Lavalink v{version}")
+
+                                # Send success message to Discord
+                                if status_channel:
+                                    embed = discord.Embed(
+                                        title="🎵 Lavalink Status",
+                                        description=f"✅ Keep-alive ping successful",
+                                        color=discord.Color.green(),
+                                        timestamp=discord.utils.utcnow()
+                                    )
+                                    embed.add_field(name="Version", value=version, inline=True)
+                                    embed.add_field(name="Ping #", value=str(ping_count), inline=True)
+                                    embed.add_field(name="Host", value=lavalink_host, inline=False)
+
+                                    # Only send every 6th ping (every 30 minutes) for success
+                                    if ping_count % 6 == 0:
+                                        await status_channel.send(embed=embed)
+                            else:
+                                consecutive_failures += 1
+                                print(f"⚠️ Keep-alive ping returned status {response.status}")
+
+                                # Send warning to Discord
+                                if status_channel:
+                                    embed = discord.Embed(
+                                        title="⚠️ Lavalink Warning",
+                                        description=f"Ping returned status code {response.status}",
+                                        color=discord.Color.orange(),
+                                        timestamp=discord.utils.utcnow()
+                                    )
+                                    embed.add_field(name="Consecutive Failures", value=str(consecutive_failures),
+                                                    inline=True)
+                                    embed.add_field(name="Ping #", value=str(ping_count), inline=True)
+                                    await status_channel.send(embed=embed)
+
+                    except asyncio.TimeoutError:
+                        consecutive_failures += 1
+                        print(f"⚠️ Keep-alive ping #{ping_count} timed out")
+
+                        # Send timeout warning to Discord
+                        if status_channel:
+                            embed = discord.Embed(
+                                title="⏰ Lavalink Timeout",
+                                description="Keep-alive ping timed out after 10 seconds",
+                                color=discord.Color.orange(),
+                                timestamp=discord.utils.utcnow()
+                            )
+                            embed.add_field(name="Consecutive Failures", value=str(consecutive_failures), inline=True)
+                            embed.add_field(name="Ping #", value=str(ping_count), inline=True)
+                            await status_channel.send(embed=embed)
+
+            except Exception as e:
+                consecutive_failures += 1
+                print(f"❌ Keep-alive ping error: {e}")
+
+                # Send error to Discord
+                if status_channel_id:
+                    try:
+                        status_channel = self.bot.get_channel(status_channel_id) or await self.bot.fetch_channel(
+                            status_channel_id)
+                        if status_channel:
+                            embed = discord.Embed(
+                                title="❌ Lavalink Error",
+                                description=f"Keep-alive ping failed",
+                                color=discord.Color.red(),
+                                timestamp=discord.utils.utcnow()
+                            )
+                            embed.add_field(name="Error", value=str(e)[:1024], inline=False)
+                            embed.add_field(name="Consecutive Failures", value=str(consecutive_failures), inline=True)
+                            embed.add_field(name="Ping #", value=str(ping_count), inline=True)
+                            await status_channel.send(embed=embed)
+                    except:
+                        pass
+
+                await asyncio.sleep(60)  # Wait 1 minute before retrying on error
+
 
     @m_group.command(name="play", description="Play a song or add it to queue")
     @app_commands.describe(query="Song name, YouTube/Spotify/SoundCloud URL")
