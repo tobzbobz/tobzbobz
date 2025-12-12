@@ -7,12 +7,13 @@ import asyncio
 from database import db
 import os
 import json
+import traceback
 
 OWNER_ID = 678475709257089057
 
 
 class MusicCog(commands.Cog):
-    """Music player cog using free public Lavalink nodes"""
+    """Music player cog with custom Lavalink node"""
 
     def __init__(self, bot):
         self.bot = bot
@@ -24,6 +25,10 @@ class MusicCog(commands.Cog):
             return True
 
         try:
+            if not hasattr(db, 'pool') or db.pool is None:
+                print("Warning: Database pool not initialized")
+                return False
+
             async with db.pool.acquire() as conn:
                 result = await conn.fetchrow(
                     'SELECT * FROM music_access WHERE user_id = $1 AND is_whitelisted = TRUE',
@@ -35,97 +40,135 @@ class MusicCog(commands.Cog):
             return False
 
     def get_lavalink_nodes(self):
-        """
-        Load Lavalink node configuration from environment variable.
-        Falls back to public nodes if not configured.
-        """
-        # Try to load from environment variable first
-        nodes_json = os.getenv('LAVALINK_NODES')
+        """Get Lavalink node configuration from environment or file"""
 
+        # Try environment variables first (for Render deployment)
+        lavalink_host = os.getenv('LAVALINK_HOST')
+        lavalink_password = os.getenv('LAVALINK_PASSWORD')
+        lavalink_port = os.getenv('LAVALINK_PORT', '2333')
+        lavalink_secure = os.getenv('LAVALINK_SECURE', 'false').lower() == 'true'
+
+        if lavalink_host and lavalink_password:
+            print(f"✅ Using custom Lavalink node from environment: {lavalink_host}")
+            return [
+                {
+                    "identifier": "Custom-Node",
+                    "host": lavalink_host,
+                    "port": int(lavalink_port),
+                    "password": lavalink_password,
+                    "secure": lavalink_secure
+                }
+            ]
+
+        # Try loading from JSON file
+        if os.path.exists('lavalink_nodes.json'):
+            try:
+                with open('lavalink_nodes.json', 'r') as f:
+                    custom_nodes = json.load(f)
+                    print(f"✅ Loaded {len(custom_nodes)} node(s) from lavalink_nodes.json")
+                    return custom_nodes
+            except Exception as e:
+                print(f"⚠️ Error loading lavalink_nodes.json: {e}")
+
+        # Try environment variable JSON array
+        nodes_json = os.getenv('LAVALINK_NODES')
         if nodes_json:
             try:
                 custom_nodes = json.loads(nodes_json)
-                print(f"✅ Loaded {len(custom_nodes)} custom Lavalink node(s) from environment")
+                print(f"✅ Loaded {len(custom_nodes)} node(s) from LAVALINK_NODES env")
                 return custom_nodes
             except json.JSONDecodeError as e:
                 print(f"⚠️ Invalid LAVALINK_NODES JSON: {e}")
-                print("   Falling back to public nodes")
 
-        # Fallback to free public nodes (these are publicly available, not secrets)
-        print("📡 Using public Lavalink nodes (no custom nodes configured)")
+        # Fallback to public nodes
+        print("📡 Using fallback public Lavalink nodes")
         return [
             {
                 "identifier": "Serenetia-LDP-NonSSL",
                 "host": "lavalink.serenetia.com",
                 "port": 80,
-                "password": "public",  # Public node
+                "password": "public",
                 "secure": False
             },
             {
                 "identifier": "AjieDev-LDP-NonSSL",
                 "host": "lava-all.ajieblogs.eu.org",
                 "port": 80,
-                "password": "public",  # Public node
+                "password": "public",
                 "secure": False
-            },
-            {
-                "identifier": "Lavalink-APGB",
-                "host": "lavalink.devamop.in",
-                "port": 443,
-                "password": "DevamOP",
-                "secure": True
             }
         ]
 
     async def cog_load(self):
         """Setup Wavelink node when cog loads"""
         print("🎵 MusicCog loading...")
+        self._connection_task = self.bot.loop.create_task(self._connect_nodes())
 
-        # Wait for bot to be ready
-        await self.bot.wait_until_ready()
+    async def _connect_nodes(self):
+        """Background task to connect to Wavelink nodes"""
+        try:
+            await self.bot.wait_until_ready()
+            await asyncio.sleep(2)
 
-        # Give Discord some time to fully initialize
-        await asyncio.sleep(2)
-
-        # Get node configuration
-        public_nodes = self.get_lavalink_nodes()
-
-        # Try to connect to nodes
-        for node_info in public_nodes:
-            try:
-                # Build URI from host, port, and secure flag
-                protocol = "https" if node_info.get("secure", False) else "http"
-                uri = f"{protocol}://{node_info['host']}:{node_info['port']}"
-
-                print(f"🔗 Attempting to connect to {node_info['identifier']} ({uri})...")
-
-                node = wavelink.Node(
-                    uri=uri,
-                    password=node_info['password'],
-                    identifier=node_info['identifier']
-                )
-
-                await wavelink.Pool.connect(client=self.bot, nodes=[node])
-
-                print(f"✅ Connected to Lavalink node: {node_info['identifier']}")
+            if wavelink.Pool.nodes:
+                print("✅ Wavelink nodes already connected")
                 self.node_connected = True
-                break  # Successfully connected, stop trying
+                return
 
-            except wavelink.LavalinkException as e:
-                print(f"⚠️ Lavalink error for {node_info['identifier']}: {e}")
-                continue
-            except Exception as e:
-                print(f"❌ Failed to connect to {node_info['identifier']}: {e}")
-                continue
+            public_nodes = self.get_lavalink_nodes()
+            nodes_to_connect = []
 
-        if not self.node_connected:
-            print("❌ Failed to connect to any Lavalink nodes!")
-        else:
-            print("✅ MusicCog ready!")
+            for node_info in public_nodes:
+                try:
+                    protocol = "https" if node_info.get("secure", False) else "http"
+                    uri = f"{protocol}://{node_info['host']}:{node_info['port']}"
 
-    def cog_unload(self):
+                    print(f"🔗 Preparing to connect to {node_info['identifier']} ({uri})...")
+
+                    node = wavelink.Node(
+                        uri=uri,
+                        password=node_info['password'],
+                        identifier=node_info['identifier']
+                    )
+
+                    nodes_to_connect.append(node)
+
+                except Exception as e:
+                    print(f"❌ Failed to create node {node_info['identifier']}: {e}")
+                    continue
+
+            if nodes_to_connect:
+                try:
+                    await wavelink.Pool.connect(client=self.bot, nodes=nodes_to_connect)
+                    print(f"✅ Connected to {len(nodes_to_connect)} Lavalink node(s)")
+                    self.node_connected = True
+                except Exception as e:
+                    print(f"❌ Failed to connect to Lavalink nodes: {e}")
+                    traceback.print_exc()
+            else:
+                print("❌ No nodes available to connect")
+
+            if not self.node_connected:
+                print("⚠️ Warning: Failed to connect to any Lavalink nodes!")
+            else:
+                print("✅ MusicCog ready!")
+
+        except Exception as e:
+            print(f"❌ Critical error in node connection: {e}")
+            traceback.print_exc()
+
+    async def cog_unload(self):
         """Cleanup when cog is unloaded"""
-        print("🛑 MusicCog unloading...")
+        try:
+            print("🛑 MusicCog unloading...")
+            for guild in self.bot.guilds:
+                if guild.voice_client:
+                    try:
+                        await guild.voice_client.disconnect(force=True)
+                    except:
+                        pass
+        except Exception as e:
+            print(f"Error during cog unload: {e}")
 
     @commands.Cog.listener()
     async def on_wavelink_node_ready(self, payload: wavelink.NodeReadyEventPayload):
@@ -162,9 +205,8 @@ class MusicCog(commands.Cog):
         """Event fired when a track ends"""
         player: wavelink.Player = payload.player
 
-        # Auto-disconnect if queue is empty
         if player.queue.is_empty and not player.playing:
-            await asyncio.sleep(180)  # Wait 3 minutes
+            await asyncio.sleep(180)
             if player.queue.is_empty and not player.playing:
                 await player.disconnect()
                 if hasattr(player, 'text_channel') and player.text_channel:
@@ -196,7 +238,6 @@ class MusicCog(commands.Cog):
         player: wavelink.Player = interaction.guild.voice_client
 
         if not player:
-            # Check if nodes are connected
             if not wavelink.Pool.nodes:
                 await interaction.response.send_message(
                     "<:Denied:1426930694633816248> Music service is currently unavailable. No Lavalink nodes connected.",
@@ -204,7 +245,6 @@ class MusicCog(commands.Cog):
                 )
                 return None
 
-            # Join the user's voice channel
             try:
                 player = await interaction.user.voice.channel.connect(cls=wavelink.Player)
                 player.text_channel = interaction.channel
@@ -220,8 +260,66 @@ class MusicCog(commands.Cog):
 
     m_group = app_commands.Group(name="m", description="Music player commands")
 
+    async def play_autocomplete(
+            self,
+            interaction: discord.Interaction,
+            current: str,
+    ) -> list[app_commands.Choice[str]]:
+        """Autocomplete for play command"""
+        if not current or len(current) < 2:
+            return []
+
+        try:
+            if not wavelink.Pool.nodes:
+                return []
+
+            search_query = current.strip()
+
+            if not any(search_query.startswith(prefix) for prefix in
+                       ['http://', 'https://', 'ytsearch:', 'ytmsearch:', 'scsearch:']):
+                search_query = f"ytsearch:{search_query}"
+
+            tracks = await asyncio.wait_for(
+                wavelink.Playable.search(search_query),
+                timeout=5.0
+            )
+
+            if not tracks:
+                return []
+
+            if isinstance(tracks, wavelink.Playlist):
+                return [
+                    app_commands.Choice(
+                        name=f"📚 Playlist: {tracks.name[:90]}",
+                        value=current
+                    )
+                ]
+
+            choices = []
+            for track in tracks[:25]:
+                duration = self.format_duration(track.length)
+                choice_name = f"{track.author} - {track.title}"
+                if len(choice_name) > 85:
+                    choice_name = choice_name[:82] + "..."
+                choice_name += f" ({duration})"
+
+                choice_value = track.uri if track.uri else current
+
+                choices.append(
+                    app_commands.Choice(name=choice_name, value=choice_value)
+                )
+
+            return choices
+
+        except asyncio.TimeoutError:
+            return []
+        except Exception as e:
+            print(f"❌ Autocomplete error: {e}")
+            return []
+
     @m_group.command(name="play", description="Play a song or add it to queue")
     @app_commands.describe(query="Song name or URL (YouTube, SoundCloud, etc.)")
+    @app_commands.autocomplete(query=play_autocomplete)
     async def play(self, interaction: discord.Interaction, query: str):
         """Play a song"""
         if not await self.is_whitelisted(interaction.user.id):
@@ -238,10 +336,17 @@ class MusicCog(commands.Cog):
             return
 
         try:
-            tracks: wavelink.Search = await wavelink.Playable.search(query)
+            search_query = query.strip()
+            if not any(search_query.startswith(prefix) for prefix in
+                       ['http://', 'https://', 'ytsearch:', 'ytmsearch:', 'scsearch:']):
+                search_query = f"ytsearch:{search_query}"
+
+            tracks: wavelink.Search = await wavelink.Playable.search(search_query)
 
             if not tracks:
-                await interaction.followup.send("<:Denied:1426930694633816248> No tracks found!")
+                await interaction.followup.send(
+                    "<:Denied:1426930694633816248> No tracks found! Try a different search term or URL."
+                )
                 return
 
             if isinstance(tracks, wavelink.Playlist):
@@ -276,7 +381,7 @@ class MusicCog(commands.Cog):
 
         except wavelink.LavalinkException as e:
             await interaction.followup.send(
-                f"<:Denied:1426930694633816248> Lavalink error: {str(e)}\n\n💡 The public node might be down. Try again in a moment.",
+                f"<:Denied:1426930694633816248> Lavalink error: {str(e)}",
                 ephemeral=True
             )
         except Exception as e:
@@ -672,4 +777,10 @@ class MusicCog(commands.Cog):
 
 
 async def setup(bot):
-    await bot.add_cog(MusicCog(bot))
+    try:
+        await bot.add_cog(MusicCog(bot))
+        print("✅ MusicCog setup completed successfully")
+    except Exception as e:
+        print(f"❌ Failed to setup MusicCog: {e}")
+        traceback.print_exc()
+        raise

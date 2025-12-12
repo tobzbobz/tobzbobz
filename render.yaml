@@ -1,0 +1,32 @@
+services:
+  - type: worker
+    name: my-discord-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: LAVALINK_HOST
+        fromService:
+          type: web
+          name: my-lavalink-server
+          property: host
+      - key: LAVALINK_PASSWORD
+        sync: false  # Set manually in Render dashboard
+      - key: LAVALINK_PORT
+        value: "443"
+      - key: LAVALINK_SECURE
+        value: "true"
+
+  - type: web
+    name: my-lavalink-server
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: PORT
+        value: "2333"
+      - key: LAVALINK_PASSWORD
+        sync: false  # Set manually in Render dashboard
