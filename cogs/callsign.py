@@ -3449,7 +3449,8 @@ class CallsignCog(commands.Cog):
     async def lookup_callsign(self, interaction: discord.Interaction, callsign: str = None,
                               user: discord.Member = None):
 
-        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Looking Up Callsign", ephemeral=True)
+        await interaction.response.send_message(content=f"<a:Load:1430912797469970444> Looking Up Callsign",
+                                                ephemeral=True)
 
         if db.pool is None:
             await interaction.followup.send(
@@ -3490,44 +3491,55 @@ class CallsignCog(commands.Cog):
 
             # Display results
             for result in results:
-                # <:Accepted:1426930333789585509> FIX: Format title based on callsign type
+                # Format title based on callsign type
                 if result['callsign'] == "Not Assigned":
-                    title = f"Callsign: Not Assigned (Not Assigned)"
+                    title = f"Callsign: Not Assigned"
                     callsign_status = "<:Warn:1437771973970104471> Awaiting Assignment"
+                    status_color = discord.Color.orange()
                 elif result['callsign'] == "BLANK":
                     title = f"Callsign: BLANK (No number)"
                     callsign_status = "<:Accepted:1426930333789585509> High Command (No Callsign)"
+                    status_color = discord.Color.purple()
                 elif result['fenz_prefix']:
                     title = f"Callsign: {result['fenz_prefix']}-{result['callsign']}"
                     callsign_status = "<:Accepted:1426930333789585509> Active"
+                    status_color = discord.Color.blue()
                 else:
                     title = f"Callsign: {result['callsign']}"
                     callsign_status = "<:Accepted:1426930333789585509> Active"
+                    status_color = discord.Color.blue()
 
                 embed = discord.Embed(
                     title=title,
-                    color=discord.Color.orange() if result['callsign'] == "Not Assigned" else discord.Color.blue()
+                    color=status_color,
+                    timestamp=datetime.utcnow()
                 )
 
+                # Status field
                 embed.add_field(
                     name="Status",
                     value=callsign_status,
                     inline=True
                 )
 
+                # Discord User
                 embed.add_field(
                     name="Discord User",
-                    value=f"<@{result['discord_user_id']}>",
-                    inline=False
+                    value=f"<@{result['discord_user_id']}>\n`{result['discord_username']}`",
+                    inline=True
                 )
 
+                # Add empty field for alignment
+                embed.add_field(name="\u200b", value="\u200b", inline=True)
+
+                # Roblox User with clickable link
                 embed.add_field(
                     name="Roblox User",
-                    value=f"[{result['roblox_username']}](https://www.roblox.com/users/{result['roblox_user_id']}/profile)",
-                    inline=False
+                    value=f"[{result['roblox_username']}](https://www.roblox.com/users/{result['roblox_user_id']}/profile)\n`{result['roblox_user_id']}`",
+                    inline=True
                 )
 
-                # Show FENZ rank
+                # FENZ Rank
                 if result['callsign'] == "BLANK":
                     embed.add_field(
                         name="FENZ Rank",
@@ -3535,25 +3547,112 @@ class CallsignCog(commands.Cog):
                         inline=True
                     )
                 else:
+                    fenz_display = result['fenz_prefix'] if result['fenz_prefix'] else "None"
                     embed.add_field(
                         name="FENZ Rank",
-                        value=result['fenz_prefix'] if result['fenz_prefix'] else "None (High Command)",
+                        value=fenz_display,
                         inline=True
                     )
 
+                # HHStJ Rank (if exists)
                 if result.get('hhstj_prefix'):
                     embed.add_field(
                         name="HHStJ Rank",
                         value=result['hhstj_prefix'],
                         inline=True
                     )
+                else:
+                    # Empty field for alignment
+                    embed.add_field(name="\u200b", value="\u200b", inline=True)
 
+                # ✅ NEW: Approval Information Section
+                approval_text = []
+
+                # Who approved it
+                if result.get('approved_by_name'):
+                    approval_text.append(f"**Approved By:** {result['approved_by_name']}")
+                    if result.get('approved_by_id'):
+                        approval_text.append(f"**Approver ID:** `{result['approved_by_id']}`")
+
+                # When it was approved
                 if result.get('approved_at'):
+                    approval_text.append(f"**Approved:** <t:{int(result['approved_at'].timestamp())}:R>")
+                    approval_text.append(f"**Full Date:** <t:{int(result['approved_at'].timestamp())}:F>")
+
+                if approval_text:
                     embed.add_field(
-                        name="Approved At",
-                        value=f"<t:{int(result['approved_at'].timestamp())}:R>",
+                        name="📋 Approval Information",
+                        value="\n".join(approval_text),
                         inline=False
                     )
+
+                # ✅ NEW: Activity Tracking
+                activity_text = []
+
+                if result.get('last_seen_at'):
+                    activity_text.append(f"**Last Seen:** <t:{int(result['last_seen_at'].timestamp())}:R>")
+
+                if result.get('created_at'):
+                    activity_text.append(f"**Record Created:** <t:{int(result['created_at'].timestamp())}:R>")
+
+                if activity_text:
+                    embed.add_field(
+                        name="🕒 Activity",
+                        value="\n".join(activity_text),
+                        inline=False
+                    )
+
+                # ✅ NEW: Callsign History (if exists)
+                if result.get('callsign_history'):
+                    try:
+                        history = json.loads(result['callsign_history']) if isinstance(result['callsign_history'],
+                                                                                       str) else result[
+                            'callsign_history']
+
+                        if history and len(history) > 0:
+                            history_text = []
+                            # Show up to 3 most recent previous callsigns
+                            for old_cs in history[-3:]:
+                                old_callsign_display = old_cs.get('callsign', 'Unknown')
+                                if old_cs.get('fenz_prefix'):
+                                    old_callsign_display = f"{old_cs['fenz_prefix']}-{old_callsign_display}"
+
+                                if old_cs.get('replaced_at'):
+                                    history_text.append(
+                                        f"• **{old_callsign_display}** (replaced <t:{old_cs['replaced_at']}:R>)")
+                                else:
+                                    history_text.append(f"• **{old_callsign_display}**")
+
+                            if len(history) > 3:
+                                history_text.append(f"*...and {len(history) - 3} more previous callsign(s)*")
+
+                            embed.add_field(
+                                name="📜 Previous Callsigns",
+                                value="\n".join(history_text),
+                                inline=False
+                            )
+                    except Exception as e:
+                        print(f"⚠️ Error parsing callsign history: {e}")
+
+                # ✅ NEW: Current Nickname (from Discord)
+                member = interaction.guild.get_member(result['discord_user_id'])
+                if member:
+                    current_nick = member.nick if member.nick else member.name
+                    embed.add_field(
+                        name="💬 Current Nickname",
+                        value=f"`{current_nick}`",
+                        inline=False
+                    )
+
+                # Footer with user ID for quick reference
+                embed.set_footer(
+                    text=f"User ID: {result['discord_user_id']} • Lookup requested by {interaction.user.display_name}",
+                    icon_url=interaction.user.display_avatar.url
+                )
+
+                # Set thumbnail to user's avatar
+                if member:
+                    embed.set_thumbnail(url=member.display_avatar.url)
 
                 await interaction.delete_original_response()
                 await interaction.followup.send(embed=embed, ephemeral=True)

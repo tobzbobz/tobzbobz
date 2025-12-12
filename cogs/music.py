@@ -14,6 +14,7 @@ class MusicCog(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
+        self.node_connected = False
 
     async def is_whitelisted(self, user_id: int) -> bool:
         """Check if a user is whitelisted for music commands"""
@@ -21,10 +22,11 @@ class MusicCog(commands.Cog):
             return True
 
         try:
-            result = await db.fetchrow(
-                'SELECT * FROM music_access WHERE user_id = $1 AND is_whitelisted = TRUE',
-                str(user_id)
-            )
+            async with db.pool.acquire() as conn:
+                result = await conn.fetchrow(
+                    'SELECT * FROM music_access WHERE user_id = $1 AND is_whitelisted = TRUE',
+                    str(user_id)
+                )
             return result is not None
         except Exception as e:
             print(f"Error checking whitelist: {e}")
@@ -32,51 +34,98 @@ class MusicCog(commands.Cog):
 
     async def cog_load(self):
         """Setup Wavelink node when cog loads"""
+        print("🎵 MusicCog loading...")
+
+        # Wait for bot to be ready
         await self.bot.wait_until_ready()
 
+        # Give Discord some time to fully initialize
+        await asyncio.sleep(2)
+
         # List of free public Lavalink nodes
-        # If one is down, it'll try the next one
         public_nodes = [
             {
-                'uri': 'https://lavalink.devz.cloud',
-                'password': 'mathiaslavalink'
+                "identifier": "Serenetia-LDP-NonSSL",
+                "password": "https://dsc.gg/ajidevserver",
+                "host": "lavalink.serenetia.com",
+                "port": 80,
+                "secure": False
             },
             {
-                'uri': 'https://lavalink.oops.wtf',
-                'password': 'www.freelavalink.ga'
+                "identifier": "AjieDev-LDP-NonSSL",
+                "password": "https://dsc.gg/ajidevserver",
+                "host": "lava-all.ajieblogs.eu.org",
+                "port": 80,
+                "secure": False
             },
             {
-                'uri': 'https://lavalink.clmc.host',
-                'password': 'LAVA'
+                "identifier": "Lavalink APGB",
+                "password": "youshallnotpass",
+                "host": "airplanegobrr.us.to",
+                "port": 2333,
+                "secure": False
+            },
+            {
+                "identifier": "RRH",
+                "password": "RRHosting",
+                "host": "uk-01.rrhosting.eu",
+                "port": 1337,
+                "secure": False
+            },
+            {
+                "identifier": "dctv (sgp)",
+                "password": "quangloc2018",
+                "host": "s13.oddblox.us",
+                "port": 28405,
+                "secure": False
+            },
+            {
+                "identifier": "V4 (Non SSL)",
+                "password": "https://dsc.gg/ajidevserver",
+                "host": "lavalinkv4-id.serenetiaa.com",
+                "port": 81,
+                "secure": False
             }
         ]
 
         # Try to connect to nodes
-        nodes_to_connect = []
         for node_info in public_nodes:
             try:
+                print(f"🔗 Attempting to connect to {node_info['uri']}...")
+
                 node = wavelink.Node(
                     uri=node_info['uri'],
-                    password=node_info['password']
+                    password=node_info['password'],
+                    identifier=node_info['uri']  # Add unique identifier
                 )
-                nodes_to_connect.append(node)
+
+                await wavelink.Pool.connect(client=self.bot, nodes=[node])
+
+                print(f"✅ Connected to Lavalink node: {node_info['uri']}")
+                self.node_connected = True
+                break  # Successfully connected, stop trying
+
+            except wavelink.LavalinkException as e:
+                print(f"⚠️ Lavalink error for {node_info['uri']}: {e}")
+                continue
             except Exception as e:
-                print(f"⚠️ Failed to create node {node_info['uri']}: {e}")
+                print(f"❌ Failed to connect to {node_info['uri']}: {e}")
+                continue
 
-        if not nodes_to_connect:
-            print("<:Denied:1426930694633816248> No Lavalink nodes available!")
-            return
+        if not self.node_connected:
+            print("❌ Failed to connect to any Lavalink nodes!")
+        else:
+            print("✅ MusicCog ready!")
 
-        try:
-            await wavelink.Pool.connect(client=self.bot, nodes=nodes_to_connect)
-            print(f"<:Accepted:1426930333789585509> Connected to {len(nodes_to_connect)} Lavalink node(s)")
-        except Exception as e:
-            print(f"<:Denied:1426930694633816248> Failed to connect to Lavalink: {e}")
+    def cog_unload(self):
+        """Cleanup when cog is unloaded"""
+        print("🛑 MusicCog unloading...")
 
     @commands.Cog.listener()
     async def on_wavelink_node_ready(self, payload: wavelink.NodeReadyEventPayload):
         """Event fired when a Wavelink node is ready"""
         print(f"🎵 Wavelink node {payload.node.identifier} is ready!")
+        self.node_connected = True
 
     @commands.Cog.listener()
     async def on_wavelink_track_start(self, payload: wavelink.TrackStartEventPayload):
@@ -141,7 +190,7 @@ class MusicCog(commands.Cog):
         player: wavelink.Player = interaction.guild.voice_client
 
         if not player:
-            # Check if any nodes are available
+            # Check if nodes are connected
             if not wavelink.Pool.nodes:
                 await interaction.response.send_message(
                     "<:Denied:1426930694633816248> Music service is currently unavailable. No Lavalink nodes connected.",
@@ -171,8 +220,10 @@ class MusicCog(commands.Cog):
         """Play a song"""
         # Check whitelist
         if not await self.is_whitelisted(interaction.user.id):
-            await interaction.response.send_message("<:Denied:1426930694633816248> You don't have permission to use music commands!",
-                                                    ephemeral=True)
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> You don't have permission to use music commands!",
+                ephemeral=True
+            )
             return
 
         await interaction.response.defer()
@@ -236,23 +287,24 @@ class MusicCog(commands.Cog):
     @m_group.command(name="pause", description="Pause or resume playback")
     async def pause(self, interaction: discord.Interaction):
         """Toggle pause/resume playback"""
-        # Check whitelist
         if not await self.is_whitelisted(interaction.user.id):
-            await interaction.response.send_message("<:Denied:1426930694633816248> You don't have permission to use music commands!",
-                                                    ephemeral=True)
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> You don't have permission to use music commands!",
+                ephemeral=True
+            )
             return
 
         player: wavelink.Player = interaction.guild.voice_client
 
         if not player:
-            await interaction.response.send_message("<:Denied:1426930694633816248> Not connected to voice!", ephemeral=True)
+            await interaction.response.send_message("<:Denied:1426930694633816248> Not connected to voice!",
+                                                    ephemeral=True)
             return
 
         if not player.current:
             await interaction.response.send_message("<:Denied:1426930694633816248> Nothing is playing!", ephemeral=True)
             return
 
-        # Toggle pause state
         await player.pause(not player.paused)
 
         if player.paused:
@@ -263,10 +315,11 @@ class MusicCog(commands.Cog):
     @m_group.command(name="skip", description="Skip the current song")
     async def skip(self, interaction: discord.Interaction):
         """Skip current track"""
-        # Check whitelist
         if not await self.is_whitelisted(interaction.user.id):
-            await interaction.response.send_message("<:Denied:1426930694633816248> You don't have permission to use music commands!",
-                                                    ephemeral=True)
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> You don't have permission to use music commands!",
+                ephemeral=True
+            )
             return
 
         player: wavelink.Player = interaction.guild.voice_client
@@ -281,16 +334,18 @@ class MusicCog(commands.Cog):
     @m_group.command(name="stop", description="Stop playback and clear queue")
     async def stop(self, interaction: discord.Interaction):
         """Stop playback and clear queue"""
-        # Check whitelist
         if not await self.is_whitelisted(interaction.user.id):
-            await interaction.response.send_message("<:Denied:1426930694633816248> You don't have permission to use music commands!",
-                                                    ephemeral=True)
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> You don't have permission to use music commands!",
+                ephemeral=True
+            )
             return
 
         player: wavelink.Player = interaction.guild.voice_client
 
         if not player:
-            await interaction.response.send_message("<:Denied:1426930694633816248> Not connected to voice!", ephemeral=True)
+            await interaction.response.send_message("<:Denied:1426930694633816248> Not connected to voice!",
+                                                    ephemeral=True)
             return
 
         player.queue.clear()
@@ -300,16 +355,18 @@ class MusicCog(commands.Cog):
     @m_group.command(name="leave", description="Disconnect the bot from voice")
     async def disconnect(self, interaction: discord.Interaction):
         """Disconnect from voice channel"""
-        # Check whitelist
         if not await self.is_whitelisted(interaction.user.id):
-            await interaction.response.send_message("<:Denied:1426930694633816248> You don't have permission to use music commands!",
-                                                    ephemeral=True)
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> You don't have permission to use music commands!",
+                ephemeral=True
+            )
             return
 
         player: wavelink.Player = interaction.guild.voice_client
 
         if not player:
-            await interaction.response.send_message("<:Denied:1426930694633816248> Not connected to voice!", ephemeral=True)
+            await interaction.response.send_message("<:Denied:1426930694633816248> Not connected to voice!",
+                                                    ephemeral=True)
             return
 
         await player.disconnect()
@@ -321,7 +378,8 @@ class MusicCog(commands.Cog):
         player: wavelink.Player = interaction.guild.voice_client
 
         if not player:
-            await interaction.response.send_message("<:Denied:1426930694633816248> Not connected to voice!", ephemeral=True)
+            await interaction.response.send_message("<:Denied:1426930694633816248> Not connected to voice!",
+                                                    ephemeral=True)
             return
 
         if player.queue.is_empty and not player.current:
@@ -333,7 +391,6 @@ class MusicCog(commands.Cog):
             color=discord.Color.blue()
         )
 
-        # Now Playing
         if player.current:
             embed.add_field(
                 name="🎵 Now Playing",
@@ -342,7 +399,6 @@ class MusicCog(commands.Cog):
                 inline=False
             )
 
-        # Queue
         if not player.queue.is_empty:
             queue_list = []
             for i, track in enumerate(player.queue[:10], start=1):
@@ -352,12 +408,12 @@ class MusicCog(commands.Cog):
                 queue_list.append(f"*...and {len(player.queue) - 10} more tracks*")
 
             embed.add_field(
-                name="🔜 Up Next",
+                name="📜 Up Next",
                 value="\n".join(queue_list),
                 inline=False
             )
 
-        embed.set_footer(text=f"Total tracks in queue: {len(player.queue)} | Using free public nodes")
+        embed.set_footer(text=f"Total tracks in queue: {len(player.queue)}")
 
         await interaction.response.send_message(embed=embed)
 
@@ -390,7 +446,6 @@ class MusicCog(commands.Cog):
             inline=True
         )
 
-        # Progress bar
         progress = int((position / track.length) * 20)
         bar = "▬" * progress + "🔘" + "▬" * (20 - progress)
         embed.add_field(name="⏳", value=bar, inline=False)
@@ -401,19 +456,23 @@ class MusicCog(commands.Cog):
     @app_commands.describe(volume="Volume level (0-100)")
     async def volume(self, interaction: discord.Interaction, volume: int):
         """Set player volume"""
-        # Owner only check
         if interaction.user.id != OWNER_ID:
-            await interaction.response.send_message("<:Denied:1426930694633816248> Only the bot owner can change volume!", ephemeral=True)
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> Only the bot owner can change volume!",
+                ephemeral=True
+            )
             return
 
         player: wavelink.Player = interaction.guild.voice_client
 
         if not player:
-            await interaction.response.send_message("<:Denied:1426930694633816248> Not connected to voice!", ephemeral=True)
+            await interaction.response.send_message("<:Denied:1426930694633816248> Not connected to voice!",
+                                                    ephemeral=True)
             return
 
         if not 0 <= volume <= 100:
-            await interaction.response.send_message("<:Denied:1426930694633816248> Volume must be between 0 and 100!", ephemeral=True)
+            await interaction.response.send_message("<:Denied:1426930694633816248> Volume must be between 0 and 100!",
+                                                    ephemeral=True)
             return
 
         await player.set_volume(volume)
@@ -422,10 +481,11 @@ class MusicCog(commands.Cog):
     @m_group.command(name="shuffle", description="Shuffle the queue")
     async def shuffle(self, interaction: discord.Interaction):
         """Shuffle the queue"""
-        # Check whitelist
         if not await self.is_whitelisted(interaction.user.id):
-            await interaction.response.send_message("<:Denied:1426930694633816248> You don't have permission to use music commands!",
-                                                    ephemeral=True)
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> You don't have permission to use music commands!",
+                ephemeral=True
+            )
             return
 
         player: wavelink.Player = interaction.guild.voice_client
@@ -446,16 +506,18 @@ class MusicCog(commands.Cog):
     ])
     async def loop(self, interaction: discord.Interaction, mode: str):
         """Set loop mode"""
-        # Check whitelist
         if not await self.is_whitelisted(interaction.user.id):
-            await interaction.response.send_message("<:Denied:1426930694633816248> You don't have permission to use music commands!",
-                                                    ephemeral=True)
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> You don't have permission to use music commands!",
+                ephemeral=True
+            )
             return
 
         player: wavelink.Player = interaction.guild.voice_client
 
         if not player:
-            await interaction.response.send_message("<:Denied:1426930694633816248> Not connected to voice!", ephemeral=True)
+            await interaction.response.send_message("<:Denied:1426930694633816248> Not connected to voice!",
+                                                    ephemeral=True)
             return
 
         if mode == "off":
@@ -480,14 +542,17 @@ class MusicCog(commands.Cog):
     ])
     async def access_list(self, interaction: discord.Interaction, action: str, user: Optional[discord.User] = None):
         """Manage music access whitelist"""
-        # Owner only check
         if interaction.user.id != OWNER_ID:
-            await interaction.response.send_message("<:Denied:1426930694633816248> Only the bot owner can manage the access list!", ephemeral=True)
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> Only the bot owner can manage the access list!",
+                ephemeral=True
+            )
             return
 
         if action == "view":
             try:
-                result = await db.fetch('SELECT * FROM music_access')
+                async with db.pool.acquire() as conn:
+                    result = await conn.fetch('SELECT * FROM music_access')
 
                 if not result:
                     await interaction.response.send_message("📋 No users in the access list yet.", ephemeral=True)
@@ -533,62 +598,76 @@ class MusicCog(commands.Cog):
                 await interaction.response.send_message(embed=embed, ephemeral=True)
 
             except Exception as e:
-                await interaction.response.send_message(f"<:Denied:1426930694633816248> Error fetching access list: {str(e)}", ephemeral=True)
+                await interaction.response.send_message(
+                    f"<:Denied:1426930694633816248> Error fetching access list: {str(e)}",
+                    ephemeral=True
+                )
             return
 
         if not user:
-            await interaction.response.send_message("<:Denied:1426930694633816248> You must specify a user for whitelist/blacklist actions!",
-                                                    ephemeral=True)
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> You must specify a user for whitelist/blacklist actions!",
+                ephemeral=True
+            )
             return
 
         if user.id == OWNER_ID:
-            await interaction.response.send_message("<:Denied:1426930694633816248> Cannot modify access for the bot owner!", ephemeral=True)
+            await interaction.response.send_message(
+                "<:Denied:1426930694633816248> Cannot modify access for the bot owner!",
+                ephemeral=True
+            )
             return
 
         try:
-            if action == "whitelist":
-                # Check if user already exists
-                result = await db.fetchrow(
-                    'SELECT * FROM music_access WHERE user_id = $1',
-                    str(user.id)
-                )
-
-                if result:
-                    # Update existing entry
-                    await db.execute(
-                        'UPDATE music_access SET is_whitelisted = TRUE WHERE user_id = $1',
-                        str(user.id)
-                    )
-                else:
-                    # Insert new entry
-                    await db.execute(
-                        'INSERT INTO music_access (user_id, is_whitelisted) VALUES ($1, TRUE)',
+            async with db.pool.acquire() as conn:
+                if action == "whitelist":
+                    result = await conn.fetchrow(
+                        'SELECT * FROM music_access WHERE user_id = $1',
                         str(user.id)
                     )
 
-                await interaction.response.send_message(f"<:Accepted:1426930333789585509> {user.mention} has been whitelisted for music commands!",
-                                                        ephemeral=True)
+                    if result:
+                        await conn.execute(
+                            'UPDATE music_access SET is_whitelisted = TRUE WHERE user_id = $1',
+                            str(user.id)
+                        )
+                    else:
+                        await conn.execute(
+                            'INSERT INTO music_access (user_id, is_whitelisted) VALUES ($1, TRUE)',
+                            str(user.id)
+                        )
 
-            elif action == "blacklist":
-                # Remove or set to false
-                result = await db.fetchrow(
-                    'SELECT * FROM music_access WHERE user_id = $1',
-                    str(user.id)
-                )
-
-                if result:
-                    await db.execute(
-                        'UPDATE music_access SET is_whitelisted = FALSE WHERE user_id = $1',
-                        str(user.id)
-                    )
                     await interaction.response.send_message(
-                        f"<:Accepted:1426930333789585509> {user.mention} has been blacklisted from music commands!", ephemeral=True)
-                else:
-                    await interaction.response.send_message(f"ℹ️ {user.mention} was not on the whitelist.",
-                                                            ephemeral=True)
+                        f"<:Accepted:1426930333789585509> {user.mention} has been whitelisted for music commands!",
+                        ephemeral=True
+                    )
+
+                elif action == "blacklist":
+                    result = await conn.fetchrow(
+                        'SELECT * FROM music_access WHERE user_id = $1',
+                        str(user.id)
+                    )
+
+                    if result:
+                        await conn.execute(
+                            'UPDATE music_access SET is_whitelisted = FALSE WHERE user_id = $1',
+                            str(user.id)
+                        )
+                        await interaction.response.send_message(
+                            f"<:Accepted:1426930333789585509> {user.mention} has been blacklisted from music commands!",
+                            ephemeral=True
+                        )
+                    else:
+                        await interaction.response.send_message(
+                            f"ℹ️ {user.mention} was not on the whitelist.",
+                            ephemeral=True
+                        )
 
         except Exception as e:
-            await interaction.response.send_message(f"<:Denied:1426930694633816248> Error managing access: {str(e)}", ephemeral=True)
+            await interaction.response.send_message(
+                f"<:Denied:1426930694633816248> Error managing access: {str(e)}",
+                ephemeral=True
+            )
 
 
 async def setup(bot):
